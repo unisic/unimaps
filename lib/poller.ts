@@ -125,6 +125,10 @@ export function vehicleToJson(v: VehiclePos): VehicleJson {
     next_stop_lon: v.nextStopLon !== null ? roundTo(v.nextStopLon, 6) : null,
     timestamp: v.timestamp,
     updated_at: roundTo(v.updatedAt, 1),
+    operator: v.operator ?? "KB",
+    ...(v.sideNumber ? { side_number: v.sideNumber } : {}),
+    ...(v.model ? { model: v.model } : {}),
+    ...(v.features ? { features: v.features } : {}),
   };
 }
 
@@ -789,7 +793,7 @@ export class LivePoller {
   /** Live vehicles shown on the map: not frozen (stale feed), not finished,
    *  and successfully fetched recently (an upstream outage must not serve
    *  last-known positions as live indefinitely). */
-  private liveVehicles(nowEpoch: number): VehiclePos[] {
+  liveVehicles(nowEpoch: number): VehiclePos[] {
     return [...this.positions.values()].filter(
       (v) =>
         !v.finished &&

@@ -1,14 +1,13 @@
 import { badRequest, upstreamError } from "@/lib/api-helpers";
 import { isRecord, parseIntStrict, pyTruthy } from "@/lib/kb-api";
+import { resolveMzkTrip } from "@/lib/mzk-trip";
 import { getApi, getPoller, startPoller } from "@/lib/poller-singleton";
 import { allowRequest, clientIp, tooManyRequests } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-/** GET /api/trip_execution?exec_id=<raw id>&index=0 — upstream trip execution passthrough.
- *  exec_id is base64-encoded before it reaches the upstream path, so it can't
- *  rewrite the URL — no id-shape check needed here (unlike the path-param routes). */
+/** GET /api/trip_execution?exec_id=<raw id>&index=0 — upstream trip execution passthrough. */
 export async function GET(req: Request): Promise<Response> {
   if (!allowRequest(clientIp(req))) return tooManyRequests();
   const params = new URL(req.url).searchParams;
@@ -19,6 +18,17 @@ export async function GET(req: Request): Promise<Response> {
   if (index === null) return badRequest("index must be an integer");
   try {
     await startPoller();
+
+    if (execId.startsWith("mzk:")) {
+      const mzkTrip = await resolveMzkTrip(execId);
+      return Response.json(mzkTrip || {}, {
+        headers: {
+          "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+          Pragma: "no-cache",
+        },
+      });
+    }
+
     const data = await getApi().fetchTripExecution(execId, index);
     if (pyTruthy(data) && isRecord(data)) {
       getPoller().ingestTripExecution(execId, data);
@@ -33,3 +43,4 @@ export async function GET(req: Request): Promise<Response> {
     return upstreamError("trip_execution", err);
   }
 }
+

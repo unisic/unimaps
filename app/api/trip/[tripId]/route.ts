@@ -19,6 +19,13 @@ export async function GET(
   if (index === null) return badRequest("index must be an integer");
   try {
     await startPoller();
+    if (tripId.startsWith("mzk:")) {
+      const { resolveMzkTrip } = await import("@/lib/mzk-trip");
+      const mzkTrip = await resolveMzkTrip(tripId);
+      return Response.json(mzkTrip ? (mzkTrip.trip || {}) : {}, {
+        headers: { "Cache-Control": "public, max-age=300" },
+      });
+    }
     const data = await getApi().fetchTripRaw(tripId, index);
     return Response.json(pyTruthy(data) ? data : {}, {
       headers: { "Cache-Control": "public, max-age=3600" },
