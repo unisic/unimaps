@@ -14,6 +14,8 @@ interface Props {
   hidden?: boolean;
   /** when set, only vehicles of these lines are drawn */
   lineFilter?: ReadonlySet<string> | null;
+  /** filter by operator */
+  operatorFilter?: "all" | "kb" | "mzk";
 }
 
 const VehicleMarker = memo(function VehicleMarker({
@@ -25,7 +27,10 @@ const VehicleMarker = memo(function VehicleMarker({
 }) {
   const color = vehColor(v);
   const bb = bearingBucket(v.bearing);
-  const icon = useMemo(() => makeVehicleIcon(v.line, color, bb), [v.line, color, bb]);
+  const icon = useMemo(
+    () => makeVehicleIcon(v.line, color, bb, v.operator),
+    [v.line, color, bb, v.operator],
+  );
 
   return (
     <Marker
@@ -36,16 +41,42 @@ const VehicleMarker = memo(function VehicleMarker({
       keyboard={false}
     >
       <Tooltip direction="top" offset={[0, -16]} className="kb-tooltip">
-        <b>{v.line || "?"}</b> {v.headsign ? `→ ${displayStopName(v.headsign)}` : ""}
-        {v.delay != null ? ` · ${delayTxt(v.delay)}` : ""}
+        <span className="flex items-center gap-1.5 flex-wrap">
+          <span
+            className={`rounded px-1 text-[10px] font-bold leading-tight text-white ${
+              v.operator === "MZK" ? "bg-blue-600" : "bg-red-600"
+            }`}
+          >
+            {v.operator || "KB"}
+          </span>
+          <b>{v.line || "?"}</b> {v.headsign ? `→ ${displayStopName(v.headsign)}` : ""}
+          {v.side_number ? ` · #${v.side_number}` : ""}
+          {v.model ? ` (${v.model})` : ""}
+          {v.delay != null ? ` · ${delayTxt(v.delay)}` : ""}
+        </span>
       </Tooltip>
     </Marker>
   );
 });
 
-function VehicleLayer({ vehicles, onVehicleClick, hidden = false, lineFilter = null }: Props) {
+function VehicleLayer({
+  vehicles,
+  onVehicleClick,
+  hidden = false,
+  lineFilter = null,
+  operatorFilter = "all",
+}: Props) {
   if (hidden) return null;
-  const shown = lineFilter ? vehicles.filter((v) => lineFilter.has(v.line)) : vehicles;
+  let shown = vehicles;
+  if (operatorFilter === "kb") {
+    shown = shown.filter((v) => v.operator !== "MZK");
+  } else if (operatorFilter === "mzk") {
+    shown = shown.filter((v) => v.operator === "MZK");
+  }
+  if (lineFilter) {
+    shown = shown.filter((v) => lineFilter.has(v.line));
+  }
+
   return (
     <>
       {shown.map((v) => (

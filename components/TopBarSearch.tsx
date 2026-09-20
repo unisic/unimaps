@@ -590,8 +590,21 @@ function TopBarSearch({
                                   ) : (
                                     <Glyph><BusGlyph /></Glyph>
                                   )}
-                                  <span className="min-w-0 flex-1 truncate text-text font-medium">
-                                    {displayStopName(it.s.name)}
+                                  <span className="min-w-0 flex-1 truncate text-text font-medium flex items-center gap-1.5">
+                                    <span
+                                      className={`rounded px-1 text-[10px] font-bold text-white ${
+                                        it.s.operator === "BOTH"
+                                          ? "bg-gradient-to-r from-red-600 to-blue-600"
+                                          : it.s.operator === "MZK"
+                                            ? "bg-blue-600"
+                                            : "bg-red-600"
+                                      }`}
+                                    >
+                                      {it.s.operator === "BOTH" ? "KB + MZK" : it.s.operator || "KB"}
+                                    </span>
+                                    <span className="truncate">
+                                      {displayStopName(it.s.name)} {it.s.symbol ? `(${it.s.symbol})` : ""}
+                                    </span>
                                   </span>
                                   {it.dist != null && (
                                     <span className="shrink-0 text-[11px] tabular-nums text-text-mute">
@@ -603,10 +616,19 @@ function TopBarSearch({
 
                               {it.kind === "line" && (
                                 <>
-                                  <LineBadge line={it.l.name} />
+                                  <LineBadge line={it.l.name} operator={it.l.operator} />
                                   <span className="min-w-0 flex-1">
-                                    <span className="block truncate text-text font-medium">
-                                      {it.l.terminus ? `→ ${displayStopName(it.l.terminus)}` : `Linia ${it.l.name}`}
+                                    <span className="flex items-center gap-1.5 truncate text-text font-medium">
+                                      <span
+                                        className={`rounded px-1 text-[10px] font-bold text-white ${
+                                          it.l.operator === "MZK" ? "bg-blue-600" : "bg-red-600"
+                                        }`}
+                                      >
+                                        {it.l.operator || "KB"}
+                                      </span>
+                                      <span className="truncate">
+                                        {it.l.terminus ? `→ ${displayStopName(it.l.terminus)}` : `Linia ${it.l.name}`}
+                                      </span>
                                     </span>
                                     <span className="mt-0.5 block text-[11px] text-text-faint">
                                       {it.active
@@ -622,10 +644,22 @@ function TopBarSearch({
 
                               {it.kind === "veh" && (
                                 <>
-                                  <LineBadge line={it.v.line || "?"} />
+                                  <LineBadge line={it.v.line || "?"} operator={it.v.operator} />
                                   <span className="min-w-0 flex-1">
-                                    <span className="block truncate text-text font-medium">
-                                      {it.v.headsign ? `→ ${displayStopName(it.v.headsign)}` : `Linia ${it.v.line || "?"}`}
+                                    <span className="flex items-center gap-1.5 truncate text-text font-medium">
+                                      <span
+                                        className={`rounded px-1 text-[10px] font-bold text-white ${
+                                          it.v.operator === "MZK" ? "bg-blue-600" : "bg-red-600"
+                                        }`}
+                                      >
+                                        {it.v.operator || "KB"}
+                                      </span>
+                                      <span className="truncate">
+                                        {it.v.headsign ? `→ ${displayStopName(it.v.headsign)}` : `Linia ${it.v.line || "?"}`}
+                                      </span>
+                                      {it.v.side_number && (
+                                        <span className="text-[11px] text-text-faint font-normal">#{it.v.side_number}</span>
+                                      )}
                                     </span>
                                     <span className="mt-0.5 flex items-center gap-1.5 text-[11px] text-text-faint">
                                       <span className="h-1.5 w-1.5 shrink-0 animate-pulse-dot rounded-full bg-good" aria-hidden />

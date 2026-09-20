@@ -3,7 +3,7 @@
 import { memo, useEffect, useMemo, useState } from "react";
 import { CircleMarker, Marker, Polyline, Tooltip, useMap } from "react-leaflet";
 import L from "leaflet";
-import { displayStopName, formatPlatform, hslColor, isBusStation } from "@/lib/client/format";
+import { displayStopName, formatPlatform, isBusStation, isMzk, operatorColor } from "@/lib/client/format";
 import { bearingBucket, makeVehicleIcon } from "@/lib/client/leafletIcons";
 import { prefersReducedMotion } from "@/lib/client/motion";
 import type { LatLng, TripView, Vehicle } from "@/lib/client/types";
@@ -35,7 +35,9 @@ function TripLayer({ trip, desktop, vehMeta, liveVehicle }: Props) {
   }
   const lastLive = liveVehicle ?? (lastLiveHeld && lastLiveHeld.gen === gen ? lastLiveHeld.veh : null);
 
-  const lineColor = trip ? hslColor(trip.line === "…" ? null : trip.line) : "";
+  const tripOp = trip?.operator ?? lastLive?.operator ?? vehMeta?.operator;
+  const isMzkTrip = isMzk(tripOp, trip?.line);
+  const lineColor = trip ? operatorColor(tripOp, trip.line === "…" ? null : trip.line) : "";
   const liveBB = bearingBucket(lastLive?.bearing);
   /* primitive presence flags so the icon memo can key on values, not identities */
   const hasLive = lastLive != null;
@@ -43,22 +45,18 @@ function TripLayer({ trip, desktop, vehMeta, liveVehicle }: Props) {
 
   const vehicleIcon = useMemo(() => {
     if (!trip) return null;
+    const op: "KB" | "MZK" = isMzkTrip ? "MZK" : "KB";
     // live fix present → line color + live heading arrow
-    if (lastLive) return makeVehicleIcon(trip.line, lineColor, liveBB);
-    if (trip.vehicle) return makeVehicleIcon(trip.line, lineColor, null);
+    if (lastLive) return makeVehicleIcon(trip.line, lineColor, liveBB, op);
+    if (trip.vehicle) return makeVehicleIcon(trip.line, lineColor, null, op);
     // fallback to the clicked vehicle (live only), with its own line + heading
     if (trip.isLive && vehMeta) {
       const fLine = vehMeta.line || trip.line;
-      return makeVehicleIcon(fLine, hslColor(fLine === "…" ? null : fLine), vehMeta.bearing ?? null);
+      return makeVehicleIcon(fLine, lineColor, vehMeta.bearing ?? null, op);
     }
     return null;
-    // Depend on the PRIMITIVES the icon is built from, not the object identities:
-    // the 5 s poll yields a fresh liveVehicle object every time, but its line,
-    // color and 5°-bucketed heading rarely change. Keying on primitives keeps the
-    // same L.DivIcon (and DOM node) so the marker CSS-glides between fixes instead
-    // of being torn down and jumping to each new position.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [trip?.line, lineColor, hasLive, liveBB, hasTripVeh, trip?.isLive, vehMeta?.line, vehMeta?.bearing]);
+  }, [trip?.line, lineColor, hasLive, liveBB, hasTripVeh, trip?.isLive, vehMeta?.line, vehMeta?.bearing, isMzkTrip]);
 
   // Fit bounds once per drawn trip, after routing settles — padded so the
   // route is not hidden under the sheet (mobile) or the panel (desktop).

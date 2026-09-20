@@ -3,6 +3,8 @@ import { describe, it } from "node:test";
 
 import {
   BRAND,
+  BRAND_KB,
+  BRAND_MZK,
   computeEta,
   countdown,
   delayTxt,
@@ -13,7 +15,9 @@ import {
   hhmmFromSecs,
   hslColor,
   isBusStation,
+  isMzk,
   normalizeText,
+  operatorColor,
   przystanekPlural,
   secsFromHHMM,
   wozPlural,
@@ -163,6 +167,28 @@ describe("hslColor", () => {
     assert.match(hslColor("120"), /^hsl\(\d+,58%,46%\)$/);
     assert.equal(hslColor(null), BRAND);
     assert.equal(hslColor(""), BRAND);
+  });
+});
+
+describe("isMzk & operatorColor", () => {
+  it("distinguishes MZK lines and operators from KB", () => {
+    assert.equal(isMzk("MZK", "1"), true);
+    assert.equal(isMzk("MZK", "120"), true);
+    assert.equal(isMzk("KB", "1"), false);
+    assert.equal(isMzk(null, "1"), true);
+    assert.equal(isMzk(null, "17"), true);
+    assert.equal(isMzk(null, "N1"), true);
+    assert.equal(isMzk(null, "120"), false);
+    assert.equal(isMzk(null, "102"), false);
+  });
+
+  it("returns constant red for KB and characteristic blue for MZK", () => {
+    assert.equal(operatorColor("KB"), BRAND_KB);
+    assert.equal(operatorColor(null, "120"), BRAND_KB);
+    assert.equal(operatorColor("MZK"), BRAND_MZK);
+    assert.equal(operatorColor(null, "17"), BRAND_MZK);
+    assert.equal(BRAND_KB, "#dc2626");
+    assert.equal(BRAND_MZK, "#2563eb");
   });
 });
 

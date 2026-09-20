@@ -239,6 +239,45 @@ html, body {
 }
 .stop-mk-sign.stop-mk-station svg { width: 13px; height: 13px; }
 
+/* MZK stops: characteristic blue (#2563eb) - high-contrast against KB red */
+.stop-mk.is-mzk .stop-mk-sign {
+  background: #2563eb;
+  border-color: #ffffff;
+  color: #ffffff;
+  box-shadow: 0 1px 3px rgba(37, 99, 235, 0.5), 0 3px 8px -1px rgba(0, 0, 0, 0.5);
+}
+.stop-mk.is-mzk .stop-mk-sign.stop-mk-station {
+  background: linear-gradient(145deg, #3b82f6, #1d4ed8);
+  border: 2px solid #ffffff;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5), 0 0 0 2px rgba(37, 99, 235, 0.35);
+}
+
+/* KB stops: constant brand red (#dc2626) */
+.stop-mk.is-kb .stop-mk-sign {
+  background: #dc2626;
+  border-color: #ffffff;
+  color: #ffffff;
+  box-shadow: 0 1px 3px rgba(220, 38, 38, 0.5), 0 3px 8px -1px rgba(0, 0, 0, 0.5);
+}
+.stop-mk.is-kb .stop-mk-sign.stop-mk-station {
+  background: linear-gradient(145deg, #ef4444, #991b1b);
+  border: 2px solid #ffffff;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5), 0 0 0 2px rgba(220, 38, 38, 0.35);
+}
+
+/* Merged / Shared stops (KB + MZK): dual red/blue badge */
+.stop-mk.is-both .stop-mk-sign {
+  background: linear-gradient(135deg, #dc2626 50%, #2563eb 50%);
+  border-color: #ffffff;
+  color: #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5), 0 3px 8px -1px rgba(0, 0, 0, 0.5);
+}
+.stop-mk.is-both .stop-mk-sign.stop-mk-station {
+  background: linear-gradient(135deg, #ef4444 50%, #2563eb 50%);
+  border: 2px solid #ffffff;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5), 0 0 0 2px rgba(37, 99, 235, 0.35);
+}
+
 /* one wrapper per bearing: rotates from center, arrow tip points along road */
 .stop-dir {
   position: absolute; inset: 0;
@@ -271,6 +310,27 @@ html, body {
   background: var(--color-brand);
   border: 2px solid #fff;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+}
+.stop-ping-marker.is-mzk .stop-ping .ring {
+  border-color: #2563eb;
+  background: rgba(37, 99, 235, 0.2);
+}
+.stop-ping-marker.is-mzk .stop-ping .core {
+  background: #2563eb;
+}
+.stop-ping-marker.is-kb .stop-ping .ring {
+  border-color: #dc2626;
+  background: rgba(220, 38, 38, 0.2);
+}
+.stop-ping-marker.is-kb .stop-ping .core {
+  background: #dc2626;
+}
+.stop-ping-marker.is-both .stop-ping .ring {
+  border-color: #2563eb;
+  background: rgba(37, 99, 235, 0.15);
+}
+.stop-ping-marker.is-both .stop-ping .core {
+  background: linear-gradient(135deg, #dc2626 50%, #2563eb 50%);
 }
 @keyframes stop-ring {
   0% { transform: scale(0.6); opacity: 0.9; }

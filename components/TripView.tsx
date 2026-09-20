@@ -13,8 +13,9 @@ import {
   formatPlatform,
   formatPrzezLoop,
   hhmmFromSecs,
-  hslColor,
   isBusStation,
+  isMzk,
+  operatorColor,
   secsFromHHMM,
   tripTimeMatchesStop,
 } from "@/lib/client/format";
@@ -97,11 +98,13 @@ function TripView({
     setLastLiveHeld(lastLive);
   }
 
-  const lineColor = hslColor(trip.line === "…" ? null : trip.line);
+  const currentVeh = liveVeh ?? lastLive.veh ?? vehMeta;
+  const tripOp = currentVeh?.operator ?? trip.operator;
+  const isMzkTrip = isMzk(tripOp, trip.line);
+  const lineColor = operatorColor(tripOp, trip.line === "…" ? null : trip.line);
   const loading = trip.status === "loading";
   const failed = trip.status === "error";
 
-  const currentVeh = liveVeh ?? lastLive.veh;
   const hasLiveCoords =
     (currentVeh != null && Number.isFinite(currentVeh.lat) && Number.isFinite(currentVeh.lon)) ||
     (trip.vehicle != null && Number.isFinite(trip.vehicle.lat) && Number.isFinite(trip.vehicle.lon));
@@ -148,59 +151,48 @@ function TripView({
         if (i === 0) return { index: 0, isAtStop: true, progress: 0 };
         const prevSched = secsFromHHMM(times[i - 1].departure_time);
         const progress =
-          prevSched != null && sched > prevSched
-            ? Math.max(0, Math.min(1, (now - prevSched) / (sched - prevSched)))
-            : 0.5;
-        return { index: i, isAtStop: false, progress };
+          prevSched != null ? Math.min(1, Math.max(0, (now - prevSched) / (sched - prevSched))) : 0;
+        return { index: i - 1, isAtStop: false, progress };
       }
     }
     // All scheduled times in the past -> course completed
     return { index: times.length - 1, isAtStop: true, progress: 1 };
   })();
 
-  const activeStopIndex = activeStop.index;
+  const vti = activeStop.index;
   const isAtStop = activeStop.isAtStop;
   const activeProgress = Math.max(0, Math.min(1, activeStop.progress ?? (isAtStop ? 1 : 0.5)));
-  const vti = activeStopIndex;
   const headerDelay =
-    (liveVeh ?? lastLive.veh)?.delay ??
-    vehMeta?.delay ??
+    currentVeh?.delay ??
     trip.rawTimes[vti ?? -1]?.estimate?.time_diff ??
     null;
+  const direction = trip.direction || vehMeta?.headsign;
+  const loopStops = useMemo(() => detectLoopStops(trip.rawTimes), [trip.rawTimes]);
   const eta = loading || failed ? "" : computeEta(trip, now, vti, isAtStop, headerDelay);
 
-  /* target stop to keep at the top of the timeline: the stop just left (so upcoming stops fill view)
-     or the current stop if the bus is stopped */
-  const scrollTargetIdx = !isAtStop && vti > 0 ? vti - 1 : (vti ?? 0);
+  const scrollTargetIdx = useMemo(() => {
+    if (vti == null) return -1;
+    if (trip.stop) {
+      const tappedIdx = trip.rawTimes.findIndex((t) => tripTimeMatchesStop(t, trip.stop!));
+      if (tappedIdx >= 0) return tappedIdx;
+    }
+    return vti;
+  }, [trip.rawTimes, trip.stop, vti]);
 
-  /* scroll to the vehicle's current stop near the top so upcoming stops fill the view */
   useEffect(() => {
-    if (vti == null || trip.status === "loading") return;
-    const raf = requestAnimationFrame(() => {
-      const container = scrollRef.current;
-      const targetEl = currentRef.current;
-      if (!container || !targetEl) return;
-      // Position target stop near the top so upcoming stops fill the modal below it
-      const targetTop = Math.max(0, targetEl.offsetTop - 12);
-      container.scrollTo({ top: targetTop, behavior: "smooth" });
-    });
-    return () => cancelAnimationFrame(raf);
-  }, [vti, isAtStop, trip.status, trip.gen]);
-
-  const direction = trip.direction || vehMeta?.headsign || "";
-  /* stops this course loops through (e.g. the SZCZYRK BIŁA spur on some 120s) —
-     shown as a "przez …" badge so a via-the-loop run is obvious */
-  const loopStops = useMemo(() => detectLoopStops(trip.rawTimes), [trip.rawTimes]);
+    if (!scrollRef.current || !currentRef.current) return;
+    currentRef.current.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [scrollTargetIdx]);
 
   const header = (
     <header className="px-4 pb-3 pt-2 md:pt-4">
-      <div className="flex items-center gap-2.5">
+      <div className="flex items-start gap-2.5">
         {onBack && (
           <IconButton label="Wróć do przystanku" onClick={onBack}>
             <BackIcon />
           </IconButton>
         )}
-        <LineBadge line={trip.line} big />
+        <LineBadge line={trip.line} operator={isMzkTrip ? "MZK" : "KB"} big />
         <div className="min-w-0 flex-1">
           <h2 className="truncate text-[15px] font-bold leading-tight text-text">
             {loading ? "Wczytywanie…" : direction ? displayStopName(direction) : "—"}
@@ -216,9 +208,65 @@ function TripView({
                 ROZKŁADOWY
               </span>
             )}
+            <span
+              className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-bold text-white ${
+                isMzkTrip ? "bg-blue-600 shadow-sm" : "bg-red-600 shadow-sm"
+              }`}
+            >
+              {isMzkTrip && (
+                /* eslint-disable-next-line @next/next/no-img-element */
+                <img src="/mzk-logo.svg" alt="" className="h-3 w-auto filter brightness-0 invert" />
+              )}
+              {!isMzkTrip && (
+                /* eslint-disable-next-line @next/next/no-img-element */
+                <img src="/brand.svg" alt="" className="h-2.5 w-auto filter brightness-0 invert" />
+              )}
+              {isMzkTrip ? "MZK Bielsko-Biała" : "Komunikacja Beskidzka"}
+            </span>
+            {currentVeh?.side_number && (
+              <span className="rounded-full bg-white/10 px-2 py-0.5 font-semibold text-text">
+                #{currentVeh.side_number}
+                {currentVeh.model ? ` · ${currentVeh.model}` : ""}
+              </span>
+            )}
             {isLiveWithLoc && headerDelay != null && (
               <span className={`font-semibold tabular-nums ${delayClass(headerDelay)}`}>
                 {delayTxt(headerDelay)}
+              </span>
+            )}
+            {currentVeh?.features?.electric && (
+              <span className="rounded-full bg-emerald-500/20 px-1.5 py-0.5 font-medium text-emerald-400">
+                ⚡ Elektryczny
+              </span>
+            )}
+            {currentVeh?.features?.hydrogen && (
+              <span className="rounded-full bg-cyan-500/20 px-1.5 py-0.5 font-medium text-cyan-400">
+                💧 Wodorowy
+              </span>
+            )}
+            {currentVeh?.features?.hybrid && (
+              <span className="rounded-full bg-green-500/20 px-1.5 py-0.5 font-medium text-green-400">
+                🌿 Hybrydowy
+              </span>
+            )}
+            {currentVeh?.features?.airCondition && (
+              <span className="rounded-full bg-blue-500/20 px-1.5 py-0.5 font-medium text-blue-400">
+                ❄️ Klimatyzacja
+              </span>
+            )}
+            {currentVeh?.features?.lowFloor && (
+              <span className="rounded-full bg-sky-500/20 px-1.5 py-0.5 font-medium text-sky-400">
+                ♿ Niska podłoga
+              </span>
+            )}
+            {currentVeh?.features?.longVehicle && (
+              <span className="rounded-full bg-purple-500/20 px-1.5 py-0.5 font-medium text-purple-400">
+                🚃 Przegubowy
+              </span>
+            )}
+            {currentVeh?.features?.ticketMachine && (
+              <span className="rounded-full bg-amber-500/20 px-1.5 py-0.5 font-medium text-amber-400">
+                🎫 Biletomat
               </span>
             )}
             {trip.note && (

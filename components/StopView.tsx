@@ -187,10 +187,43 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
     <header className="px-4 pb-3 pt-2 md:pt-4">
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
-          <h2 className="truncate text-[16px] font-bold leading-tight text-text">{displayStopName(stop.name)}</h2>
-          <p className="mt-1 text-[11px] text-text-faint">
-            {isBusStation(stop.name, stop) ? "Dworzec autobusowy" : "Przystanek autobusowy"}
-          </p>
+          <h2 className="truncate text-[16px] font-bold leading-tight text-text">
+            {displayStopName(stop.name)} {stop.symbol ? `(${stop.symbol})` : ""}
+          </h2>
+          <div className="mt-1 flex items-center gap-2 text-[11px] text-text-faint flex-wrap">
+            {stop.operator === "BOTH" ? (
+              <>
+                <span className="inline-flex items-center gap-1 rounded bg-red-600 px-1.5 py-0.5 font-bold text-white shadow-sm">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src="/brand.svg" alt="" className="h-3 w-auto filter brightness-0 invert" />
+                  KB
+                </span>
+                <span className="inline-flex items-center gap-1 rounded bg-blue-600 px-1.5 py-0.5 font-bold text-white shadow-sm">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src="/mzk-logo.svg" alt="" className="h-3 w-auto filter brightness-0 invert" />
+                  MZK
+                </span>
+              </>
+            ) : stop.operator === "MZK" ? (
+              <span className="inline-flex items-center gap-1 rounded bg-blue-600 px-1.5 py-0.5 font-bold text-white shadow-sm">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src="/mzk-logo.svg" alt="" className="h-3 w-auto filter brightness-0 invert" />
+                MZK Bielsko-Biała
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1 rounded bg-red-600 px-1.5 py-0.5 font-bold text-white shadow-sm">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src="/brand.svg" alt="" className="h-3 w-auto filter brightness-0 invert" />
+                Komunikacja Beskidzka
+              </span>
+            )}
+            <span>
+              {isBusStation(stop.name, stop) ? "Dworzec autobusowy" : "Przystanek autobusowy"}
+            </span>
+            {stop.onRequest && (
+              <span className="rounded bg-sky-500/20 px-1 font-medium text-sky-400">Na żądanie</span>
+            )}
+          </div>
         </div>
         {onPlanRoute && (
           <IconButton label="Wyznacz trasę stąd" onClick={() => onPlanRoute(stop)}>
@@ -251,7 +284,13 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
   );
 
   return (
-    <BottomSheet desktop={desktop} onClose={onClose} ariaLabel={`Przystanek ${stop.name}`} header={header}>
+    <BottomSheet
+      desktop={desktop}
+      onClose={onClose}
+      ariaLabel={`Odjazdy z przystanku ${displayStopName(stop.name)}`}
+      initialSnap="half"
+      header={header}
+    >
       <div key={tab} className="kb-scroll h-full overflow-y-auto pb-4 animate-fade">
         {tab === "live" ? (
           liveErr ? (
@@ -280,9 +319,13 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
                 const actualSecs = est && plannedSecs != null && td != null ? plannedSecs + td : null;
                 const line = row.line_name || row.symbol || "?";
                 const plat = formatPlatform(row.platform, isStation);
+                const sideNum = row.side_number || liveVeh?.side_number;
+                const vehModel = row.model || liveVeh?.model;
+                const vehDetails = sideNum ? `#${sideNum}${vehModel ? ` · ${vehModel}` : ""}` : null;
                 const sub = [
                   planned ? `plan ${planned}` : "",
                   plat,
+                  vehDetails,
                 ]
                   .filter(Boolean)
                   .join(" · ");
@@ -299,7 +342,7 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
                       onClick={() => onShowLive(row.trip_execution_id || "", row.trip_id ?? null)}
                       className="flex w-full items-center gap-3 rounded-2xl px-2 py-2.5 text-left transition-all hover:bg-white/5 active:scale-[0.985] active:bg-white/8"
                     >
-                      <LineBadge line={line} />
+                      <LineBadge line={line} operator={row.operator} />
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-[13px] font-medium text-text">
                           {row.direction ? displayStopName(row.direction) : `Linia ${line}`}

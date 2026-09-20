@@ -7,17 +7,77 @@ import type { Stop, TripTime, TripView, Vehicle } from "./types";
  */
 export function tripTimeMatchesStop(
   t: Pick<TripTime, "designator" | "place_id">,
-  stop: Pick<Stop, "id" | "designator">,
+  stop: Pick<Stop, "id" | "designator"> & {
+    kbId?: string;
+    mzkId?: string;
+    kbDesignator?: string;
+    mzkDesignator?: string;
+    symbol?: string;
+    mzkSymbol?: string;
+  },
 ): boolean {
-  return (t.designator != null && String(t.designator) === String(stop.id)) || t.place_id === stop.designator;
+  if (t.designator != null) {
+    const d = String(t.designator);
+    if (
+      d === String(stop.id) ||
+      (stop.kbId && d === String(stop.kbId)) ||
+      (stop.mzkId && d === String(stop.mzkId))
+    ) {
+      return true;
+    }
+  }
+  if (t.place_id) {
+    if (
+      t.place_id === stop.designator ||
+      (stop.kbDesignator && t.place_id === stop.kbDesignator) ||
+      (stop.mzkDesignator && t.place_id === stop.mzkDesignator) ||
+      (stop.mzkSymbol && t.place_id === `mzk:${stop.mzkSymbol}`) ||
+      (stop.mzkSymbol && t.place_id === stop.mzkSymbol) ||
+      (stop.symbol && t.place_id === `mzk:${stop.symbol}`) ||
+      (stop.symbol && t.place_id === stop.symbol)
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
-/** Komunikacja Beskidzka brand red. */
-export const BRAND = "#a6192e";
+/** Komunikacja Beskidzka constant brand red. */
+export const BRAND = "#dc2626";
+export const BRAND_KB = "#dc2626";
 export const ACCENT = "#ee7583";
 export const COLOR_AT_STOP = "#34a370";
 export const COLOR_LATE = "#e58f2a";
 export const COLOR_EARLY = "#a86fdd";
+
+/** MZK Bielsko-Biała characteristic brand blue (high-contrast against KB red). */
+export const BRAND_MZK = "#2563eb";
+export const ACCENT_MZK = "#3b82f6";
+
+/** Check if a line or operator belongs to MZK Bielsko-Biała. */
+export function isMzk(operator?: string | null, line?: string | null): boolean {
+  if (operator === "MZK") return true;
+  if (operator === "KB") return false;
+  if (!line || line === "…") return false;
+  const s = String(line).trim();
+  // KB lines: 100-140
+  if (
+    s.startsWith("10") ||
+    s.startsWith("11") ||
+    s.startsWith("12") ||
+    s.startsWith("13") ||
+    s.startsWith("14")
+  ) {
+    return false;
+  }
+  // MZK lines: 1-57, N1, N2, P1, P2
+  return s.length <= 2 || s.startsWith("N") || s.startsWith("P");
+}
+
+/** Constant brand color: red for KB, characteristic blue for MZK. */
+export function operatorColor(operator?: string | null, line?: string | null): string {
+  return isMzk(operator, line) ? BRAND_MZK : BRAND_KB;
+}
 
 /** Deterministic per-line color: h = (h*31 + charCode) % 360, s 58%, l 46%. */
 export function hslColor(s: string | null | undefined): string {
@@ -28,12 +88,9 @@ export function hslColor(s: string | null | undefined): string {
   return `hsl(${h},58%,46%)`;
 }
 
-/** Vehicle marker color: brand red in transit, status colors override. */
-export function vehColor(v: Pick<Vehicle, "at_stop" | "delay" | "line">): string {
-  if (v.at_stop) return COLOR_AT_STOP;
-  if (v.delay != null && v.delay > 60) return COLOR_LATE;
-  if (v.delay != null && v.delay < -60) return COLOR_EARLY;
-  return BRAND;
+/** Vehicle marker color: constant operator color (KB red, MZK characteristic blue). */
+export function vehColor(v: Pick<Vehicle, "at_stop" | "delay" | "line"> & { operator?: string }): string {
+  return operatorColor(v.operator, v.line);
 }
 
 export function secsFromHHMM(hhmm: string | null | undefined): number | null {

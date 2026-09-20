@@ -24,17 +24,27 @@ export function bearingBucket(b: number | null | undefined): number | null {
   return b == null ? null : Math.round(b / 5) * 5;
 }
 
-export function makeVehicleIcon(line: string, color: string, bearing: number | null): L.DivIcon {
+export function makeVehicleIcon(
+  line: string,
+  color: string,
+  bearing: number | null,
+  operator?: "KB" | "MZK",
+): L.DivIcon {
   const hasHeading = bearing != null;
   const arrow = hasHeading
     ? `<span class="veh-arrow" style="transform:rotate(${bearing}deg)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="${ARROW_PATH}"/></svg></span>`
     : "";
+  const isMzk = operator === "MZK";
+  const brandIcon = isMzk
+    ? `<img class="veh-bus veh-mzk-logo" src="/mzk-logo.svg" alt="MZK" aria-hidden="true" draggable="false"/>`
+    : `<img class="veh-bus" src="/brand.svg" alt="KB" aria-hidden="true" draggable="false"/>`;
+
   return L.divIcon({
-    className: "veh-marker",
+    className: `veh-marker${isMzk ? " veh-mzk" : ""}`,
     html:
-      `<div class="veh-wrap"><div class="veh-pill${hasHeading ? "" : " no-heading"}" style="background:${color}">` +
+      `<div class="veh-wrap"><div class="veh-pill${hasHeading ? "" : " no-heading"}${isMzk ? " is-mzk" : ""}" style="background:${color}">` +
       arrow +
-      `<img class="veh-bus" src="/brand.svg" alt="" aria-hidden="true" draggable="false"/>` +
+      brandIcon +
       `<span class="veh-line">${escapeHtml(line || "?")}</span></div></div>`,
     iconSize: [40, 40],
     iconAnchor: [20, 20],
@@ -69,11 +79,22 @@ const STOP_ARROW_SVG =
  * - Bus stations (D.A.): distinctive brand-red hub badge with terminal glyph
  *   and NO directional arrows (multi-directional hub).
  */
-export function makeStopIcon(dirs: number[] = [], isStation = false): L.DivIcon {
+export function makeStopIcon(
+  dirs: number[] = [],
+  isStation = false,
+  operator?: "KB" | "MZK" | "BOTH",
+): L.DivIcon {
+  const opClass = operator === "BOTH" ? " is-both" : operator === "MZK" ? " is-mzk" : " is-kb";
+  const stnTitle =
+    operator === "BOTH"
+      ? "Komunikacja Beskidzka / MZK"
+      : operator === "MZK"
+        ? "MZK Bielsko-Biała"
+        : "Dworzec Autobusowy";
   if (isStation) {
     return L.divIcon({
-      className: "stop-mk-icon",
-      html: `<div class="stop-mk is-station"><span class="stop-mk-sign stop-mk-station" title="Dworzec Autobusowy">${STATION_SVG}</span></div>`,
+      className: `stop-mk-icon${opClass}`,
+      html: `<div class="stop-mk is-station${opClass}"><span class="stop-mk-sign stop-mk-station" title="${stnTitle}">${STATION_SVG}</span></div>`,
       iconSize: [34, 34],
       iconAnchor: [17, 17],
     });
@@ -87,16 +108,17 @@ export function makeStopIcon(dirs: number[] = [], isStation = false): L.DivIcon 
     .join("");
 
   return L.divIcon({
-    className: "stop-mk-icon",
-    html: `<div class="stop-mk">${arrows}<span class="stop-mk-sign">${STOP_BUS_SVG}</span></div>`,
+    className: `stop-mk-icon${opClass}`,
+    html: `<div class="stop-mk${opClass}">${arrows}<span class="stop-mk-sign">${STOP_BUS_SVG}</span></div>`,
     iconSize: [34, 34],
     iconAnchor: [17, 17],
   });
 }
 
-export function makeStopPingIcon(): L.DivIcon {
+export function makeStopPingIcon(operator?: "KB" | "MZK" | "BOTH"): L.DivIcon {
+  const opClass = operator === "BOTH" ? " is-both" : operator === "MZK" ? " is-mzk" : " is-kb";
   return L.divIcon({
-    className: "stop-ping-marker",
+    className: `stop-ping-marker${opClass}`,
     html: '<div class="stop-ping"><span class="ring"></span><span class="core"></span></div>',
     iconSize: [20, 20],
     iconAnchor: [10, 10],

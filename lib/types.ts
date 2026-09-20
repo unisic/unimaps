@@ -6,6 +6,17 @@
 /** A generic upstream JSON object we only loosely trust. */
 export type UpstreamRecord = Record<string, unknown>;
 
+export interface VehicleFeatures {
+  airCondition?: boolean;
+  lowFloor?: boolean;
+  electric?: boolean;
+  hydrogen?: boolean;
+  hybrid?: boolean;
+  longVehicle?: boolean;
+  ticketMachine?: boolean;
+  ecoVehicle?: boolean;
+}
+
 /** Parsed stop from GET /stops?rev=... positional arrays (port of api.Stop). */
 export interface Stop {
   /** field[0]: designator string used in URLs, e.g. "19223" or "19132:39688" */
@@ -22,6 +33,23 @@ export interface Stop {
   showPlatforms: boolean;
   /** String(internalId) — Python's Stop.stop_id property. */
   stopId: string;
+  operator?: "KB" | "MZK" | "BOTH";
+  operators?: ("KB" | "MZK")[];
+  symbol?: string;
+  onRequest?: boolean;
+  gettingOut?: boolean;
+  kbId?: string;
+  mzkId?: string;
+  kbDesignator?: string;
+  mzkDesignator?: string;
+  mzkSymbol?: string;
+  dirs?: number[];
+}
+
+export interface LineInfo {
+  name: string;
+  type?: string;
+  operator?: "KB" | "MZK";
 }
 
 /** One entry of a trip's "times" array (port of api.TripStop). */
@@ -47,6 +75,7 @@ export interface Trip {
   showName: boolean;
   vehicleType: number | null;
   currentStationId: number | null;
+  operator?: "KB" | "MZK";
 }
 
 /** Internal live vehicle state (port of poller.VehiclePos). */
@@ -78,6 +107,10 @@ export interface VehiclePos {
   /** true once the vehicle has reached its final stop — the course is over, so
    *  it's hidden from the map instead of lingering with an ever-growing delay */
   finished: boolean;
+  operator?: "KB" | "MZK";
+  sideNumber?: string;
+  model?: string;
+  features?: VehicleFeatures;
 }
 
 /** Wire shape of one vehicle in GET /api/vehicles (VehiclePos.to_json()). */
@@ -99,6 +132,10 @@ export interface VehicleJson {
   next_stop_lon: number | null;
   timestamp: number;
   updated_at: number;
+  operator?: "KB" | "MZK";
+  side_number?: string;
+  model?: string;
+  features?: VehicleFeatures;
 }
 
 /** GET /api/vehicles response. */
@@ -110,18 +147,30 @@ export interface VehiclesResponse {
   vehicles: VehicleJson[];
 }
 
+export type WireStop = {
+  id: string;
+  designator: string;
+  name: string;
+  lat: number;
+  lon: number;
+  dirs?: number[];
+  isStation?: boolean;
+  showPlatforms?: boolean;
+  operator?: "KB" | "MZK" | "BOTH";
+  operators?: ("KB" | "MZK")[];
+  symbol?: string;
+  onRequest?: boolean;
+  gettingOut?: boolean;
+  kbId?: string;
+  mzkId?: string;
+  kbDesignator?: string;
+  mzkDesignator?: string;
+  mzkSymbol?: string;
+};
+
 export interface StopsResponse {
   count: number;
-  stops: Array<{
-    id: string;
-    designator: string;
-    name: string;
-    lat: number;
-    lon: number;
-    dirs?: number[];
-    isStation?: boolean;
-    showPlatforms?: boolean;
-  }>;
+  stops: WireStop[];
 }
 
 /** GET /api/health response. "degraded" (served as HTTP 503) = the scan loop

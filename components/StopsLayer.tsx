@@ -40,10 +40,11 @@ function StopsLayer({ stops, visible, onSelect }: Props) {
     const iconFor = (s: Stop): L.DivIcon => {
       const isStation = isBusStation(s.name, s);
       const dirs = isStation ? [] : (s.dirs ?? []);
-      const key = `${isStation ? "stn" : "stop"}-${dirs.length ? dirs.join(",") : "-"}`;
+      const op = s.operator ?? "KB";
+      const key = `${isStation ? "stn" : "stop"}-${op}-${dirs.length ? dirs.join(",") : "-"}`;
       let ic = iconCache.get(key);
       if (!ic) {
-        ic = makeStopIcon(dirs, isStation);
+        ic = makeStopIcon(dirs, isStation, op);
         iconCache.set(key, ic);
       }
       return ic;
@@ -74,7 +75,8 @@ function StopsLayer({ stops, visible, onSelect }: Props) {
             zIndexOffset: -50, // below the live vehicle pills
           });
           const label = document.createElement("span");
-          label.textContent = displayStopName(s.name);
+          const opBadge = s.operator === "BOTH" ? " · KB + MZK" : s.operator === "MZK" ? " · MZK" : " · KB";
+          label.textContent = `${displayStopName(s.name)}${s.symbol ? ` (${s.symbol})` : ""}${opBadge}`;
           m.bindTooltip(label, { direction: "top", offset: [0, -14], className: "kb-tooltip" });
           m.on("click", () => onSelectRef.current(s));
           m.addTo(group);

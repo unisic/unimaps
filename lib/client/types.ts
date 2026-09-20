@@ -1,5 +1,16 @@
 /** Shared client-side types mirroring the /api/* contract. */
 
+export interface VehicleFeatures {
+  airCondition?: boolean;
+  lowFloor?: boolean;
+  electric?: boolean;
+  hydrogen?: boolean;
+  hybrid?: boolean;
+  longVehicle?: boolean;
+  ticketMachine?: boolean;
+  ecoVehicle?: boolean;
+}
+
 export interface Vehicle {
   id: string;
   trip_id: string;
@@ -19,6 +30,10 @@ export interface Vehicle {
   next_stop_lon: number | null;
   timestamp: number;
   updated_at: number;
+  operator?: "KB" | "MZK";
+  side_number?: string;
+  model?: string;
+  features?: VehicleFeatures;
 }
 
 export interface VehiclesResponse {
@@ -39,6 +54,16 @@ export interface Stop {
   dirs?: number[];
   isStation?: boolean;
   showPlatforms?: boolean;
+  operator?: "KB" | "MZK" | "BOTH";
+  operators?: ("KB" | "MZK")[];
+  symbol?: string;
+  onRequest?: boolean;
+  gettingOut?: boolean;
+  kbId?: string;
+  mzkId?: string;
+  kbDesignator?: string;
+  mzkDesignator?: string;
+  mzkSymbol?: string;
 }
 
 export interface StopsResponse {
@@ -54,6 +79,7 @@ export interface LineInfo {
   name: string;
   /** route_long_name — the terminus, e.g. "KANIÓW" */
   terminus: string;
+  operator?: "KB" | "MZK";
 }
 
 export interface LinesResponse {
@@ -73,6 +99,10 @@ export interface DepartureRow {
   platform?: string;
   line_name?: string;
   symbol?: string;
+  operator?: "KB" | "MZK";
+  side_number?: string;
+  model?: string;
+  features?: VehicleFeatures;
 }
 
 export interface DeparturesResponse {
@@ -104,12 +134,14 @@ export interface Trip {
   times?: TripTime[];
   direction?: string;
   line?: { name?: string };
+  operator?: "KB" | "MZK";
 }
 
 export interface TripExecutionResponse {
   trip?: Trip;
   vehicle?: { lat: number; lon: number };
   vehicle_trip_index?: number;
+  shape?: LatLng[];
 }
 
 /** One upstream service announcement (utrudnienia/objazdy). Despite the field
@@ -158,6 +190,7 @@ export interface TripView {
   execId: string | null;
   /** GTFS trip id for static routes — matches live vehicles sharing this trip */
   tripId?: string | number | null;
+  operator?: "KB" | "MZK";
 }
 
 export interface ConnectionLegStop {

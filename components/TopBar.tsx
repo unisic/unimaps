@@ -5,6 +5,7 @@ import TopBarSearch, { type TopBarSearchHandle } from "@/components/TopBarSearch
 import { useAnnouncements } from "@/lib/client/announcements";
 import {
   BRAND,
+  BRAND_MZK,
   COLOR_AT_STOP,
   COLOR_EARLY,
   COLOR_LATE,
@@ -81,6 +82,8 @@ export interface TopBarProps {
   onClearView: () => void;
   onOpenConnections?: () => void;
   searchRef?: React.RefObject<TopBarSearchHandle | null>;
+  operatorFilter: "all" | "kb" | "mzk";
+  onOperatorFilter: (op: "all" | "kb" | "mzk") => void;
 }
 
 function LegendDot({ color, label }: { color: string; label: string }) {
@@ -111,6 +114,8 @@ function TopBar({
   onClearView,
   onOpenConnections,
   searchRef,
+  operatorFilter,
+  onOperatorFilter,
 }: TopBarProps) {
   const [menu, setMenu] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -154,6 +159,33 @@ function TopBar({
             if (isOpen) setMenu(false);
           }}
         />
+
+        {/* Operator switcher button */}
+        <button
+          type="button"
+          onClick={() => {
+            const next = operatorFilter === "all" ? "kb" : operatorFilter === "kb" ? "mzk" : "all";
+            onOperatorFilter(next);
+          }}
+          className={`flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-xs font-bold transition-all active:scale-95 ${
+            operatorFilter === "mzk"
+              ? "bg-blue-600 text-white shadow-sm"
+              : operatorFilter === "kb"
+                ? "bg-red-600 text-white shadow-sm"
+                : "bg-white/8 text-text hover:bg-white/12"
+          }`}
+          title="Przełącz przewoźnika: Wszystkie / KB / MZK"
+        >
+          {operatorFilter === "mzk" && (
+            /* eslint-disable-next-line @next/next/no-img-element */
+            <img src="/mzk-logo.svg" alt="" className="h-3 w-auto filter brightness-0 invert" />
+          )}
+          {operatorFilter === "kb" && (
+            /* eslint-disable-next-line @next/next/no-img-element */
+            <img src="/brand.svg" alt="" className="h-2.5 w-auto filter brightness-0 invert" />
+          )}
+          {operatorFilter === "all" ? "Wszyscy" : operatorFilter.toUpperCase()}
+        </button>
 
         {/* Online vehicles count badge */}
         <span
@@ -214,6 +246,40 @@ function TopBar({
       {/* Settings dropdown menu */}
       {menu && (
         <div className="surface mt-2 rounded-2xl p-4 text-[13px] animate-drop">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-text-faint">Przewoźnik</p>
+          <div className="mt-2 mb-3 flex flex-wrap gap-1.5" role="radiogroup" aria-label="Wybór przewoźnika">
+            {[
+              { id: "all", label: "Wszyscy", icon: null },
+              { id: "kb", label: "Komunikacja Beskidzka", icon: "/brand.svg" },
+              { id: "mzk", label: "MZK Bielsko-Biała", icon: "/mzk-logo.svg" },
+            ].map((op) => (
+              <button
+                key={op.id}
+                type="button"
+                role="radio"
+                aria-checked={operatorFilter === op.id}
+                onClick={() => onOperatorFilter(op.id as "all" | "kb" | "mzk")}
+                className={`flex-1 basis-[calc(33.333%-4px)] rounded-full px-2.5 py-1.5 text-xs font-semibold transition-all active:scale-95 inline-flex items-center justify-center gap-1 ${
+                  operatorFilter === op.id
+                    ? op.id === "mzk"
+                      ? "bg-blue-600 text-white"
+                      : "bg-brand text-on-brand"
+                    : "bg-white/6 text-text-mute hover:bg-white/10 hover:text-text"
+                }`}
+              >
+                {op.icon && (
+                  /* eslint-disable-next-line @next/next/no-img-element */
+                  <img
+                    src={op.icon}
+                    alt=""
+                    className="h-3 w-auto filter brightness-0 invert"
+                  />
+                )}
+                {op.label}
+              </button>
+            ))}
+          </div>
+
           {Object.keys(BASE_LAYERS).length > 1 && (
             <>
               <p className="text-[11px] font-semibold uppercase tracking-wider text-text-faint">Mapa</p>
@@ -264,7 +330,8 @@ function TopBar({
             Kolory pojazdów
           </p>
           <div className="mt-2 flex flex-wrap gap-x-3.5 gap-y-1.5 text-xs">
-            <LegendDot color={BRAND} label="w trasie" />
+            <LegendDot color={BRAND} label="KB w trasie" />
+            <LegendDot color={BRAND_MZK} label="MZK w trasie" />
             <LegendDot color={COLOR_AT_STOP} label="na przystanku" />
             <LegendDot color={COLOR_LATE} label="opóźniony" />
             <LegendDot color={COLOR_EARLY} label="przed czasem" />

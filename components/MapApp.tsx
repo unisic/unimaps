@@ -121,6 +121,7 @@ export default function MapApp() {
   const [lineFilter, setLineFilter] = useState<ReadonlySet<string> | null>(() =>
     initialUrl.lines?.length ? new Set(initialUrl.lines) : null,
   );
+  const [operatorFilter, setOperatorFilter] = useState<"all" | "kb" | "mzk">("all");
   const genRef = useRef(0);
   const lastReqRef = useRef<LastRequest | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -134,7 +135,10 @@ export default function MapApp() {
   useEffect(() => {
     vehiclesRef.current = vehicles;
   });
-  const stopPingIcon = useMemo(() => makeStopPingIcon(), []);
+  const stopPingIcon = useMemo(
+    () => makeStopPingIcon(selectedStop?.operator),
+    [selectedStop?.operator],
+  );
   const userIcon = useMemo(() => makeUserLocationIcon(), []);
 
   /* geolocation — the blue "you are here" dot follows the user once granted */
@@ -167,6 +171,18 @@ export default function MapApp() {
     for (const s of stops) {
       byId.set(String(s.id), s);
       byDesig.set(String(s.designator), s);
+      if (s.kbId) byId.set(String(s.kbId), s);
+      if (s.mzkId) byId.set(String(s.mzkId), s);
+      if (s.kbDesignator) byDesig.set(String(s.kbDesignator), s);
+      if (s.mzkDesignator) byDesig.set(String(s.mzkDesignator), s);
+      if (s.symbol) {
+        byDesig.set(`mzk:${s.symbol}`, s);
+        byDesig.set(String(s.symbol), s);
+      }
+      if (s.mzkSymbol) {
+        byDesig.set(`mzk:${s.mzkSymbol}`, s);
+        byDesig.set(String(s.mzkSymbol), s);
+      }
     }
     return { byId, byDesig };
   }, [stops]);
@@ -174,6 +190,17 @@ export default function MapApp() {
   useEffect(() => {
     stopsMapsRef.current = stopsMaps;
   }, [stopsMaps]);
+
+  const filteredStops = useMemo(() => {
+    if (operatorFilter === "all") return stops;
+    if (operatorFilter === "kb") {
+      return stops.filter((s) => s.operator === "KB" || s.operator === "BOTH");
+    }
+    if (operatorFilter === "mzk") {
+      return stops.filter((s) => s.operator === "MZK" || s.operator === "BOTH");
+    }
+    return stops;
+  }, [stops, operatorFilter]);
 
   const showToast = useCallback((t: string) => setToast(t), []);
   const closeToast = useCallback(() => setToast(null), []);
@@ -204,6 +231,7 @@ export default function MapApp() {
       note: string | null,
       execId: string | null,
       tripId: string | number | null = null,
+      precomputedRoute?: LatLng[] | null,
     ) => {
       if (gen !== genRef.current) return;
       const { byId, byDesig } = stopsMapsRef.current;
@@ -225,10 +253,11 @@ export default function MapApp() {
         tripData?.direction,
       );
       const tripNote = note ?? (detour ? detour.title : null);
+      const initialRouted = precomputedRoute && precomputedRoute.length >= 2 ? precomputedRoute : null;
       setTrip({
         gen,
         isLive,
-        status: needRoute ? "routing" : "ready",
+        status: needRoute ? (initialRouted ? "ready" : "routing") : "ready",
         note: tripNote,
         line: tripData?.line?.name || "?",
         direction: tripData?.direction || "",
@@ -237,11 +266,12 @@ export default function MapApp() {
         vehicle,
         vti,
         stop,
-        routed: null,
+        routed: initialRouted,
         execId,
         tripId,
+        operator: tripData?.operator,
       });
-      if (!needRoute) return;
+      if (initialRouted || !needRoute) return;
       const road = await fetchRoute(routePts);
       if (gen !== genRef.current) return;
       // OSRM road geometry when available; straight lines through the stops if not
@@ -355,6 +385,7 @@ export default function MapApp() {
           null,
           execId,
           tripId,
+          resp.shape,
         );
       } catch {
         if (gen !== genRef.current) return;
@@ -839,7 +870,7 @@ export default function MapApp() {
           />
         )}
         <ZoomControl position="bottomright" />
-        <StopsLayer stops={stops} visible={stopsVisible} onSelect={handleSelectStop} />
+        <StopsLayer stops={filteredStops} visible={stopsVisible} onSelect={handleSelectStop} />
         {selectedStop && (
           <Marker
             position={[selectedStop.lat, selectedStop.lon]}
@@ -856,6 +887,7 @@ export default function MapApp() {
           onVehicleClick={handleVehicleClick}
           hidden={trip != null || journey != null}
           lineFilter={lineFilter}
+          operatorFilter={operatorFilter}
         />
         {geo.pos && (
           <>
@@ -905,12 +937,22 @@ export default function MapApp() {
         onClearView={handleClearView}
         onOpenConnections={openConnModal}
         searchRef={searchRef}
+        operatorFilter={operatorFilter}
+        onOperatorFilter={setOperatorFilter}
       />
 
       {filterLines && (
         <LineFilterChip
           lines={filterLines}
-          visibleCount={lineFilter ? vehicles.filter((v) => lineFilter.has(v.line)).length : 0}
+          visibleCount={
+            lineFilter
+              ? vehicles.filter(
+                  (v) =>
+                    lineFilter.has(v.line) &&
+                    (operatorFilter === "all" || (v.operator ?? "KB").toLowerCase() === operatorFilter),
+                ).length
+              : 0
+          }
           onClear={clearLineFilter}
           onOpenPalette={handleFocusSearch}
         />

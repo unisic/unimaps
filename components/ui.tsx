@@ -1,16 +1,24 @@
 "use client";
 
 import { useCallback, useState } from "react";
-import { hslColor } from "@/lib/client/format";
+import { operatorColor } from "@/lib/client/format";
 
 /** Colored line-number pill, size-adjustable. */
-export function LineBadge({ line, big = false }: { line: string; big?: boolean }) {
+export function LineBadge({
+  line,
+  big = false,
+  operator,
+}: {
+  line: string;
+  big?: boolean;
+  operator?: "KB" | "MZK";
+}) {
   return (
     <span
       className={`flex shrink-0 items-center justify-center rounded-lg font-bold text-white ${
         big ? "h-8 min-w-11 px-2 text-[15px]" : "h-7 min-w-9 px-1.5 text-xs"
       }`}
-      style={{ background: hslColor(line) }}
+      style={{ background: operatorColor(operator, line) }}
     >
       {line}
     </span>
