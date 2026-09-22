@@ -19,7 +19,33 @@ async function handleBatch(req: Request, rawIds: string[]): Promise<Response> {
 
   try {
     await startPoller();
-    const trips = await getApi().fetchTripsBatch(rawIds);
+    const kbIds = rawIds.filter((id) => !id.startsWith("mzk:"));
+    const mzkIds = rawIds.filter((id) => id.startsWith("mzk:"));
+
+    const trips: Record<string, unknown> = {};
+
+    if (kbIds.length > 0) {
+      const kbTrips = await getApi().fetchTripsBatch(kbIds);
+      Object.assign(trips, kbTrips);
+    }
+
+    if (mzkIds.length > 0) {
+      const { resolveMzkTrip } = await import("@/lib/mzk-trip");
+      const mzkResults = await Promise.all(
+        mzkIds.map(async (id) => {
+          try {
+            const res = await resolveMzkTrip(id);
+            return [id, res?.trip ? { ...(res.trip as object), shape: res.shape } : null] as const;
+          } catch {
+            return [id, null] as const;
+          }
+        }),
+      );
+      for (const [id, t] of mzkResults) {
+        if (t) trips[id] = t;
+      }
+    }
+
     return Response.json(
       { count: Object.keys(trips).length, trips },
       { headers: { "Cache-Control": "public, max-age=3600" } },

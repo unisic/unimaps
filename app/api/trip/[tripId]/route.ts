@@ -22,7 +22,14 @@ export async function GET(
     if (tripId.startsWith("mzk:")) {
       const { resolveMzkTrip } = await import("@/lib/mzk-trip");
       const mzkTrip = await resolveMzkTrip(tripId);
-      return Response.json(mzkTrip ? (mzkTrip.trip || {}) : {}, {
+      if (!mzkTrip) {
+        return Response.json({}, { headers: { "Cache-Control": "public, max-age=300" } });
+      }
+      const tripObj = {
+        ...(mzkTrip.trip as Record<string, unknown>),
+        shape: mzkTrip.shape,
+      };
+      return Response.json(tripObj, {
         headers: { "Cache-Control": "public, max-age=300" },
       });
     }

@@ -87,6 +87,34 @@ export interface MzkRealtimeResponse {
   error?: string | null;
 }
 
+export interface MzkScheduleDeparture {
+  scheduledDepartureSec: number;
+  courseId: number;
+  variantId: number;
+  operator?: string | null;
+  transportType?: string;
+  expectedVehicleType?: string;
+  orderInCourse?: number;
+  optionalDirection?: string;
+  letter?: string;
+  visible?: boolean;
+}
+
+export interface MzkLineSchedule {
+  lineName: string;
+  isGettingOutOnly?: boolean;
+  destination: string;
+  mainVariantId?: number;
+  departures: MzkScheduleDeparture[];
+}
+
+export interface MzkAtomicScheduleResponse {
+  dayTypeSymbol?: string | null;
+  lineSchedules?: Record<string, MzkLineSchedule>;
+  scheduleDate?: string | null;
+  error?: string | null;
+}
+
 export interface MzkMessage {
   loid: number;
   title: string;
@@ -191,6 +219,28 @@ export class MzkApi {
    */
   async fetchRealCourse(courseId: number): Promise<unknown> {
     return this.requestJson(`getRealCourse.json?courseId=${courseId}`);
+  }
+
+  /**
+   * Fetches full day timetable for a stop symbol and date.
+   */
+  async fetchAtomicSchedule(
+    symbol: string,
+    date?: string | number,
+  ): Promise<MzkAtomicScheduleResponse> {
+    let dateParam: string | number;
+    if (typeof date === "number") {
+      dateParam = date;
+    } else if (typeof date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      const [y, m, d] = date.split("-").map(Number);
+      dateParam = Date.UTC(y, m - 1, d, 12, 0, 0);
+    } else {
+      const now = new Date();
+      dateParam = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate(), 12, 0, 0);
+    }
+    return this.requestJson<MzkAtomicScheduleResponse>(
+      `getAtomicSchedule.json?symbol=${encodeURIComponent(symbol)}&date=${dateParam}`,
+    );
   }
 
   /**

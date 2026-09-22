@@ -6,8 +6,9 @@ import { LineBadge, StarIcon } from "@/components/ui";
 import { useFavorites } from "@/lib/client/favorites";
 import { delayTxt, displayStopName, normalizeText, wozPlural } from "@/lib/client/format";
 import { formatDistance, haversineMeters } from "@/lib/client/geo";
+import { getAllFleetVehicles, type FleetVehicleSummary } from "@/lib/mzk-fleet";
 import type { BaseLayerId } from "@/components/TopBar";
-import type { LineInfo, Stop, Vehicle } from "@/lib/client/types";
+import type { LineInfo, Stop, Vehicle, VehicleFeatures } from "@/lib/client/types";
 
 export interface TopBarSearchHandle {
   focus: () => void;
@@ -34,6 +35,7 @@ export interface TopBarSearchProps {
   searchRef?: React.RefObject<TopBarSearchHandle | null>;
   /** Notifies parent when dropdown opens/closes (e.g. to close settings menu) */
   onDropdownChange?: (open: boolean) => void;
+  onShowToast?: (msg: string) => void;
 }
 
 /* ---------- result model ---------- */
@@ -49,6 +51,7 @@ interface ActionDef {
 type Item =
   | { kind: "line"; l: LineInfo; live: number; active: boolean }
   | { kind: "veh"; v: Vehicle }
+  | { kind: "fleet"; f: FleetVehicleSummary; liveVeh?: Vehicle }
   | { kind: "stop"; s: Stop; fav: boolean; dist: number | null }
   | { kind: "action"; a: ActionDef };
 
@@ -62,9 +65,10 @@ const itemKey = (it: Item): string =>
   it.kind === "action" ? `a-${it.a.id}`
   : it.kind === "line" ? `l-${it.l.id}`
   : it.kind === "veh" ? `v-${it.v.id}`
+  : it.kind === "fleet" ? `f-${it.f.sideNumber}`
   : `s-${it.s.id}`;
 
-const CAP = { lines: 4, vehs: 4, actions: 3, stops: 6 } as const;
+const CAP = { lines: 4, vehs: 5, fleet: 5, actions: 3, stops: 6 } as const;
 
 /* ---------- glyphs ---------- */
 
@@ -155,6 +159,75 @@ function CheckGlyph() {
   );
 }
 
+function matchesFleetKeywords(
+  q: string,
+  f: { model: string; producer: string; fuelType: string; lengthCategory: string; features: VehicleFeatures },
+): boolean {
+  const nm = normalizeText(f.model);
+  const np = normalizeText(f.producer);
+  if (nm.includes(q) || np.includes(q)) return true;
+
+  if (
+    (q === "wodor" || q === "wodorowy" || q === "wodorowe" || q === "wodorowych" || q === "hydrogen" || q === "h2") &&
+    (f.fuelType === "hydrogen" || f.features.hydrogen)
+  ) {
+    return true;
+  }
+  if (
+    (q === "elektryk" || q === "elektryczny" || q === "elektryczne" || q === "elektrycznych" || q === "electric" || q === "ev") &&
+    (f.fuelType === "electric" || f.features.electric)
+  ) {
+    return true;
+  }
+  if (
+    (q === "hybryda" || q === "hybrydowy" || q === "hybrydowe" || q === "hybrid") &&
+    (f.fuelType === "hybrid" || f.features.hybrid)
+  ) {
+    return true;
+  }
+  if (
+    (q === "przegub" || q === "przegubowy" || q === "przegubowe" || q === "przegubowiec" || q === "mega" || q === "dlugi") &&
+    (f.lengthCategory === "MEGA" || f.features.longVehicle)
+  ) {
+    return true;
+  }
+  if (q === "mini" && f.lengthCategory === "MINI") return true;
+  if (q === "midi" && f.lengthCategory === "MIDI") return true;
+  if (q === "maxi" && f.lengthCategory === "MAXI") return true;
+  if ((q === "klima" || q === "klimatyzacja" || q === "klimatyzowany") && f.features.airCondition) return true;
+  if ((q === "niska podloga" || q === "niskopodlogowy") && f.features.lowFloor) return true;
+
+  return false;
+}
+
+function matchesVehicleKeywords(q: string, v: Vehicle): boolean {
+  if (v.model && normalizeText(v.model).includes(q)) return true;
+  const feat = v.features;
+  if (!feat) return false;
+  if (
+    (q === "wodor" || q === "wodorowy" || q === "wodorowe" || q === "wodorowych" || q === "hydrogen" || q === "h2") &&
+    feat.hydrogen
+  ) {
+    return true;
+  }
+  if (
+    (q === "elektryk" || q === "elektryczny" || q === "elektryczne" || q === "elektrycznych" || q === "electric" || q === "ev") &&
+    feat.electric
+  ) {
+    return true;
+  }
+  if ((q === "hybryda" || q === "hybrydowy" || q === "hybrydowe" || q === "hybrid") && feat.hybrid) return true;
+  if (
+    (q === "przegub" || q === "przegubowy" || q === "przegubowe" || q === "przegubowiec" || q === "mega" || q === "dlugi") &&
+    feat.longVehicle
+  ) {
+    return true;
+  }
+  if ((q === "klima" || q === "klimatyzacja" || q === "klimatyzowany") && feat.airCondition) return true;
+  if ((q === "niska podloga" || q === "niskopodlogowy") && feat.lowFloor) return true;
+  return false;
+}
+
 function TopBarSearch({
   stops,
   geoPos,
@@ -172,6 +245,7 @@ function TopBarSearch({
   onOpenConnections,
   searchRef,
   onDropdownChange,
+  onShowToast,
 }: TopBarSearchProps) {
   const { data: vehData } = useVehicles();
   const { data: linesData } = useLines();
@@ -179,6 +253,7 @@ function TopBarSearch({
 
   const vehicles = useMemo(() => vehData?.vehicles ?? [], [vehData]);
   const lines = useMemo(() => linesData?.lines ?? [], [linesData]);
+  const allFleet = useMemo(() => getAllFleetVehicles(), []);
 
   const [query, setQuery] = useState("");
   const [isFocused, setIsFocused] = useState(false);
@@ -257,6 +332,15 @@ function TopBarSearch({
     return m;
   }, [vehicles]);
 
+  // Fast lookup of currently running vehicles by side number
+  const liveSideNumbers = useMemo(() => {
+    const s = new Set<string>();
+    for (const v of vehicles) {
+      if (v.side_number) s.add(normalizeText(v.side_number));
+    }
+    return s;
+  }, [vehicles]);
+
   // Available quick actions
   const actions = useMemo<ActionDef[]>(() => {
     const list: ActionDef[] = [
@@ -314,6 +398,7 @@ function TopBarSearch({
   const sections = useMemo<Section[]>(() => {
     const q = normalizeText(query.trim());
     if (!q) return [];
+    const cleanQ = q.replace(/^#/, "").replace(/^nr\s*/, "").replace(/^tabor\s*/, "").trim();
 
     const stopDist = (s: Stop) =>
       geoPos ? haversineMeters(geoPos.lat, geoPos.lon, s.lat, s.lon) : null;
@@ -341,23 +426,70 @@ function TopBarSearch({
 
     // 2. Vehicles
     const vehHits: Scored[] = [];
-    const seenDir = new Set<string>();
+    const seenVehKeys = new Set<string>();
     for (const v of vehicles) {
       const nl = normalizeText(v.line || "");
       const nh = normalizeText(v.headsign || "");
+      const ns = v.side_number ? normalizeText(v.side_number) : "";
+      const nm = v.model ? normalizeText(v.model) : "";
+
+      const isExactSide = Boolean(ns && (ns === cleanQ || ns === q));
+      const isSidePrefix = Boolean(ns && cleanQ.length >= 2 && ns.startsWith(cleanQ));
+      const isModelMatch = Boolean(nm && (nm.includes(q) || (cleanQ.length >= 2 && nm.includes(cleanQ))));
+      const isFeatureMatch = matchesVehicleKeywords(cleanQ, v) || matchesVehicleKeywords(q, v);
+
       let rank = -1;
-      if (nl && nl === q) rank = 0.5;
+      if (isExactSide) rank = 0;
+      else if (nl && nl === q) rank = 0.5;
+      else if (isSidePrefix) rank = 1.1;
       else if (nl && nl.startsWith(q)) rank = 1.5;
+      else if (isModelMatch) rank = 2.0;
+      else if (isFeatureMatch) rank = 2.4;
       else if (nl && nl.includes(q)) rank = 4.5;
       else if (nh && nh.includes(q)) rank = 5;
+
       if (rank < 0) continue;
-      const key = `${v.line} ${v.headsign}`;
-      if (seenDir.has(key)) continue;
-      seenDir.add(key);
-      vehHits.push({ item: { kind: "veh", v }, rank, label: `${v.line} ${v.headsign}`, dist: Infinity });
+
+      const isTaborHit = isExactSide || isSidePrefix || isModelMatch || isFeatureMatch;
+      const key = isTaborHit ? (v.side_number ? `side-${v.side_number}` : `veh-${v.id}`) : `${v.line} ${v.headsign}`;
+      if (seenVehKeys.has(key)) continue;
+      seenVehKeys.add(key);
+
+      vehHits.push({
+        item: { kind: "veh", v },
+        rank,
+        label: v.side_number ? `#${v.side_number} ${v.line} ${v.headsign}` : `${v.line} ${v.headsign}`,
+        dist: Infinity,
+      });
     }
 
-    // 3. Actions
+    // 3. Fleet vehicles (depot / offline)
+    const fleetHits: Scored[] = [];
+    for (const f of allFleet) {
+      const ns = normalizeText(f.sideNumber);
+      // Skip if currently live on road (it's already in vehHits)
+      if (liveSideNumbers.has(ns)) continue;
+
+      const isExactSide = ns === cleanQ || ns === q;
+      const isSidePrefix = cleanQ.length >= 2 && ns.startsWith(cleanQ);
+      const isModelOrFeature = matchesFleetKeywords(cleanQ, f) || matchesFleetKeywords(q, f);
+
+      let rank = -1;
+      if (isExactSide) rank = 0.1;
+      else if (isSidePrefix) rank = 1.2;
+      else if (isModelOrFeature) rank = 2.2;
+
+      if (rank < 0) continue;
+
+      fleetHits.push({
+        item: { kind: "fleet", f },
+        rank,
+        label: `#${f.sideNumber} ${f.model}`,
+        dist: Infinity,
+      });
+    }
+
+    // 4. Actions
     const actionHits: Scored[] = [];
     for (const a of actions) {
       const nl = normalizeText(a.label);
@@ -368,7 +500,7 @@ function TopBarSearch({
       actionHits.push({ item: { kind: "action", a }, rank, label: a.label, dist: Infinity });
     }
 
-    // 4. Stops
+    // 5. Stops
     const stopHits: Scored[] = [];
     for (const { s, n } of stopIndex) {
       let rank = -1;
@@ -408,6 +540,7 @@ function TopBarSearch({
     const groups: Section[] = [
       { title: "Linie", ...finish(lineHits, CAP.lines) },
       { title: "Pojazdy na żywo", ...finish(vehHits, CAP.vehs) },
+      { title: "Tabor MZK", ...finish(fleetHits, CAP.fleet) },
       { title: "Przystanki", ...finish(stopHits, CAP.stops, true) },
       { title: "Akcje", ...finish(actionHits, CAP.actions) },
     ]
@@ -415,7 +548,7 @@ function TopBarSearch({
       .sort((a, b) => a.best - b.best);
 
     return groups;
-  }, [query, lines, liveByLine, lineFilter, vehicles, actions, stopIndex, favSet, geoPos]);
+  }, [query, lines, liveByLine, lineFilter, vehicles, allFleet, liveSideNumbers, actions, stopIndex, favSet, geoPos]);
 
   // Flat array of items for keyboard navigation index
   const flatItems = useMemo(() => sections.flatMap((s) => s.items), [sections]);
@@ -437,6 +570,13 @@ function TopBarSearch({
       } else if (it.kind === "veh") {
         onPickVehicle(it.v);
         setIsFocused(false);
+      } else if (it.kind === "fleet") {
+        if (it.liveVeh) {
+          onPickVehicle(it.liveVeh);
+        } else {
+          onShowToast?.(`Pojazd #${it.f.sideNumber} (${it.f.model}) znajduje się obecnie w zajezdni.`);
+        }
+        setIsFocused(false);
       } else if (it.kind === "line") {
         onToggleLine(it.l.name);
         setIsFocused(false);
@@ -445,7 +585,7 @@ function TopBarSearch({
         setIsFocused(false);
       }
     },
-    [onPickStop, onPickVehicle, onToggleLine],
+    [onPickStop, onPickVehicle, onToggleLine, onShowToast],
   );
 
   // Keyboard navigation on input
@@ -506,8 +646,8 @@ function TopBarSearch({
           aria-controls={showDropdown ? listId : undefined}
           aria-activedescendant={showDropdown && flatItems.length > 0 ? optionId(hi) : undefined}
           aria-autocomplete="list"
-          aria-label="Szukaj przystanku lub linii"
-          placeholder="Szukaj przystanku lub linii…"
+          aria-label="Szukaj przystanku, linii lub taboru"
+          placeholder="Szukaj przystanku, linii lub taboru (#230, Solaris)…"
           autoComplete="off"
           spellCheck={false}
           value={query}
@@ -658,12 +798,67 @@ function TopBarSearch({
                                         {it.v.headsign ? `→ ${displayStopName(it.v.headsign)}` : `Linia ${it.v.line || "?"}`}
                                       </span>
                                       {it.v.side_number && (
-                                        <span className="text-[11px] text-text-faint font-normal">#{it.v.side_number}</span>
+                                        <span className="text-[11px] text-primary font-semibold">#{it.v.side_number}</span>
                                       )}
                                     </span>
-                                    <span className="mt-0.5 flex items-center gap-1.5 text-[11px] text-text-faint">
+                                    <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-text-faint">
                                       <span className="h-1.5 w-1.5 shrink-0 animate-pulse-dot rounded-full bg-good" aria-hidden />
                                       na żywo{it.v.delay != null ? ` · ${delayTxt(it.v.delay)}` : ""}
+                                      {it.v.model && (
+                                        <span className="truncate text-text-mute font-normal"> · {it.v.model}</span>
+                                      )}
+                                      {it.v.features?.hydrogen && (
+                                        <span className="rounded bg-cyan-500/20 text-cyan-300 px-1 py-0.2 text-[9px] font-medium">
+                                          Wodór
+                                        </span>
+                                      )}
+                                      {it.v.features?.electric && (
+                                        <span className="rounded bg-emerald-500/20 text-emerald-300 px-1 py-0.2 text-[9px] font-medium">
+                                          Elektryczny
+                                        </span>
+                                      )}
+                                    </span>
+                                  </span>
+                                </>
+                              )}
+
+                              {it.kind === "fleet" && (
+                                <>
+                                  <Glyph>
+                                    <BusGlyph />
+                                  </Glyph>
+                                  <span className="min-w-0 flex-1">
+                                    <span className="flex items-center gap-1.5 truncate text-text font-medium">
+                                      <span className="rounded px-1 text-[10px] font-bold text-white bg-blue-600">
+                                        MZK
+                                      </span>
+                                      <span className="font-semibold text-primary">#{it.f.sideNumber}</span>
+                                      <span className="truncate">{it.f.model}</span>
+                                    </span>
+                                    <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-text-faint">
+                                      <span className="rounded bg-white/10 px-1 py-0.2 text-[10px] font-semibold uppercase">
+                                        {it.f.lengthCategory}
+                                      </span>
+                                      {it.f.fuelType === "hydrogen" && (
+                                        <span className="rounded bg-cyan-500/20 text-cyan-300 px-1 py-0.2 text-[10px] font-medium">
+                                          Wodór
+                                        </span>
+                                      )}
+                                      {it.f.fuelType === "electric" && (
+                                        <span className="rounded bg-emerald-500/20 text-emerald-300 px-1 py-0.2 text-[10px] font-medium">
+                                          Elektryczny
+                                        </span>
+                                      )}
+                                      {it.f.fuelType === "hybrid" && (
+                                        <span className="rounded bg-amber-500/20 text-amber-300 px-1 py-0.2 text-[10px] font-medium">
+                                          Hybryda
+                                        </span>
+                                      )}
+                                      {it.f.fuelType === "diesel" && (
+                                        <span className="text-[10px] text-text-mute">Diesel</span>
+                                      )}
+                                      {it.f.year && <span>{it.f.year}</span>}
+                                      <span className="text-text-mute/80">· W zajezdni</span>
                                     </span>
                                   </span>
                                 </>

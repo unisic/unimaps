@@ -23,6 +23,7 @@ import type {
   Stop,
   TimetableDeparture,
   TimetableResponse,
+  Trip,
   Vehicle,
 } from "@/lib/client/types";
 
@@ -154,15 +155,25 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
         const deps = d.departures ?? [];
         if (cancelled) return;
         setTtPhase("trips");
-        const uniqueTripIds = Array.from(new Set(deps.map((dp) => dp.trip_id).filter(Boolean)));
-        const tripMap = await getTripsBatch(uniqueTripIds, ac.signal);
+        const neededTripIds = Array.from(
+          new Set(
+            deps
+              .filter((dp) => !dp.line || !dp.direction)
+              .map((dp) => dp.trip_id)
+              .filter(Boolean),
+          ),
+        );
+        const tripMap =
+          neededTripIds.length > 0
+            ? await getTripsBatch(neededTripIds, ac.signal)
+            : new Map<string, Trip | null>();
         if (cancelled) return;
         const rows: TtRow[] = deps.map((dp) => {
           const trip = tripMap.get(String(dp.trip_id));
           return {
             dp,
-            line: trip?.line?.name || "?",
-            dir: trip?.direction || d.main_direction?.name || "",
+            line: dp.line || trip?.line?.name || "?",
+            dir: dp.direction || trip?.direction || d.main_direction?.name || "",
           };
         });
         if (!cancelled) {
@@ -397,7 +408,7 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
                   onClick={() => onShowStatic(dp.trip_id)}
                   className="flex w-full items-center gap-3 rounded-2xl px-2 py-2.5 text-left transition-all hover:bg-white/5 active:scale-[0.985] active:bg-white/8"
                 >
-                  <LineBadge line={line} />
+                  <LineBadge line={line} operator={dp.operator} />
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-[13px] font-medium text-text">{dir ? displayStopName(dir) : `Linia ${line}`}</p>
                     {formatPlatform(dp.platform, isStation) && (

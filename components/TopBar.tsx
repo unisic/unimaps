@@ -84,6 +84,7 @@ export interface TopBarProps {
   searchRef?: React.RefObject<TopBarSearchHandle | null>;
   operatorFilter: "all" | "kb" | "mzk";
   onOperatorFilter: (op: "all" | "kb" | "mzk") => void;
+  onShowToast?: (msg: string) => void;
 }
 
 function LegendDot({ color, label }: { color: string; label: string }) {
@@ -116,6 +117,7 @@ function TopBar({
   searchRef,
   operatorFilter,
   onOperatorFilter,
+  onShowToast,
 }: TopBarProps) {
   const [menu, setMenu] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -155,6 +157,7 @@ function TopBar({
           onClearView={onClearView}
           onOpenConnections={onOpenConnections}
           searchRef={searchRef}
+          onShowToast={onShowToast}
           onDropdownChange={(isOpen) => {
             if (isOpen) setMenu(false);
           }}

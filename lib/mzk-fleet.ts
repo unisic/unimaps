@@ -276,3 +276,41 @@ export function getFleetDetails(
     },
   };
 }
+
+export interface FleetVehicleSummary {
+  sideNumber: string;
+  model: string;
+  producer: string;
+  year?: string;
+  lengthCategory: "MINI" | "MIDI" | "MAXI" | "MEGA";
+  fuelType: "diesel" | "electric" | "hydrogen" | "hybrid";
+  features: VehicleFeatures;
+}
+
+export function getAllFleetVehicles(): FleetVehicleSummary[] {
+  const list: FleetVehicleSummary[] = [];
+  for (const def of FLEET_DEFINITIONS) {
+    for (const num of def.numbers) {
+      const sideNumber = String(num);
+      list.push({
+        sideNumber,
+        model: def.model,
+        producer: def.producer,
+        year: def.year,
+        lengthCategory: def.lengthCategory,
+        fuelType: def.fuelType,
+        features: {
+          airCondition: Boolean(def.defaultFeatures?.airCondition),
+          lowFloor: Boolean(def.defaultFeatures?.lowFloor ?? true),
+          electric: def.fuelType === "electric",
+          hydrogen: def.fuelType === "hydrogen",
+          hybrid: def.fuelType === "hybrid",
+          longVehicle: def.lengthCategory === "MEGA",
+        },
+      });
+    }
+  }
+  list.sort((a, b) => parseInt(a.sideNumber, 10) - parseInt(b.sideNumber, 10));
+  return list;
+}
+

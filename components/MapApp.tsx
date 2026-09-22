@@ -320,7 +320,7 @@ export default function MapApp() {
         setTrip((prev) => (prev && prev.gen === gen ? { ...prev, status: "error" } : prev));
         return;
       }
-      await buildTrip(gen, tr, null, null, stop, false, note, null, tripId);
+      await buildTrip(gen, tr, null, null, stop, false, note, null, tripId, tr.shape);
     },
     [buildTrip],
   );
@@ -721,6 +721,11 @@ export default function MapApp() {
   const handleVehicleClick = useCallback(
     (v: Vehicle) => {
       setVehMeta(v);
+      const m = mapRef.current;
+      if (m && Number.isFinite(v.lat) && Number.isFinite(v.lon)) {
+        m.getContainer().classList.add("map-moving");
+        m.flyTo([v.lat, v.lon], Math.max(m.getZoom(), 15), panMotion(0.9));
+      }
       void openTripLive(v.id, null, null);
     },
     [openTripLive],
@@ -939,6 +944,7 @@ export default function MapApp() {
         searchRef={searchRef}
         operatorFilter={operatorFilter}
         onOperatorFilter={setOperatorFilter}
+        onShowToast={showToast}
       />
 
       {filterLines && (

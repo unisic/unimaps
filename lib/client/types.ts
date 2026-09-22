@@ -113,6 +113,9 @@ export interface TimetableDeparture {
   trip_id: number | string;
   departure: number;
   platform?: string;
+  line?: string;
+  direction?: string;
+  operator?: "KB" | "MZK";
 }
 
 export interface TimetableResponse {
@@ -135,6 +138,7 @@ export interface Trip {
   direction?: string;
   line?: { name?: string };
   operator?: "KB" | "MZK";
+  shape?: LatLng[];
 }
 
 export interface TripExecutionResponse {

@@ -1,21 +1,33 @@
 /**
  * Background poller for MZK Bielsko-Biała live fleet and stops.
  */
+import { bearing, metersBetween } from "./geo";
 import { log } from "./logger";
 import { MzkApi, type MzkRunningVehicle, type MzkStopPoint, type MzkLine } from "./mzk-api";
 import { getFleetDetails, type MzkVehicleStatic } from "./mzk-fleet";
 import type { LineInfo, Stop, VehiclePos } from "./types";
+
+/**
+ * Converts OnTime Cartesian angle (-180..180 or 0..360, counter-clockwise from East)
+ * to standard navigation compass bearing (0..360, clockwise from North).
+ */
+export function mzkAngleToCompassBearing(angle: number): number {
+  const b = (90 - angle) % 360;
+  return b < 0 ? b + 360 : b;
+}
 
 export class MzkPoller {
   readonly api: MzkApi;
   readonly refreshIntervalMs: number;
 
   positions = new Map<string, VehiclePos>();
+  lastPositionsByVehicle = new Map<string, VehiclePos>();
   runningVehiclesMap = new Map<string, MzkRunningVehicle>();
   stops: Stop[] = [];
   stopsBySymbol = new Map<string, Stop>();
   lines: LineInfo[] = [];
   staticVehicles = new Map<string, MzkVehicleStatic>();
+  courseMetaMap = new Map<number, { lineName: string; variantId?: number; direction?: string }>();
 
   lastScan = 0;
   scanCount = 0;
@@ -114,6 +126,16 @@ export class MzkPoller {
   }
 
   async pollOnce(): Promise<void> {
+    if (this.stops.length === 0 || this.lines.length === 0) {
+      try {
+        if (this.stops.length === 0) await this.loadStops();
+        if (this.lines.length === 0) await this.loadLines();
+        if (this.staticVehicles.size === 0) await this.loadStaticVehicles();
+      } catch (err) {
+        log.warn("mzk-poller", `Reload static metadata failed: ${err}`);
+      }
+    }
+
     const running = await this.api.fetchRunningVehicles();
     const nowSecs = Math.floor(Date.now() / 1000);
     const newPositions = new Map<string, VehiclePos>();
@@ -121,23 +143,95 @@ export class MzkPoller {
 
     for (const v of running) {
       if (!v.longitude || !v.latitude || !v.vehicleId) continue;
+      // Filter out invalid GPS coordinates outside service bbox
+      if (v.latitude < 48.8 || v.latitude > 50.5 || v.longitude < 18.0 || v.longitude > 20.5) {
+        continue;
+      }
+
+      if (v.courseLoid) {
+        this.courseMetaMap.set(v.courseLoid, {
+          lineName: v.lineName,
+          variantId: v.variantLoid,
+          direction: v.direction || v.optionalDirection || "",
+        });
+      }
 
       const execId = `mzk:${v.courseLoid}:${v.vehicleId}`;
       const staticInfo = this.staticVehicles.get(v.vehicleId);
       const fleet = getFleetDetails(v.vehicleId, staticInfo);
 
-      let bearing: number | null = null;
-      if (v.angle != null && Number.isFinite(v.angle)) {
-        bearing = v.angle < 0 ? (v.angle + 360) % 360 : v.angle % 360;
-      }
+      // Look up previous vehicle position (by execId or vehicleId across course changes)
+      const prev = this.positions.get(execId) || this.lastPositionsByVehicle.get(v.vehicleId);
 
-      // Next stop name from current vehicle or stopPoints
+      // Next stop name and coordinates from current vehicle or stopPoints
       let nextStopName: string | null = null;
+      let nextStopLat: number | null = null;
+      let nextStopLon: number | null = null;
+
+      let targetSymbol: string | null = null;
       if (v.stopPoints && v.orderInCourse != null && v.stopPoints[v.orderInCourse]) {
+        targetSymbol = v.stopPoints[v.orderInCourse].symbol;
         nextStopName = v.stopPoints[v.orderInCourse].name;
       } else if (v.nearestSymbol) {
-        const matched = this.stopsBySymbol.get(v.nearestSymbol);
-        if (matched) nextStopName = matched.name;
+        targetSymbol = v.nearestSymbol;
+      }
+
+      if (targetSymbol) {
+        const matched = this.stopsBySymbol.get(targetSymbol);
+        if (matched) {
+          if (!nextStopName) nextStopName = matched.name;
+          nextStopLat = matched.lat;
+          nextStopLon = matched.lon;
+        }
+      }
+
+      let computedBearing: number | null = null;
+
+      // 1. Movement-based bearing from real GPS displacement between poll intervals (ground truth)
+      if (prev) {
+        const stepDist = metersBetween(prev.lat, prev.lon, v.latitude, v.longitude);
+        if (stepDist >= 8) {
+          const moveBrg = bearing(prev.lat, prev.lon, v.latitude, v.longitude);
+          if (moveBrg !== null) {
+            computedBearing = moveBrg;
+          }
+        } else if (prev.bearing !== null) {
+          // Bus is stopped (at a bus stop, traffic light, or junction); retain previous heading so arrow stays forward
+          computedBearing = prev.bearing;
+        }
+      }
+
+      // 2. If no movement bearing available, use OnTime telemetry angle (converted from Cartesian to Compass)
+      if (computedBearing === null) {
+        if (v.angle != null && Number.isFinite(v.angle) && v.angle !== 0) {
+          computedBearing = mzkAngleToCompassBearing(v.angle);
+        } else {
+          // 3. Fallback when vehicle is stationary at terminus (angle == 0 or null, orderInCourse == 0)
+          // Compute forward bearing along the route towards the next stop point
+          if (nextStopLat !== null && nextStopLon !== null) {
+            const distToNext = metersBetween(v.latitude, v.longitude, nextStopLat, nextStopLon);
+            if (distToNext >= 15) {
+              computedBearing = bearing(v.latitude, v.longitude, nextStopLat, nextStopLon);
+            }
+          }
+          // If still null, try subsequent stop points from stopPoints list
+          if (computedBearing === null && v.stopPoints && v.stopPoints.length >= 2) {
+            const o = v.orderInCourse != null && v.orderInCourse >= 0 ? v.orderInCourse : 0;
+            const curStop = v.stopPoints[o];
+            const nextStop = v.stopPoints[o + 1] || v.stopPoints[1];
+            if (curStop && nextStop) {
+              const s1 = this.stopsBySymbol.get(curStop.symbol);
+              const s2 = this.stopsBySymbol.get(nextStop.symbol);
+              if (s1 && s2) {
+                computedBearing = bearing(s1.lat, s1.lon, s2.lat, s2.lon);
+              }
+            }
+          }
+          // Ultimate fallback if angle is exactly 0 and no route stops matched
+          if (computedBearing === null && v.angle != null && Number.isFinite(v.angle)) {
+            computedBearing = mzkAngleToCompassBearing(v.angle);
+          }
+        }
       }
 
       const pos: VehiclePos = {
@@ -154,10 +248,10 @@ export class MzkPoller {
         delay: v.delaySec != null && Number.isFinite(v.delaySec) ? Math.round(v.delaySec) : null,
         timestamp: v.lastPingDate ? Math.floor(v.lastPingDate / 1000) : nowSecs,
         updatedAt: Date.now() / 1000,
-        bearing,
+        bearing: computedBearing !== null ? Math.round(computedBearing * 10) / 10 : null,
         nextStopName,
-        nextStopLat: null,
-        nextStopLon: null,
+        nextStopLat,
+        nextStopLon,
         lastMovedAt: nowSecs,
         anchorLat: v.latitude,
         anchorLon: v.longitude,
@@ -169,6 +263,7 @@ export class MzkPoller {
       };
 
       newPositions.set(execId, pos);
+      this.lastPositionsByVehicle.set(v.vehicleId, pos);
       newRunningMap.set(execId, v);
       newRunningMap.set(String(v.courseLoid), v);
     }

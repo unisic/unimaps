@@ -43,20 +43,30 @@ export async function getVariantShape(variantId: number): Promise<[number, numbe
 
 function formatHHMM(ms: number): string {
   const d = new Date(ms);
-  const hh = String(d.getHours()).padStart(2, "0");
-  const mm = String(d.getMinutes()).padStart(2, "0");
-  return `${hh}:${mm}`;
+  return d.toLocaleTimeString("en-GB", {
+    timeZone: "Europe/Warsaw",
+    hour12: false,
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 export async function resolveMzkTrip(identifier: string): Promise<Record<string, unknown> | null> {
-  const cleanId = identifier.replace(/^mzk:/, "");
+  const cleanId = String(identifier).replace(/^mzk:/, "");
   const parts = cleanId.split(":");
   const courseIdStr = parts[0];
-  const vehicleId = parts[1];
+  const cid = parseInt(courseIdStr, 10);
+  let vehicleId = parts.length > 1 ? parts[1] : undefined;
+  let explicitVariantId: number | undefined;
 
   const mzkPoller = getMzkPoller();
+  if (vehicleId && !mzkPoller.staticVehicles.has(vehicleId) && parseInt(vehicleId, 10) > 1000) {
+    explicitVariantId = parseInt(vehicleId, 10);
+    vehicleId = parts[2];
+  }
+
   const cached =
-    mzkPoller.runningVehiclesMap.get(`mzk:${courseIdStr}:${vehicleId || ""}`) ||
+    (vehicleId ? mzkPoller.runningVehiclesMap.get(`mzk:${courseIdStr}:${vehicleId}`) : null) ||
     mzkPoller.runningVehiclesMap.get(courseIdStr) ||
     mzkPoller.runningVehiclesMap.get(identifier);
 
@@ -81,6 +91,11 @@ export async function resolveMzkTrip(identifier: string): Promise<Record<string,
       shape = await getVariantShape(cached.variantLoid);
     }
 
+    const pos =
+      (cached.vehicleId ? mzkPoller.positions.get(`mzk:${cached.courseLoid}:${cached.vehicleId}`) : null) ||
+      (cached.vehicleId ? mzkPoller.lastPositionsByVehicle.get(cached.vehicleId) : null) ||
+      mzkPoller.positions.get(identifier);
+
     return {
       trip: {
         times,
@@ -92,6 +107,7 @@ export async function resolveMzkTrip(identifier: string): Promise<Record<string,
       vehicle: {
         lat: cached.latitude,
         lon: cached.longitude,
+        ...(pos?.bearing != null ? { bearing: pos.bearing } : {}),
       },
       vehicle_trip_index: cached.orderInCourse ?? 0,
       shape,
@@ -99,36 +115,51 @@ export async function resolveMzkTrip(identifier: string): Promise<Record<string,
   }
 
   // If not active in running vehicles, fetch realCourse
-  const cid = parseInt(courseIdStr, 10);
   if (Number.isFinite(cid)) {
     const mzkApi = getMzkApi();
     const rcData = (await mzkApi.fetchRealCourse(cid)) as {
       realCourse?: {
-        lineName: string;
-        variantLoid?: number;
+        lineName?: string | null;
+        variantLoid?: number | null;
         stoppings?: Array<{
           stopPointName: string;
           stopPointSymbol: string;
           scheduledDepartureSec: number;
-          estimatedDeparture?: number;
+          estimatedDeparture?: number | null;
           orderInCourse: number;
         }>;
       };
     };
     const rc = rcData?.realCourse;
     if (rc?.stoppings?.length) {
+      const cachedMeta = mzkPoller.courseMetaMap.get(cid);
+      const lineName = rc.lineName || cachedMeta?.lineName || "";
+      const variantId = rc.variantLoid || explicitVariantId || cachedMeta?.variantId;
+      const direction =
+        cachedMeta?.direction ||
+        rc.stoppings[rc.stoppings.length - 1]?.stopPointName ||
+        "";
+
       const times = rc.stoppings.map((s, idx) => {
-        const h = Math.floor(s.scheduledDepartureSec / 3600);
+        const h = Math.floor(s.scheduledDepartureSec / 3600) % 24;
         const m = Math.floor((s.scheduledDepartureSec % 3600) / 60);
         const depTime = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
         let diff = 0;
         if (s.estimatedDeparture) {
-          const estDate = new Date(s.estimatedDeparture);
-          const estSecs =
-            estDate.getHours() * 3600 +
-            estDate.getMinutes() * 60 +
-            estDate.getSeconds();
-          diff = estSecs - s.scheduledDepartureSec;
+          const parts = new Intl.DateTimeFormat("en-GB", {
+            timeZone: "Europe/Warsaw",
+            hour12: false,
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+          }).formatToParts(new Date(s.estimatedDeparture));
+          const eh = Number(parts.find((p) => p.type === "hour")?.value ?? 0);
+          const em = Number(parts.find((p) => p.type === "minute")?.value ?? 0);
+          const es = Number(parts.find((p) => p.type === "second")?.value ?? 0);
+          const estSecs = eh * 3600 + em * 60 + es;
+          diff = estSecs - (s.scheduledDepartureSec % 86400);
+          if (diff < -43200) diff += 86400;
+          else if (diff > 43200) diff -= 86400;
         }
         return {
           stop_name: s.stopPointName,
@@ -142,16 +173,16 @@ export async function resolveMzkTrip(identifier: string): Promise<Record<string,
       });
 
       let shape: [number, number][] | null = null;
-      if (rc.variantLoid) {
-        shape = await getVariantShape(rc.variantLoid);
+      if (variantId) {
+        shape = await getVariantShape(variantId);
       }
 
       return {
         trip: {
           times,
-          direction: rc.stoppings[rc.stoppings.length - 1]?.stopPointName || "",
-          line: { name: rc.lineName },
-          lineName: rc.lineName,
+          direction,
+          line: { name: lineName },
+          lineName,
           operator: "MZK",
         },
         vehicle: null,

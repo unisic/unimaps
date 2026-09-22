@@ -1,6 +1,8 @@
 import { badRequest, isValidId, upstreamError } from "@/lib/api-helpers";
 import { pyTruthy } from "@/lib/kb-api";
+import { log } from "@/lib/logger";
 import { getFleetDetails } from "@/lib/mzk-fleet";
+import { nowSecs } from "@/lib/poller";
 import { getApi, getMzkApi, getMzkPoller, getPoller, startPoller } from "@/lib/poller-singleton";
 import { allowRequest, clientIp, tooManyRequests } from "@/lib/rate-limit";
 
@@ -52,70 +54,88 @@ export async function GET(
     }
 
     const fetchMzk = async (symbol: string) => {
-      const mzkApi = getMzkApi();
-      const rt = await mzkApi.fetchRealtime(symbol);
-      return (rt.departures || []).map((d) => {
-        const fleet = d.vehicleId
-          ? getFleetDetails(d.vehicleId, mzkPoller.staticVehicles.get(d.vehicleId))
-          : undefined;
+      try {
+        const mzkApi = getMzkApi();
+        const rt = await mzkApi.fetchRealtime(symbol);
+        return (rt.departures || []).map((d) => {
+          const fleet = d.vehicleId
+            ? getFleetDetails(d.vehicleId, mzkPoller.staticVehicles.get(d.vehicleId))
+            : undefined;
 
-        const date = new Date(d.scheduledDeparture);
-        const hh = String(date.getHours()).padStart(2, "0");
-        const mm = String(date.getMinutes()).padStart(2, "0");
-        const staticTime = `${hh}:${mm}`;
+          // Compute static departure in Europe/Warsaw
+          const sH = Math.floor(d.scheduledDepartureSec / 3600) % 24;
+          const sM = Math.floor((d.scheduledDepartureSec % 3600) / 60);
+          const staticTime = `${String(sH).padStart(2, "0")}:${String(sM).padStart(2, "0")}`;
 
-        let time = staticTime;
-        let timeDiff = 0;
-        let isEstimated = false;
-        if (d.realDeparture && !d.lack) {
-          timeDiff = Math.round((d.realDeparture - d.scheduledDeparture) / 1000);
-          const rDate = new Date(d.realDeparture);
-          time = `${String(rDate.getHours()).padStart(2, "0")}:${String(rDate.getMinutes()).padStart(2, "0")}`;
-          isEstimated = Math.abs(timeDiff) >= 10;
-        }
+          let time = staticTime;
+          let timeDiff = 0;
+          let isEstimated = false;
+          if (d.realDeparture && !d.lack) {
+            timeDiff = Math.round((d.realDeparture - d.scheduledDeparture) / 1000);
+            const realSecs = d.scheduledDepartureSec + timeDiff;
+            const rH = Math.floor(realSecs / 3600) % 24;
+            const rM = Math.floor((realSecs % 3600) / 60);
+            time = `${String(rH).padStart(2, "0")}:${String(rM).padStart(2, "0")}`;
+            isEstimated = true;
+          }
 
-        return {
-          trip_execution_id: `mzk:${d.courseId}:${d.vehicleId || ""}`,
-          trip_id: d.courseId,
-          static_time: staticTime,
-          time,
-          time_diff: timeDiff,
-          is_estimated: isEstimated,
-          direction: d.directionName,
-          line_name: d.lineName,
-          operator: "MZK" as const,
-          symbol: d.vehicleId,
-          side_number: d.vehicleId,
-          model: fleet?.model,
-          features: fleet?.features,
-        };
-      });
+          // Register in courseMetaMap so trip resolution has line/variant/direction
+          mzkPoller.courseMetaMap.set(d.courseId, {
+            lineName: d.lineName,
+            variantId: d.variantId,
+            direction: d.directionName,
+          });
+
+          return {
+            trip_execution_id: `mzk:${d.courseId}:${d.vehicleId || ""}`,
+            trip_id: d.variantId ? `mzk:${d.courseId}:${d.variantId}` : `mzk:${d.courseId}`,
+            static_time: staticTime,
+            time,
+            time_diff: timeDiff,
+            is_estimated: isEstimated,
+            direction: d.directionName,
+            line_name: d.lineName,
+            operator: "MZK" as const,
+            symbol: d.vehicleId,
+            side_number: d.vehicleId,
+            model: fleet?.model,
+            features: fleet?.features,
+          };
+        });
+      } catch (err) {
+        log.warn("mzk-departures", `Realtime fetch failed for symbol ${symbol}: ${err}`);
+        return [];
+      }
     };
 
     const fetchKb = async (kbDesig: string) => {
-      const data = await getApi().fetchDepartures(kbDesig);
-      if (pyTruthy(data) && typeof data === "object" && data !== null) {
-        const rec = data as {
-          rows?: Array<{
-            trip_execution_id?: string;
-            operator?: string;
-            time?: string;
-            static_time?: string;
-            [key: string]: unknown;
-          }>;
-        };
-        if (Array.isArray(rec.rows)) {
-          rec.rows.forEach((r) => {
-            r.operator = "KB";
-          });
-          const eids = rec.rows
-            .map((r) => r?.trip_execution_id)
-            .filter((eid): eid is string => Boolean(eid));
-          if (eids.length > 0) {
-            getPoller().addCandidates(eids);
+      try {
+        const data = await getApi().fetchDepartures(kbDesig);
+        if (pyTruthy(data) && typeof data === "object" && data !== null) {
+          const rec = data as {
+            rows?: Array<{
+              trip_execution_id?: string;
+              operator?: string;
+              time?: string;
+              static_time?: string;
+              [key: string]: unknown;
+            }>;
+          };
+          if (Array.isArray(rec.rows)) {
+            rec.rows.forEach((r) => {
+              r.operator = "KB";
+            });
+            const eids = rec.rows
+              .map((r) => r?.trip_execution_id)
+              .filter((eid): eid is string => Boolean(eid));
+            if (eids.length > 0) {
+              getPoller().addCandidates(eids);
+            }
+            return rec.rows;
           }
-          return rec.rows;
         }
+      } catch (err) {
+        log.warn("kb-departures", `Departures fetch failed for ${kbDesig}: ${err}`);
       }
       return [];
     };
@@ -127,12 +147,11 @@ export async function GET(
         const parts = t.split(":");
         const h = parseInt(parts[0], 10);
         const m = parseInt(parts[1], 10);
-        if (!isNaN(h) && !isNaN(m)) return h * 3600 + m * 60;
+        if (!isNaN(h) && !isNaN(m)) return (h % 24) * 3600 + m * 60;
       }
       const minMatch = t.match(/(\d+)\s*min/);
       if (minMatch) {
-        const now = new Date();
-        const curSec = now.getHours() * 3600 + now.getMinutes() * 60;
+        const curSec = nowSecs();
         return curSec + parseInt(minMatch[1], 10) * 60;
       }
       return 999999;
