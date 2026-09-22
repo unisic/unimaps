@@ -224,10 +224,15 @@ function TripView({
               {isMzkTrip ? "MZK Bielsko-Biała" : "Komunikacja Beskidzka"}
             </span>
             {currentVeh?.side_number && (
-              <span className="rounded-full bg-white/10 px-2 py-0.5 font-semibold text-text">
-                #{currentVeh.side_number}
-                {currentVeh.model ? ` · ${currentVeh.model}` : ""}
-              </span>
+              <a
+                href={`/brygady?tabor=${currentVeh.side_number}`}
+                title="Zobacz kartę brygady i historię kursów"
+                className="inline-flex items-center gap-1.5 rounded-full bg-white/10 px-2.5 py-0.5 font-semibold text-text hover:bg-white/20 transition-colors cursor-pointer border border-white/10"
+              >
+                <span>#{currentVeh.side_number}</span>
+                {currentVeh.model ? <span className="text-text-mute font-normal">· {currentVeh.model}</span> : null}
+                <span className="text-[10px] text-primary font-bold ml-0.5">&rarr; Karta brygady</span>
+              </a>
             )}
             {isLiveWithLoc && headerDelay != null && (
               <span className={`font-semibold tabular-nums ${delayClass(headerDelay)}`}>
@@ -235,38 +240,45 @@ function TripView({
               </span>
             )}
             {currentVeh?.features?.electric && (
-              <span className="rounded-full bg-emerald-500/20 px-1.5 py-0.5 font-medium text-emerald-400">
-                ⚡ Elektryczny
+              <span className="inline-flex items-center gap-1 rounded-md bg-emerald-500/10 px-2 py-0.5 font-medium text-emerald-300 border border-emerald-500/20 text-[10px]">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" /></svg>
+                100% EV
               </span>
             )}
             {currentVeh?.features?.hydrogen && (
-              <span className="rounded-full bg-cyan-500/20 px-1.5 py-0.5 font-medium text-cyan-400">
-                💧 Wodorowy
+              <span className="inline-flex items-center gap-1 rounded-md bg-cyan-500/10 px-2 py-0.5 font-medium text-cyan-300 border border-cyan-500/20 text-[10px]">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><circle cx="12" cy="12" r="3" fill="currentColor" /><path d="M12 2v6m0 8v6M2 12h6m8 0h6" /></svg>
+                H₂ Wodór
               </span>
             )}
             {currentVeh?.features?.hybrid && (
-              <span className="rounded-full bg-green-500/20 px-1.5 py-0.5 font-medium text-green-400">
-                🌿 Hybrydowy
+              <span className="inline-flex items-center gap-1 rounded-md bg-teal-500/10 px-2 py-0.5 font-medium text-teal-300 border border-teal-500/20 text-[10px]">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z" /></svg>
+                Hybryda
               </span>
             )}
             {currentVeh?.features?.airCondition && (
-              <span className="rounded-full bg-blue-500/20 px-1.5 py-0.5 font-medium text-blue-400">
-                ❄️ Klimatyzacja
+              <span className="inline-flex items-center gap-1 rounded-md bg-white/6 px-2 py-0.5 font-medium text-text-mute border border-hairline text-[10px]" title="Klimatyzacja">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><line x1="12" y1="2" x2="12" y2="22" /><line x1="2" y1="12" x2="22" y2="12" /><line x1="4.93" y1="4.93" x2="19.07" y2="19.07" /><line x1="4.93" y1="19.07" x2="19.07" y2="4.93" /></svg>
+                Klima
               </span>
             )}
             {currentVeh?.features?.lowFloor && (
-              <span className="rounded-full bg-sky-500/20 px-1.5 py-0.5 font-medium text-sky-400">
-                ♿ Niska podłoga
+              <span className="inline-flex items-center gap-1 rounded-md bg-white/6 px-2 py-0.5 font-medium text-text-mute border border-hairline text-[10px]" title="Niska podłoga">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><circle cx="9" cy="5" r="2" /><path d="M9 7v6l4 2 2 5M11 13h5" /><path d="M6 19a4 4 0 1 0 8 0" /></svg>
+                Niska podłoga
               </span>
             )}
             {currentVeh?.features?.longVehicle && (
-              <span className="rounded-full bg-purple-500/20 px-1.5 py-0.5 font-medium text-purple-400">
-                🚃 Przegubowy
+              <span className="inline-flex items-center gap-1 rounded-md bg-amber-500/10 px-2 py-0.5 font-medium text-amber-300 border border-amber-500/20 text-[10px]" title="Pojazd przegubowy">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><rect x="2" y="6" width="8" height="10" rx="1.5" /><rect x="14" y="6" width="8" height="10" rx="1.5" /><path d="M10 8l2 2-2 2 2 2" /></svg>
+                MEGA (18m)
               </span>
             )}
             {currentVeh?.features?.ticketMachine && (
-              <span className="rounded-full bg-amber-500/20 px-1.5 py-0.5 font-medium text-amber-400">
-                🎫 Biletomat
+              <span className="inline-flex items-center gap-1 rounded-md bg-white/6 px-2 py-0.5 font-medium text-text-mute border border-hairline text-[10px]" title="Biletomat na pokładzie">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z" /></svg>
+                Biletomat
               </span>
             )}
             {trip.note && (

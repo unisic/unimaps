@@ -83,9 +83,14 @@
 
 /* ---------- base ---------- */
 
-html, body {
-  height: 100%;
-  overscroll-behavior: none;
+html {
+  min-height: 100%;
+  scroll-behavior: smooth;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  min-height: 100%;
   -webkit-tap-highlight-color: transparent;
 }
 

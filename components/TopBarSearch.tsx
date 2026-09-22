@@ -245,7 +245,7 @@ function TopBarSearch({
   onOpenConnections,
   searchRef,
   onDropdownChange,
-  onShowToast,
+  onShowToast: _onShowToast,
 }: TopBarSearchProps) {
   const { data: vehData } = useVehicles();
   const { data: linesData } = useLines();
@@ -380,6 +380,15 @@ function TopBarSearch({
         keywords: "wyczysc zamknij widok reset",
         icon: <ClearGlyph />,
         run: onClearView,
+      },
+      {
+        id: "brigades",
+        label: "Brygady i rozkłady taboru",
+        keywords: "brygady brygada tabor woz wozy flota pojazdy kursy gdzie pojedzie historia",
+        icon: <BusGlyph />,
+        run: () => {
+          window.location.href = "/brygady";
+        },
       },
     ];
     if (lineFilter && lineFilter.size > 0) {
@@ -571,11 +580,7 @@ function TopBarSearch({
         onPickVehicle(it.v);
         setIsFocused(false);
       } else if (it.kind === "fleet") {
-        if (it.liveVeh) {
-          onPickVehicle(it.liveVeh);
-        } else {
-          onShowToast?.(`Pojazd #${it.f.sideNumber} (${it.f.model}) znajduje się obecnie w zajezdni.`);
-        }
+        window.location.href = `/brygady?tabor=${it.f.sideNumber}`;
         setIsFocused(false);
       } else if (it.kind === "line") {
         onToggleLine(it.l.name);
@@ -585,7 +590,7 @@ function TopBarSearch({
         setIsFocused(false);
       }
     },
-    [onPickStop, onPickVehicle, onToggleLine, onShowToast],
+    [onPickStop, onPickVehicle, onToggleLine],
   );
 
   // Keyboard navigation on input

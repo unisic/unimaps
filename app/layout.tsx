@@ -47,14 +47,14 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="pl" className="h-full min-h-screen h-dvh overscroll-none select-none">
+    <html lang="pl" className="min-h-full">
       <head>
         <link rel="preconnect" href="https://tiles.openfreemap.org" crossOrigin="" />
         <link rel="dns-prefetch" href="https://tiles.openfreemap.org" />
         <link rel="preconnect" href="https://tile.openstreetmap.org" crossOrigin="" />
         <link rel="dns-prefetch" href="https://tile.openstreetmap.org" />
       </head>
-      <body className="h-full min-h-screen h-dvh overflow-hidden bg-bg font-sans text-text antialiased overscroll-none">
+      <body className="min-h-full bg-bg font-sans text-text antialiased">
         {children}
         <PwaRegister />
       </body>

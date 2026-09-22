@@ -18,6 +18,7 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test \"test/**/*.test.ts\"",
+    "test:fleet": "tsx scripts/test-live-fleet.ts",
     "build:gtfs": "tsx scripts/build-gtfs.ts",
     "benchmark": "tsx scripts/benchmark-search.ts",
     "benchmark:site": "tsx scripts/benchmark-site.ts"
