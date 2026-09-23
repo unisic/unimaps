@@ -126,6 +126,14 @@ function MapIcon() {
   );
 }
 
+function ArrowUpIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="m18 15-6-6-6 6" />
+    </svg>
+  );
+}
+
 /* Vehicle Technical Feature Glyphs */
 
 function HydrogenGlyph() {
@@ -325,6 +333,7 @@ function BrigadesAppContent() {
   const [searchQuery, setSearchQuery] = useState("");
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [clockStr, setClockStr] = useState<string>("");
+  const [showScrollTop, setShowScrollTop] = useState(false);
 
   useEffect(() => {
     const update = () => {
@@ -341,6 +350,18 @@ function BrigadesAppContent() {
     const id = setInterval(update, 1000);
     return () => clearInterval(id);
   }, []);
+
+  useEffect(() => {
+    const onScroll = () => {
+      setShowScrollTop(window.scrollY > 280);
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+
+  const scrollToTop = () => {
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
 
   const deferredQuery = useDeferredValue(searchQuery);
 
@@ -372,22 +393,40 @@ function BrigadesAppContent() {
   const handleSelectVehicle = (sideNumber: string) => {
     const params = new URLSearchParams(searchParams.toString());
     params.set("tabor", sideNumber);
-    router.push(`/brygady?${params.toString()}`);
+    router.push(`/brygady?${params.toString()}`, { scroll: false });
   };
 
   const handleCloseVehicle = () => {
-    const params = new URLSearchParams(searchParams.toString());
-    params.delete("tabor");
-    const qs = params.toString();
-    router.push(`/brygady${qs ? `?${qs}` : ""}`);
+    if (typeof window !== "undefined" && window.history.length > 1) {
+      router.back();
+    } else {
+      const params = new URLSearchParams(searchParams.toString());
+      params.delete("tabor");
+      const qs = params.toString();
+      router.replace(`/brygady${qs ? `?${qs}` : ""}`, { scroll: false });
+    }
   };
 
-  const copyShareLink = (sideNumber: string) => {
-    if (typeof window !== "undefined") {
-      const url = `${window.location.origin}/brygady?tabor=${sideNumber}`;
-      navigator.clipboard.writeText(url).then(() => {
-        showToast(`Skopiowano bezpośredni link do wozu #${sideNumber}!`);
-      });
+  const handleShareVehicle = async (sideNumber: string, model?: string) => {
+    if (typeof window === "undefined") return;
+    const url = `${window.location.origin}/brygady?tabor=${sideNumber}`;
+    const title = `Pojazd #${sideNumber}${model ? ` (${model})` : ""}`;
+    const text = `Rozkład brygady, karta drogowa i lokalizacja wozu #${sideNumber} (MZK Bielsko-Biała)`;
+
+    if (typeof navigator !== "undefined" && typeof navigator.share === "function") {
+      try {
+        await navigator.share({ title, text, url });
+        return;
+      } catch (err: unknown) {
+        if ((err as Error)?.name === "AbortError") return;
+      }
+    }
+
+    try {
+      await navigator.clipboard.writeText(url);
+      showToast(`Skopiowano bezpośredni link do wozu #${sideNumber}!`);
+    } catch {
+      showToast(`Link: ${url}`);
     }
   };
 
@@ -395,31 +434,40 @@ function BrigadesAppContent() {
   const vehicles = fleetData?.vehicles ?? [];
 
   return (
-    <div className="min-h-dvh w-full bg-bg text-text flex flex-col selection:bg-brand/30 pb-16">
-      {/* Toast Alert */}
+    <div className="min-h-dvh w-full bg-bg text-text flex flex-col selection:bg-brand/30 pb-[calc(env(safe-area-inset-bottom,0px)+5rem)]">
+      {/* Toast Alert with iOS Safe Area support */}
       {toastMessage && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 rounded-xl bg-surface-3 px-4 py-2.5 text-sm font-semibold text-text shadow-2xl border border-white/15 animate-drop flex items-center gap-2">
+        <div className="fixed bottom-[calc(env(safe-area-inset-bottom,0px)+1.5rem)] left-1/2 -translate-x-1/2 z-50 rounded-xl bg-surface-3 px-4 py-3 text-sm font-semibold text-text shadow-2xl border border-white/15 animate-drop flex items-center gap-2.5 max-w-[calc(100vw-32px)]">
           <span className="text-emerald-400">
             <CheckIcon className="w-4 h-4" />
           </span>
-          {toastMessage}
+          <span className="truncate">{toastMessage}</span>
         </div>
       )}
 
-      {/* Top Navbar */}
-      <header className="sticky top-0 z-30 border-b border-hairline bg-surface/95 backdrop-blur-md px-4 py-3 sm:px-6">
-        <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
-          <div className="flex items-center gap-3 min-w-0">
+      {/* Top Navbar with Safe-Area-Inset-Top for iOS Notch & Dynamic Island */}
+      <header className="sticky top-0 z-30 border-b border-hairline bg-surface/95 backdrop-blur-md px-4 pt-[calc(env(safe-area-inset-top,0px)+0.75rem)] pb-3 sm:px-6">
+        <div className="max-w-7xl mx-auto flex items-center justify-between gap-3 sm:gap-4">
+          <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
             <Link
               href="/"
-              className="inline-flex items-center gap-1.5 rounded-lg bg-white/6 px-3 py-1.5 text-xs font-semibold text-text hover:bg-white/10 active:scale-95 transition-all shrink-0 border border-hairline"
+              className="inline-flex items-center gap-1.5 rounded-xl bg-white/6 px-3.5 py-2 min-h-[42px] text-xs font-semibold text-text hover:bg-white/10 active:scale-95 transition-all shrink-0 border border-hairline shadow-sm"
               title="Powrót do mapy na żywo"
             >
               <BackArrowIcon />
               <span>Mapa na żywo</span>
             </Link>
             <div className="h-4 w-px bg-white/10 shrink-0" />
-            <div className="min-w-0">
+            <div
+              className="min-w-0 cursor-pointer select-none"
+              onClick={scrollToTop}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") scrollToTop();
+              }}
+              title="Dotknij, aby przewinąć do góry"
+            >
               <div className="flex items-center gap-2">
                 <h1 className="text-base sm:text-lg font-bold tracking-tight truncate text-text">
                   Brygady i Tabor
@@ -443,7 +491,7 @@ function BrigadesAppContent() {
               </span>
             )}
             <div
-              className="rounded-full bg-surface-2 px-3 py-1 text-xs font-mono text-text-mute border border-hairline tabular-nums"
+              className="rounded-full bg-surface-2 px-2.5 py-1 text-xs font-mono text-text-mute border border-hairline tabular-nums"
               title="Aktualny czas (Europe/Warsaw)"
             >
               {clockStr || "—"}
@@ -552,13 +600,13 @@ function BrigadesAppContent() {
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Szukaj po numerze (#256), linii (50), modelu (Solaris), kierunku…"
-                className="w-full rounded-xl bg-surface-2 pl-9 pr-9 py-2.5 text-sm text-text placeholder-text-faint border border-hairline focus:border-brand focus:outline-none transition-colors"
+                className="w-full rounded-xl bg-surface-2 pl-10 pr-11 py-2.5 min-h-[44px] text-sm text-text placeholder-text-faint border border-hairline focus:border-brand focus:outline-none transition-colors"
               />
               {searchQuery && (
                 <button
                   type="button"
                   onClick={() => setSearchQuery("")}
-                  className="absolute inset-y-0 right-3 flex items-center text-text-mute hover:text-text"
+                  className="absolute inset-y-0 right-0 w-11 flex items-center justify-center text-text-mute hover:text-text active:scale-90 transition-transform"
                   aria-label="Wyczyść wyszukiwanie"
                 >
                   <CloseIcon />
@@ -577,7 +625,7 @@ function BrigadesAppContent() {
                   key={t.id}
                   type="button"
                   onClick={() => setStatusFilter(t.id as "all" | "active" | "depot")}
-                  className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-all ${
+                  className={`rounded-lg px-3.5 py-2 min-h-[38px] text-xs font-semibold transition-all select-none active:scale-95 ${
                     statusFilter === t.id
                       ? "bg-brand text-on-brand shadow-sm"
                       : "text-text-mute hover:text-text hover:bg-white/5"
@@ -603,7 +651,7 @@ function BrigadesAppContent() {
                 key={p.id}
                 type="button"
                 onClick={() => setPropulsionFilter(p.id)}
-                className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 transition-all ${
+                className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 min-h-[34px] transition-all select-none active:scale-95 ${
                   propulsionFilter === p.id
                     ? "bg-white/15 text-text font-bold border border-white/20 shadow-sm"
                     : "bg-surface-2 text-text-mute hover:text-text hover:bg-white/5 border border-hairline"
@@ -621,7 +669,7 @@ function BrigadesAppContent() {
                 <button
                   type="button"
                   onClick={() => setLineFilter("all")}
-                  className={`rounded-md px-2 py-0.5 text-xs font-bold transition-all shrink-0 ${
+                  className={`rounded-md px-2.5 py-1 min-h-[32px] text-xs font-bold transition-all shrink-0 select-none active:scale-95 ${
                     lineFilter === "all" ? "bg-blue-600 text-white" : "bg-surface-2 text-text-mute hover:text-text border border-hairline"
                   }`}
                 >
@@ -632,7 +680,7 @@ function BrigadesAppContent() {
                     key={ln}
                     type="button"
                     onClick={() => setLineFilter(ln === lineFilter ? "all" : ln)}
-                    className={`rounded-md px-2 py-0.5 text-xs font-bold transition-all shrink-0 ${
+                    className={`rounded-md px-2.5 py-1 min-h-[32px] text-xs font-bold transition-all shrink-0 select-none active:scale-95 ${
                       lineFilter === ln ? "bg-blue-600 text-white shadow-sm" : "bg-surface-2 text-text-mute hover:text-text border border-hairline"
                     }`}
                   >
@@ -664,7 +712,7 @@ function BrigadesAppContent() {
                   setLineFilter("all");
                   setSearchQuery("");
                 }}
-                className="mt-3.5 rounded-xl bg-brand px-4 py-2 text-xs font-bold text-on-brand hover:bg-brand-hi transition-colors"
+                className="mt-3.5 rounded-xl bg-brand px-4 py-2 text-xs font-bold text-on-brand hover:bg-brand-hi active:scale-95 transition-all shadow-sm"
               >
                 Wyczyść wszystkie filtry
               </button>
@@ -683,13 +731,26 @@ function BrigadesAppContent() {
         </section>
       </main>
 
+      {/* Floating Scroll-to-Top Button for Mobile & Desktop */}
+      {showScrollTop && (
+        <button
+          type="button"
+          onClick={scrollToTop}
+          aria-label="Przewiń na górę strony"
+          title="Przewiń do góry"
+          className="fixed bottom-[calc(env(safe-area-inset-bottom,0px)+1.5rem)] right-4 sm:right-6 z-40 rounded-full bg-surface-3/95 backdrop-blur-md p-3 text-text shadow-2xl border border-white/20 hover:bg-surface-3 active:scale-90 transition-all flex items-center justify-center animate-fade"
+        >
+          <ArrowUpIcon />
+        </button>
+      )}
+
       {/* Vehicle Brigade Detail Modal */}
       {selectedSideNumber && (
         <VehicleDetailModal
           sideNumber={selectedSideNumber}
           data={selectedVehicleData?.vehicle}
           onClose={handleCloseVehicle}
-          onShare={() => copyShareLink(selectedSideNumber)}
+          onShare={() => handleShareVehicle(selectedSideNumber, selectedVehicleData?.vehicle?.model)}
         />
       )}
     </div>
@@ -802,6 +863,12 @@ const VehicleCard = memo(function VehicleCard({
               <p className="text-[11px] text-text-mute">
                 Zrealizowane kursy dzisiaj:{" "}
                 <strong className="text-text font-semibold">{vehicle.coursesCountToday}</strong>
+                {vehicle.cancelledCoursesToday && vehicle.cancelledCoursesToday > 0 ? (
+                  <span className="text-rose-400 font-semibold ml-1.5 inline-flex items-center gap-1">
+                    <span className="h-1.5 w-1.5 rounded-full bg-rose-400 inline-block" />
+                    {vehicle.cancelledCoursesToday} {vehicle.cancelledCoursesToday === 1 ? "odwołany" : "odwołane"}
+                  </span>
+                ) : null}
               </p>
             </div>
           )}
@@ -810,7 +877,12 @@ const VehicleCard = memo(function VehicleCard({
 
       {/* Footer trigger */}
       <div className="mt-4 pt-2.5 border-t border-hairline/40 flex items-center justify-between text-xs text-text-mute">
-        <span>Kursy dzisiaj: <strong className="text-text font-semibold">{vehicle.coursesCountToday}</strong></span>
+        <span>
+          Kursy dzisiaj: <strong className="text-text font-semibold">{vehicle.coursesCountToday}</strong>
+          {vehicle.cancelledCoursesToday && vehicle.cancelledCoursesToday > 0 ? (
+            <span className="text-rose-400 font-bold ml-1">({vehicle.cancelledCoursesToday} odwoł.)</span>
+          ) : null}
+        </span>
         <span className="text-primary hover:underline font-semibold flex items-center gap-1">
           Karta drogowa &rarr;
         </span>
@@ -836,10 +908,11 @@ function VehicleDetailModal({
 }) {
   const [expandedCourseId, setExpandedCourseId] = useState<string | null>(null);
 
+  const todayCourses = data?.todayCourses;
   // Sort completed courses from newest to oldest
   const sortedTodayCourses = useMemo(() => {
-    if (!data?.todayCourses) return [];
-    return [...data.todayCourses].sort((a, b) => {
+    if (!todayCourses) return [];
+    return [...todayCourses].sort((a, b) => {
       const startA = a.startSecs ?? 0;
       const startB = b.startSecs ?? 0;
       if (startB !== startA) return startB - startA;
@@ -848,7 +921,7 @@ function VehicleDetailModal({
       if (endB !== endA) return endB - endA;
       return (b.startTime || "").localeCompare(a.startTime || "");
     });
-  }, [data?.todayCourses]);
+  }, [todayCourses]);
 
   // Close on Escape
   useEffect(() => {
@@ -865,14 +938,17 @@ function VehicleDetailModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/75 backdrop-blur-sm animate-fade"
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-6 bg-black/80 backdrop-blur-sm animate-fade"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="surface rounded-3xl w-full max-w-3xl max-h-[90vh] flex flex-col shadow-2xl border border-white/10 overflow-hidden animate-rise">
+      <div className="surface rounded-t-3xl sm:rounded-3xl w-full max-w-3xl max-h-[88dvh] sm:max-h-[90vh] flex flex-col shadow-2xl border border-white/10 overflow-hidden animate-rise">
+        {/* Mobile handle indicator */}
+        <div className="w-12 h-1.5 bg-white/20 rounded-full mx-auto my-2.5 sm:hidden shrink-0" aria-hidden />
+
         {/* Modal Header */}
-        <header className="p-4 sm:p-6 border-b border-hairline bg-surface-2 flex items-start justify-between gap-4 shrink-0">
+        <header className="px-4 py-3 sm:p-6 border-b border-hairline bg-surface-2 flex items-start justify-between gap-4 shrink-0">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <span className="font-mono text-2xl sm:text-3xl font-bold text-text tabular-nums">
@@ -908,16 +984,16 @@ function VehicleDetailModal({
             <button
               type="button"
               onClick={onShare}
-              title="Kopiuj link do wozu"
-              className="p-2 rounded-xl bg-white/6 hover:bg-white/10 text-text transition-colors border border-hairline"
-              aria-label="Kopiuj link"
+              title="Udostępnij kartę wozu"
+              className="min-w-[44px] min-h-[44px] p-2.5 rounded-xl bg-white/6 hover:bg-white/10 active:scale-95 text-text transition-all border border-hairline flex items-center justify-center"
+              aria-label="Udostępnij wóz"
             >
               <ShareIcon />
             </button>
             <button
               type="button"
               onClick={onClose}
-              className="p-2 rounded-xl bg-white/6 hover:bg-white/10 text-text transition-colors border border-hairline"
+              className="min-w-[44px] min-h-[44px] p-2.5 rounded-xl bg-white/6 hover:bg-white/10 active:scale-95 text-text transition-all border border-hairline flex items-center justify-center"
               aria-label="Zamknij"
             >
               <CloseIcon />
@@ -925,8 +1001,8 @@ function VehicleDetailModal({
           </div>
         </header>
 
-        {/* Modal Scrollable Body with custom scrollbar */}
-        <div className="flex-1 overflow-y-auto kb-scroll p-4 sm:p-6 space-y-6">
+        {/* Modal Scrollable Body with custom scrollbar and safe area bottom padding */}
+        <div className="flex-1 overflow-y-auto kb-scroll p-4 sm:p-6 space-y-6 pb-[calc(env(safe-area-inset-bottom,0px)+2rem)]">
           {!data ? (
             <div className="py-12 text-center text-text-mute">
               <span className="inline-block h-6 w-6 border-2 border-text-faint border-t-text rounded-full animate-spin mb-2" />
@@ -1054,6 +1130,15 @@ function VehicleDetailModal({
                     <p className="text-text-faint">
                       {data.lastKnownLocation?.name ?? "Brak aktualnego kursu."}
                     </p>
+                    {data.todayCourses[0]?.status === "cancelled" && (
+                      <div className="rounded-lg bg-rose-500/10 p-2.5 border border-rose-500/25 text-rose-300 space-y-0.5">
+                        <span className="font-bold flex items-center gap-1.5 text-xs text-rose-200">
+                          <span className="h-2 w-2 rounded-full bg-rose-400 shrink-0" />
+                          Ostatni kurs został odwołany / przerwany
+                        </span>
+                        <p className="text-[11px] text-rose-200/90">{data.todayCourses[0].cancelledReason}</p>
+                      </div>
+                    )}
                     <p className="text-xs text-text-mute">
                       Przewidywane ponowne wyjście na linię: w kolejnym planie brygadowym.
                     </p>
@@ -1073,7 +1158,11 @@ function VehicleDetailModal({
                     </span>
                   </div>
                   <span className="text-xs text-text-faint">
-                    Przebieg: <strong className="text-text">{data.stats.estimatedKmToday} km</strong> &middot; Punktualność: <strong className="text-text">{data.stats.punctualityPct}%</strong>
+                    Przebieg: <strong className="text-text">{data.stats.estimatedKmToday} km</strong>
+                    {data.stats.cancelledCoursesToday && data.stats.cancelledCoursesToday > 0 ? (
+                      <> &middot; Odwołane: <strong className="text-rose-400 font-bold">{data.stats.cancelledCoursesToday}</strong></>
+                    ) : null}
+                    {" "}&middot; Punktualność: <strong className="text-text">{data.stats.punctualityPct}%</strong>
                   </span>
                 </div>
 
@@ -1159,11 +1248,15 @@ function CourseItemRow({
   expanded?: boolean;
   onToggle: () => void;
 }) {
+  const isCancelled = !isCurrent && course.status === "cancelled";
+
   return (
     <div
       className={`surface rounded-xl border transition-all overflow-hidden ${
         isCurrent
           ? "border-blue-500/50 bg-blue-950/20 shadow-md"
+          : isCancelled
+          ? "border-rose-500/40 bg-rose-950/15 hover:border-rose-500/60"
           : "border-hairline bg-surface hover:border-white/15"
       }`}
     >
@@ -1177,22 +1270,33 @@ function CourseItemRow({
             onToggle();
           }
         }}
-        className="p-3 sm:p-4 flex items-center justify-between gap-3 cursor-pointer select-none"
+        className="p-3 sm:p-4 flex items-center justify-between gap-3 cursor-pointer select-none active:bg-white/[0.04] transition-colors"
       >
         <div className="flex items-center gap-3 min-w-0">
           <span className="font-mono text-xs sm:text-sm font-bold text-text tabular-nums shrink-0">
             {course.startTime} &ndash; {course.endTime}
           </span>
-          <span className="grid h-6 min-w-6 px-1.5 place-items-center rounded bg-blue-600 text-xs font-bold text-white shrink-0">
+          <span
+            className={`grid h-6 min-w-6 px-1.5 place-items-center rounded text-xs font-bold text-white shrink-0 ${
+              isCancelled ? "bg-rose-700" : "bg-blue-600"
+            }`}
+          >
             {course.lineName}
           </span>
           <div className="min-w-0">
             <p className="text-xs sm:text-sm font-semibold text-text truncate">
               {course.firstStopName} &rarr; {course.lastStopName}
             </p>
-            <p className="text-[11px] text-text-mute truncate">
-              {course.stopsCount} przystanków &middot; {Math.round(Math.max(15, (course.endSecs - course.startSecs) / 60))} min
-            </p>
+            {isCancelled ? (
+              <p className="text-[11px] text-rose-400 font-semibold truncate flex items-center gap-1.5">
+                <span className="inline-block h-1.5 w-1.5 rounded-full bg-rose-400 shrink-0" />
+                <span>{course.cancelledReason || "Kurs odwołany (awaria/przerwany)"}</span>
+              </p>
+            ) : (
+              <p className="text-[11px] text-text-mute truncate">
+                {course.stopsCount} przystanków &middot; {Math.round(Math.max(15, (course.endSecs - course.startSecs) / 60))} min
+              </p>
+            )}
           </div>
         </div>
 
@@ -1202,13 +1306,19 @@ function CourseItemRow({
               <span className="h-1.5 w-1.5 rounded-full bg-good animate-pulse-dot" />
               W TRAKCIE
             </span>
+          ) : isCancelled ? (
+            <span className="inline-flex items-center gap-1 rounded-full bg-rose-500/20 px-2.5 py-0.5 text-[10px] font-bold text-rose-300 border border-rose-500/30">
+              <span className="h-1.5 w-1.5 rounded-full bg-rose-400" />
+              ODWOŁANY
+            </span>
           ) : (
             <span className="rounded-full bg-white/6 px-2 py-0.5 text-[10px] font-medium text-text-faint border border-hairline">
               Zakończony
             </span>
           )}
           <DelayBadge delaySec={course.delaySec} />
-          <div className="text-text-mute hover:text-text p-1">
+          <div className="text-text-mute hover:text-text p-1 flex items-center gap-1">
+            <span className="text-[10px] text-text-faint hidden sm:inline">{expanded ? "Zwiń" : "Trasa"}</span>
             <ChevronDownIcon open={expanded} />
           </div>
         </div>
@@ -1217,20 +1327,34 @@ function CourseItemRow({
       {/* Expandable stop-by-stop schedule table */}
       {expanded && course.stops && course.stops.length > 0 && (
         <div className="p-3 sm:p-4 bg-surface-2/60 border-t border-hairline space-y-1.5 animate-fade">
-          <p className="text-[11px] font-bold uppercase tracking-wider text-text-faint mb-2">
-            Przebieg trasy (przystanek po przystanku):
-          </p>
+          <div className="flex flex-wrap items-center justify-between gap-1 mb-2">
+            <p className="text-[11px] font-bold uppercase tracking-wider text-text-faint">
+              Przebieg trasy (przystanek po przystanku):
+            </p>
+            {isCancelled && (
+              <span className="text-[10px] font-semibold text-rose-400 bg-rose-500/10 px-2 py-0.5 rounded border border-rose-500/20">
+                Kurs przerwany &mdash; nieobsłużone przystanki oznaczone poniżej
+              </span>
+            )}
+          </div>
           <div className="max-h-60 overflow-y-auto kb-scroll pr-1 space-y-1 text-xs">
             {course.stops.map((st, i) => {
-              const isCourseDone = !isCurrent || course.status === "completed";
+              const isCourseDone = !isCurrent && course.status === "completed";
               const isPassed = isCourseDone || st.status === "passed";
-              const isCur = !isCourseDone && st.status === "current";
+              const isCur = isCurrent ? st.status === "current" : false;
+              const isBreakdownStop = isCancelled && st.status === "current";
+              const isSkipped = isCancelled && st.status === "upcoming";
+
               return (
                 <div
                   key={i}
                   className={`flex items-center justify-between py-1.5 px-2.5 rounded-lg ${
                     isCur
                       ? "bg-blue-600/20 font-bold text-white border border-blue-500/30"
+                      : isBreakdownStop
+                      ? "bg-rose-500/20 font-bold text-rose-200 border border-rose-500/40"
+                      : isSkipped
+                      ? "text-text-faint opacity-55 line-through decoration-rose-500/40"
                       : isPassed
                       ? "text-text-mute"
                       : "text-text"
@@ -1239,15 +1363,30 @@ function CourseItemRow({
                   <div className="flex items-center gap-2 min-w-0">
                     <span className="font-mono text-[11px] text-text-faint w-5 text-right">{i + 1}.</span>
                     <span className="truncate">{st.name}</span>
+                    {isBreakdownStop && (
+                      <span className="rounded bg-rose-500/30 px-1.5 py-0.5 text-[9px] font-bold text-rose-300 uppercase shrink-0 border border-rose-500/40">
+                        Ostatni przystanek (awaria)
+                      </span>
+                    )}
                   </div>
                   <div className="flex items-center gap-3 shrink-0 font-mono text-[11px] tabular-nums">
-                    <span className="text-text-mute">{st.scheduledTime}</span>
-                    {st.plannedTime && st.plannedTime !== st.scheduledTime && (
+                    <span className={isSkipped ? "text-text-faint" : "text-text-mute"}>
+                      {st.scheduledTime}
+                    </span>
+                    {st.plannedTime && st.plannedTime !== st.scheduledTime && !isSkipped && (
                       <span className="text-amber-400 font-semibold">{st.plannedTime}</span>
                     )}
                     {isPassed && <CheckIcon className="w-3.5 h-3.5 text-good" />}
-                    {isCur && (
-                      <span className="h-2 w-2 rounded-full bg-blue-400 animate-pulse-dot" />
+                    {isCur && <span className="h-2 w-2 rounded-full bg-blue-400 animate-pulse-dot" />}
+                    {isBreakdownStop && (
+                      <span className="text-rose-400 font-bold text-[10px]">
+                        +{Math.round(course.delaySec / 60)} min
+                      </span>
+                    )}
+                    {isSkipped && (
+                      <span className="text-rose-400/80 text-[10px] font-semibold no-underline">
+                        Odwołany
+                      </span>
                     )}
                   </div>
                 </div>

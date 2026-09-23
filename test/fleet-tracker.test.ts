@@ -401,5 +401,144 @@ describe("fleet-tracker & brigades", () => {
       );
     }
   });
+
+  it("detects broken down vehicle with 50 minutes delay disappearing from GPS and marks course as cancelled", () => {
+    const tracker = new FleetTracker();
+
+    // Vehicle 230 was standing at stop index 1 with 50 min (3000 s) delay
+    tracker.updateFromRunningVehicles([
+      {
+        vehicleId: "230",
+        lineName: "7",
+        courseLoid: 999992,
+        direction: "Zajezdnia MZK",
+        delaySec: 3000, // 50 min delay
+        latitude: 49.79,
+        longitude: 19.04,
+        orderInCourse: 1,
+        stopPoints: [
+          { symbol: "31", name: "Szyndzielnia", orderNo: 0, distance: 0, scheduledDeparture: 1790080000000, plannedDeparture: 1790083000000 },
+          { symbol: "22", name: "Armii Krajowej Karbowa", orderNo: 1, distance: 739, scheduledDeparture: 1790080100000, plannedDeparture: 1790083100000 },
+          { symbol: "44", name: "Boboli Szpital", orderNo: 2, distance: 1500, scheduledDeparture: 1790080200000, plannedDeparture: 1790083200000 },
+          { symbol: "446", name: "Zajezdnia MZK", orderNo: 3, distance: 2300, scheduledDeparture: 1790080300000, plannedDeparture: 1790083300000 },
+        ],
+      },
+    ]);
+
+    let veh = tracker.getVehicleDetail("230")!;
+    const initialCompleted = veh.stats.completedCoursesToday;
+    const initialCancelled = veh.stats.cancelledCoursesToday || 0;
+    assert(veh.currentCourse);
+    assert.equal(veh.currentCourse.delaySec, 3000);
+    assert.equal(veh.currentCourse.currentStopName, "Armii Krajowej Karbowa");
+
+    // Bus disappears from GPS (e.g. broke down, towed, or turned off mid-route)
+    tracker.updateFromRunningVehicles([]);
+
+    veh = tracker.getVehicleDetail("230")!;
+    assert.equal(veh.status, "depot");
+    assert.equal(veh.currentCourse, null);
+
+    const cancelled = veh.todayCourses.find((c) => c.courseLoid === 999992);
+    assert(cancelled, "Cancelled course must be recorded in todayCourses");
+    assert.equal(cancelled.status, "cancelled");
+    assert.equal(cancelled.cancelledAtStopName, "Armii Krajowej Karbowa");
+    assert(
+      cancelled.cancelledReason?.includes("50 min") && cancelled.cancelledReason?.includes("Armii Krajowej Karbowa"),
+      `Expected cancellation reason to describe 50 min delay and stop, got: ${cancelled.cancelledReason}`,
+    );
+
+    // Verify stop statuses: stop 0 was passed, stop 1 was breakdown stop (current), stops 2 and 3 were unserved (upcoming)
+    assert(cancelled.stops && cancelled.stops.length === 4);
+    assert.equal(cancelled.stops[0].status, "passed");
+    assert.equal(cancelled.stops[1].status, "current");
+    assert.equal(cancelled.stops[2].status, "upcoming");
+    assert.equal(cancelled.stops[3].status, "upcoming");
+
+    // Verify vehicle stats & last known location
+    assert.equal(veh.stats.cancelledCoursesToday, initialCancelled + 1);
+    assert.equal(veh.stats.completedCoursesToday, initialCompleted);
+    assert(
+      veh.lastKnownLocation?.name.includes("Utrata sygnału GPS / awaria"),
+      `Expected breakdown description in lastKnownLocation, got: ${veh.lastKnownLocation?.name}`,
+    );
+
+    // Verify summary reflects cancelled course
+    const summary = tracker.getFleetSummary({ query: "#230" });
+    assert.equal(summary.length, 1);
+    assert.equal(summary[0].cancelledCoursesToday, initialCancelled + 1);
+  });
+
+  it("marks course as completed if vehicle reaches terminus even with large delay", () => {
+    const tracker = new FleetTracker();
+
+    // Vehicle 230 reached terminus (stop index 3 of 4) despite 50 min delay
+    tracker.updateFromRunningVehicles([
+      {
+        vehicleId: "230",
+        lineName: "7",
+        courseLoid: 999993,
+        direction: "Zajezdnia MZK",
+        delaySec: 3000,
+        latitude: 49.79,
+        longitude: 19.04,
+        orderInCourse: 3,
+        stopPoints: [
+          { symbol: "31", name: "Szyndzielnia", orderNo: 0, distance: 0, scheduledDeparture: 1790080000000, plannedDeparture: 1790083000000 },
+          { symbol: "22", name: "Armii Krajowej Karbowa", orderNo: 1, distance: 739, scheduledDeparture: 1790080100000, plannedDeparture: 1790083100000 },
+          { symbol: "44", name: "Boboli Szpital", orderNo: 2, distance: 1500, scheduledDeparture: 1790080200000, plannedDeparture: 1790083200000 },
+          { symbol: "446", name: "Zajezdnia MZK", orderNo: 3, distance: 2300, scheduledDeparture: 1790080300000, plannedDeparture: 1790083300000 },
+        ],
+      },
+    ]);
+
+    tracker.updateFromRunningVehicles([]);
+
+    const veh = tracker.getVehicleDetail("230")!;
+    const completed = veh.todayCourses.find((c) => c.courseLoid === 999993);
+    assert(completed);
+    assert.equal(completed.status, "completed");
+    assert(completed.stops?.every((s) => s.status === "passed"));
+  });
+
+  it("recovers cleanly without duplicates when GPS reconnects after temporary dropout", () => {
+    const tracker = new FleetTracker();
+
+    const courseData = {
+      vehicleId: "230",
+      lineName: "7",
+      courseLoid: 999994,
+      direction: "Zajezdnia MZK",
+      delaySec: 3000,
+      latitude: 49.79,
+      longitude: 19.04,
+      orderInCourse: 1,
+      stopPoints: [
+        { symbol: "31", name: "Szyndzielnia", orderNo: 0, distance: 0, scheduledDeparture: 1790080000000, plannedDeparture: 1790083000000 },
+        { symbol: "22", name: "Armii Krajowej Karbowa", orderNo: 1, distance: 739, scheduledDeparture: 1790080100000, plannedDeparture: 1790083100000 },
+        { symbol: "44", name: "Boboli Szpital", orderNo: 2, distance: 1500, scheduledDeparture: 1790080200000, plannedDeparture: 1790083200000 },
+        { symbol: "446", name: "Zajezdnia MZK", orderNo: 3, distance: 2300, scheduledDeparture: 1790080300000, plannedDeparture: 1790083300000 },
+      ],
+    };
+
+    // 1. Vehicle is running
+    tracker.updateFromRunningVehicles([courseData]);
+
+    // 2. GPS drops out -> moved to todayCourses
+    tracker.updateFromRunningVehicles([]);
+    let veh = tracker.getVehicleDetail("230")!;
+    assert.equal(veh.status, "depot");
+    assert(veh.todayCourses.some((c) => c.courseLoid === 999994));
+
+    // 3. GPS reconnects with same course
+    tracker.updateFromRunningVehicles([courseData]);
+    veh = tracker.getVehicleDetail("230")!;
+    assert.equal(veh.status, "active");
+    assert.equal(veh.currentCourse?.courseLoid, 999994);
+    assert(
+      !veh.todayCourses.some((c) => c.courseLoid === 999994),
+      "Live reconnected course must be removed from todayCourses to prevent duplicates",
+    );
+  });
 });
 

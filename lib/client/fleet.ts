@@ -28,7 +28,9 @@ export interface VehicleCourseRecord {
   endSecs: number;
   delaySec: number;
   stopsCount: number;
-  status: "completed" | "in_progress" | "predicted";
+  status: "completed" | "in_progress" | "predicted" | "cancelled";
+  cancelledReason?: string;
+  cancelledAtStopName?: string;
   completedAt?: number;
   stops?: VehicleCourseStop[];
 }
@@ -81,6 +83,7 @@ export interface FleetVehicleDetail {
   stats: {
     totalCoursesToday: number;
     completedCoursesToday: number;
+    cancelledCoursesToday?: number;
     estimatedKmToday: number;
     averageDelaySecs: number;
     punctualityPct: number;
@@ -103,6 +106,7 @@ export interface FleetSummaryItem {
   nextStopName?: string;
   delaySec?: number;
   coursesCountToday: number;
+  cancelledCoursesToday?: number;
   progressPct?: number;
   lat?: number;
   lon?: number;

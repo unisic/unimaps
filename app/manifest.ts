@@ -25,6 +25,12 @@ export default function manifest(): MetadataRoute.Manifest {
         url: "/",
         icons: [{ src: "/icon-192.png", sizes: "192x192" }],
       },
+      {
+        name: "Brygady i Tabor",
+        short_name: "Brygady",
+        url: "/brygady",
+        icons: [{ src: "/icon-192.png", sizes: "192x192" }],
+      },
     ],
     icons: [
       { src: "/icon-192.png", sizes: "192x192", type: "image/png", purpose: "any" },

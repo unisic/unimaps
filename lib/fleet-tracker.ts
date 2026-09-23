@@ -35,7 +35,9 @@ export interface VehicleCourseRecord {
   endSecs: number;
   delaySec: number;
   stopsCount: number;
-  status: "completed" | "in_progress" | "predicted";
+  status: "completed" | "in_progress" | "predicted" | "cancelled";
+  cancelledReason?: string;
+  cancelledAtStopName?: string;
   completedAt?: number;
   stops?: VehicleCourseStop[];
 }
@@ -88,6 +90,7 @@ export interface FleetVehicleDetail {
   stats: {
     totalCoursesToday: number;
     completedCoursesToday: number;
+    cancelledCoursesToday?: number;
     estimatedKmToday: number;
     averageDelaySecs: number;
     punctualityPct: number;
@@ -110,6 +113,7 @@ export interface FleetSummaryItem {
   nextStopName?: string;
   delaySec?: number;
   coursesCountToday: number;
+  cancelledCoursesToday?: number;
   progressPct?: number;
   lat?: number;
   lon?: number;
@@ -194,6 +198,44 @@ export function sortCoursesDesc(a: VehicleCourseRecord, b: VehicleCourseRecord):
   const endB = b.endSecs ?? 0;
   if (endB !== endA) return endB - endA;
   return (b.startTime || "").localeCompare(a.startTime || "");
+}
+
+/**
+ * Determines whether a course was normally completed or interrupted/cancelled
+ * (e.g. vehicle broke down, GPS lost mid-route, massive standing delay).
+ */
+export function determineCourseOutcome(course: {
+  currentStopIndex: number;
+  stopsCount: number;
+  progressPct: number;
+  delaySec: number;
+  currentStopName: string;
+}): {
+  status: "completed" | "cancelled";
+  cancelledReason?: string;
+  cancelledAtStopName?: string;
+} {
+  const { currentStopIndex, stopsCount, delaySec, currentStopName } = course;
+
+  // Single-stop or no-stop edge cases cannot determine mid-route cancellation
+  if (stopsCount <= 1) {
+    return { status: "completed" };
+  }
+
+  const reachedLastStop = currentStopIndex >= stopsCount - 1;
+  const hasSubstantialDelay = delaySec >= 10 * 60; // 10+ min delay
+
+  // If the bus didn't reach the terminus AND has substantial delay (e.g. 10 to 50+ min delay standing at a stop mid-route)
+  if (!reachedLastStop && hasSubstantialDelay) {
+    const delayMins = Math.round(delaySec / 60);
+    return {
+      status: "cancelled",
+      cancelledReason: `Awaria / kurs odwołany (+${delayMins} min opóźnienia na przystanku ${currentStopName})`,
+      cancelledAtStopName: currentStopName,
+    };
+  }
+
+  return { status: "completed" };
 }
 
 const HISTORY_DIR = path.resolve(process.cwd(), "output");
@@ -392,12 +434,18 @@ export class FleetTracker {
         distanceMeters: sp.distance,
       }));
 
+      // If the vehicle was previously marked in todayCourses with this exact courseLoid (e.g. temporary GPS dropout), remove from history so it stays live
+      const existingLiveIdx = detail.todayCourses.findIndex((c) => c.courseLoid === v.courseLoid);
+      if (existingLiveIdx !== -1) {
+        detail.todayCourses.splice(existingLiveIdx, 1);
+      }
+
       // Detect course change
       if (detail.currentCourse && detail.currentCourse.courseLoid !== v.courseLoid) {
-        // Archive previous course as completed — all its stops are passed
         const prev = detail.currentCourse;
         const exists = detail.todayCourses.some((c) => c.courseLoid === prev.courseLoid);
         if (!exists) {
+          const outcome = determineCourseOutcome(prev);
           detail.todayCourses.push({
             id: `c-${prev.courseLoid}`,
             courseLoid: prev.courseLoid,
@@ -413,9 +461,20 @@ export class FleetTracker {
             endSecs: prev.endSecs,
             delaySec: prev.delaySec,
             stopsCount: prev.stopsCount,
-            status: "completed",
+            status: outcome.status,
+            cancelledReason: outcome.cancelledReason,
+            cancelledAtStopName: outcome.cancelledAtStopName,
             completedAt: nowEpoch,
-            stops: prev.stops?.map((s) => ({ ...s, status: "passed" as const })),
+            stops: outcome.status === "completed"
+              ? prev.stops?.map((s) => ({ ...s, status: "passed" as const }))
+              : prev.stops?.map((s, idx) => ({
+                  ...s,
+                  status: idx < prev.currentStopIndex
+                    ? ("passed" as const)
+                    : idx === prev.currentStopIndex
+                    ? ("current" as const)
+                    : ("upcoming" as const),
+                })),
           });
           detail.todayCourses.sort(sortCoursesDesc);
         }
@@ -482,7 +541,7 @@ export class FleetTracker {
       this.recalculateStats(detail);
     }
 
-    // Mark vehicles no longer running as depot
+    // Mark vehicles no longer running as depot (or detect interrupted/cancelled course if GPS vanished mid-route)
     for (const [side, detail] of this.vehicles.entries()) {
       if (!activeSides.has(side) && detail.status === "active") {
         detail.status = "depot";
@@ -490,6 +549,7 @@ export class FleetTracker {
           const finished = detail.currentCourse;
           const exists = detail.todayCourses.some((c) => c.courseLoid === finished.courseLoid);
           if (!exists) {
+            const outcome = determineCourseOutcome(finished);
             detail.todayCourses.push({
               id: `c-${finished.courseLoid}`,
               courseLoid: finished.courseLoid,
@@ -505,16 +565,32 @@ export class FleetTracker {
               endSecs: finished.endSecs,
               delaySec: finished.delaySec,
               stopsCount: finished.stopsCount,
-              status: "completed",
+              status: outcome.status,
+              cancelledReason: outcome.cancelledReason,
+              cancelledAtStopName: outcome.cancelledAtStopName,
               completedAt: nowEpoch,
-              stops: finished.stops?.map((s) => ({ ...s, status: "passed" as const })),
+              stops: outcome.status === "completed"
+                ? finished.stops?.map((s) => ({ ...s, status: "passed" as const }))
+                : finished.stops?.map((s, idx) => ({
+                    ...s,
+                    status: idx < finished.currentStopIndex
+                      ? ("passed" as const)
+                      : idx === finished.currentStopIndex
+                      ? ("current" as const)
+                      : ("upcoming" as const),
+                  })),
             });
             detail.todayCourses.sort(sortCoursesDesc);
           }
+
+          const isCancelled = detail.todayCourses.find((c) => c.courseLoid === finished.courseLoid)?.status === "cancelled";
+          const delayMins = Math.round(finished.delaySec / 60);
           detail.lastKnownLocation = {
             lat: finished.lat,
             lon: finished.lon,
-            name: `Zajezdnia MZK (ostatni kurs: ${finished.lineName} do ${finished.lastStopName})`,
+            name: isCancelled
+              ? `Utrata sygnału GPS / awaria (przerwany kurs: linia ${finished.lineName} na przystanku ${finished.currentStopName}${delayMins >= 5 ? `, opóźnienie ${delayMins} min` : ""})`
+              : `Zajezdnia MZK (ostatni kurs: ${finished.lineName} do ${finished.lastStopName})`,
           };
           detail.currentCourse = null;
         }
@@ -640,6 +716,7 @@ export class FleetTracker {
   private recalculateStats(veh: FleetVehicleDetail): void {
     const total = veh.todayCourses.length + (veh.currentCourse ? 1 : 0);
     const completed = veh.todayCourses.filter((c) => c.status === "completed").length;
+    const cancelled = veh.todayCourses.filter((c) => c.status === "cancelled").length;
 
     let totalDelay = 0;
     let onTimeCount = 0;
@@ -663,6 +740,7 @@ export class FleetTracker {
     veh.stats = {
       totalCoursesToday: total,
       completedCoursesToday: completed,
+      cancelledCoursesToday: cancelled,
       estimatedKmToday: estimatedKm,
       averageDelaySecs: avgDelay,
       punctualityPct: punctuality,
@@ -719,6 +797,7 @@ export class FleetTracker {
         nextStopName: v.currentCourse?.nextStopName ?? undefined,
         delaySec: v.currentCourse?.delaySec,
         coursesCountToday: v.stats.totalCoursesToday,
+        cancelledCoursesToday: v.stats.cancelledCoursesToday ?? 0,
         progressPct: v.currentCourse?.progressPct,
         lat: v.currentCourse?.lat,
         lon: v.currentCourse?.lon,
