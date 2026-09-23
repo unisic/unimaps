@@ -195,4 +195,211 @@ describe("fleet-tracker & brigades", () => {
     assert(active.some((v) => v.sideNumber === "256"));
     assert(active.some((v) => v.sideNumber === "250"));
   });
+
+  it("marks all stops in completed course as 'passed' when vehicle goes to depot or changes course", () => {
+    const tracker = new FleetTracker();
+
+    // Vehicle 230 runs course with 4 stops, currently at stop index 1
+    tracker.updateFromRunningVehicles([
+      {
+        vehicleId: "230",
+        lineName: "7",
+        courseLoid: 999991,
+        direction: "Zajezdnia MZK",
+        delaySec: 0,
+        latitude: 49.79,
+        longitude: 19.04,
+        orderInCourse: 1,
+        stopPoints: [
+          { symbol: "31", name: "Szyndzielnia", orderNo: 0, distance: 0, scheduledDeparture: 1790080000000, plannedDeparture: 1790080000000 },
+          { symbol: "22", name: "Armii Krajowej Karbowa", orderNo: 1, distance: 739, scheduledDeparture: 1790080100000, plannedDeparture: 1790080100000 },
+          { symbol: "44", name: "Boboli Szpital", orderNo: 2, distance: 1500, scheduledDeparture: 1790080200000, plannedDeparture: 1790080200000 },
+          { symbol: "446", name: "Zajezdnia MZK", orderNo: 3, distance: 2300, scheduledDeparture: 1790080300000, plannedDeparture: 1790080300000 },
+        ],
+      },
+    ]);
+
+    let veh = tracker.getVehicleDetail("230")!;
+    assert(veh.currentCourse);
+    assert.equal(veh.currentCourse.stops?.[1].status, "current");
+    assert.equal(veh.currentCourse.stops?.[2].status, "upcoming");
+
+    // Vehicle goes to depot (no longer in running vehicles)
+    tracker.updateFromRunningVehicles([]);
+
+    veh = tracker.getVehicleDetail("230")!;
+    assert.equal(veh.status, "depot");
+    assert.equal(veh.currentCourse, null);
+
+    const completed = veh.todayCourses.find((c) => c.courseLoid === 999991);
+    assert(completed, "Completed course must be recorded in todayCourses");
+    assert.equal(completed.status, "completed");
+    assert(completed.stops && completed.stops.length === 4);
+
+    // CRITICAL: All stops in the completed course must be 'passed', none 'current' or 'upcoming'
+    for (const stop of completed.stops) {
+      assert.equal(
+        stop.status,
+        "passed",
+        `Stop ${stop.name} in completed course should have status 'passed', but was '${stop.status}'`,
+      );
+    }
+  });
+
+  it("ensures historical completed courses have all stops sanitized to 'passed'", () => {
+    const tracker = new FleetTracker();
+    const veh = tracker.getVehicleDetail("167");
+    assert(veh);
+
+    // Any completed course in todayCourses (from disk or memory) must not have any 'current' stop
+    for (const course of veh.todayCourses) {
+      if (course.status === "completed" && course.stops) {
+        for (const stop of course.stops) {
+          assert.equal(
+            stop.status,
+            "passed",
+            `Historical stop ${stop.name} in course ${course.id} must be 'passed'`,
+          );
+        }
+      }
+    }
+  });
+
+  it("formats course times strictly in Europe/Warsaw timezone", () => {
+    const tracker = new FleetTracker();
+
+    // 1727092800000 ms = 2024-09-23 12:00:00 UTC = 14:00:00 CEST (Europe/Warsaw)
+    tracker.updateFromRunningVehicles([
+      {
+        vehicleId: "250",
+        lineName: "1",
+        courseLoid: 888801,
+        direction: "Osiedle Beskidzkie",
+        delaySec: 0,
+        latitude: 49.82,
+        longitude: 19.04,
+        orderInCourse: 0,
+        stopPoints: [
+          {
+            symbol: "1",
+            name: "Cygański Las",
+            orderNo: 0,
+            distance: 0,
+            scheduledDeparture: 1727092800000,
+            plannedDeparture: 1727092800000,
+          },
+          {
+            symbol: "307",
+            name: "Osiedle Beskidzkie",
+            orderNo: 1,
+            distance: 4000,
+            scheduledDeparture: 1727094000000, // 14:20 Warsaw
+            plannedDeparture: 1727094000000,
+          },
+        ],
+      },
+    ]);
+
+    const veh = tracker.getVehicleDetail("250");
+    assert(veh && veh.currentCourse);
+    assert.equal(
+      veh.currentCourse.startTime,
+      "14:00",
+      `Expected startTime in Europe/Warsaw (14:00), got ${veh.currentCourse.startTime}`,
+    );
+    assert.equal(
+      veh.currentCourse.endTime,
+      "14:20",
+      `Expected endTime in Europe/Warsaw (14:20), got ${veh.currentCourse.endTime}`,
+    );
+    assert.equal(veh.currentCourse.stops?.[0].scheduledTime, "14:00");
+    assert.equal(veh.currentCourse.stops?.[1].scheduledTime, "14:20");
+  });
+
+  it("sorts todayCourses in road card from newest to oldest", () => {
+    const tracker = new FleetTracker();
+
+    // Vehicle 238 runs first morning course (06:00 Warsaw = 1727064000000)
+    tracker.updateFromRunningVehicles([
+      {
+        vehicleId: "238",
+        lineName: "8",
+        courseLoid: 777001,
+        direction: "Warszawska",
+        delaySec: 0,
+        latitude: 49.82,
+        longitude: 19.04,
+        orderInCourse: 0,
+        stopPoints: [
+          { symbol: "1", name: "Start A", orderNo: 0, distance: 0, scheduledDeparture: 1727064000000, plannedDeparture: 1727064000000 },
+          { symbol: "2", name: "End A", orderNo: 1, distance: 2000, scheduledDeparture: 1727065800000, plannedDeparture: 1727065800000 },
+        ],
+      },
+    ]);
+
+    // Vehicle 238 switches to midday course (12:00 Warsaw = 1727085600000)
+    tracker.updateFromRunningVehicles([
+      {
+        vehicleId: "238",
+        lineName: "8",
+        courseLoid: 777002,
+        direction: "Szyndzielnia",
+        delaySec: 0,
+        latitude: 49.82,
+        longitude: 19.04,
+        orderInCourse: 0,
+        stopPoints: [
+          { symbol: "2", name: "End A", orderNo: 0, distance: 0, scheduledDeparture: 1727085600000, plannedDeparture: 1727085600000 },
+          { symbol: "1", name: "Start A", orderNo: 1, distance: 2000, scheduledDeparture: 1727087400000, plannedDeparture: 1727087400000 },
+        ],
+      },
+    ]);
+
+    // Vehicle 238 switches to afternoon course (15:00 Warsaw = 1727096400000)
+    tracker.updateFromRunningVehicles([
+      {
+        vehicleId: "238",
+        lineName: "8",
+        courseLoid: 777003,
+        direction: "Warszawska",
+        delaySec: 0,
+        latitude: 49.82,
+        longitude: 19.04,
+        orderInCourse: 0,
+        stopPoints: [
+          { symbol: "1", name: "Start A", orderNo: 0, distance: 0, scheduledDeparture: 1727096400000, plannedDeparture: 1727096400000 },
+          { symbol: "2", name: "End A", orderNo: 1, distance: 2000, scheduledDeparture: 1727098200000, plannedDeparture: 1727098200000 },
+        ],
+      },
+    ]);
+
+    // Go to depot so all 3 courses are in todayCourses
+    tracker.updateFromRunningVehicles([]);
+
+    const veh = tracker.getVehicleDetail("238")!;
+    assert.equal(veh.status, "depot");
+    assert(veh.todayCourses.length >= 3);
+
+    // Filter to the 3 real courses
+    const testCourses = veh.todayCourses.filter(
+      (c) => c.courseLoid && [777001, 777002, 777003].includes(c.courseLoid),
+    );
+    assert.equal(testCourses.length, 3);
+
+    // Verify strictly descending order: 777003 (15:00) -> 777002 (12:00) -> 777001 (06:00)
+    assert.equal(testCourses[0].courseLoid, 777003);
+    assert.equal(testCourses[1].courseLoid, 777002);
+    assert.equal(testCourses[2].courseLoid, 777001);
+
+    // Verify all todayCourses are in descending order
+    for (let i = 0; i < veh.todayCourses.length - 1; i++) {
+      const cur = veh.todayCourses[i].startSecs;
+      const next = veh.todayCourses[i + 1].startSecs;
+      assert(
+        cur >= next,
+        `Expected descending course order: course at index ${i} (${cur}) should be >= course at index ${i + 1} (${next})`,
+      );
+    }
+  });
 });
+

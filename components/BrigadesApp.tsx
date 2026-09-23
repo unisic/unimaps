@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, Suspense, useDeferredValue, useEffect, useState } from "react";
+import { memo, Suspense, useDeferredValue, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
@@ -324,6 +324,23 @@ function BrigadesAppContent() {
   const [lineFilter, setLineFilter] = useState<string>("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [clockStr, setClockStr] = useState<string>("");
+
+  useEffect(() => {
+    const update = () => {
+      setClockStr(
+        new Date().toLocaleTimeString("pl-PL", {
+          timeZone: "Europe/Warsaw",
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+        }),
+      );
+    };
+    update();
+    const id = setInterval(update, 1000);
+    return () => clearInterval(id);
+  }, []);
 
   const deferredQuery = useDeferredValue(searchQuery);
 
@@ -425,8 +442,11 @@ function BrigadesAppContent() {
                 <span className="hidden sm:inline">Odświeżam…</span>
               </span>
             )}
-            <div className="rounded-full bg-surface-2 px-3 py-1 text-xs font-mono text-text-mute border border-hairline tabular-nums">
-              {new Date().toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+            <div
+              className="rounded-full bg-surface-2 px-3 py-1 text-xs font-mono text-text-mute border border-hairline tabular-nums"
+              title="Aktualny czas (Europe/Warsaw)"
+            >
+              {clockStr || "—"}
             </div>
           </div>
         </div>
@@ -816,6 +836,20 @@ function VehicleDetailModal({
 }) {
   const [expandedCourseId, setExpandedCourseId] = useState<string | null>(null);
 
+  // Sort completed courses from newest to oldest
+  const sortedTodayCourses = useMemo(() => {
+    if (!data?.todayCourses) return [];
+    return [...data.todayCourses].sort((a, b) => {
+      const startA = a.startSecs ?? 0;
+      const startB = b.startSecs ?? 0;
+      if (startB !== startA) return startB - startA;
+      const endA = a.endSecs ?? 0;
+      const endB = b.endSecs ?? 0;
+      if (endB !== endA) return endB - endA;
+      return (b.startTime || "").localeCompare(a.startTime || "");
+    });
+  }, [data?.todayCourses]);
+
   // Close on Escape
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -1013,7 +1047,9 @@ function VehicleDetailModal({
                 ) : (
                   <div className="surface rounded-xl p-4 text-xs text-text-mute space-y-2 border border-hairline">
                     <p className="text-sm font-semibold text-text">
-                      Pojazd przebywa w zajezdni MZK (ul. Długa 50) lub ma przerwę między zmianami.
+                      {data.status === "depot"
+                        ? "Pojazd przebywa w zajezdni MZK (ul. Długa 50) lub ma przerwę między zmianami."
+                        : "Pojazd ma przerwę na pętli przed kolejnym kursem."}
                     </p>
                     <p className="text-text-faint">
                       {data.lastKnownLocation?.name ?? "Brak aktualnego kursu."}
@@ -1028,16 +1064,21 @@ function VehicleDetailModal({
               {/* SECTION: Daily Courses Timeline */}
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-text-faint">
-                    Karta drogowa &middot; Kursy dzisiaj ({data.todayCourses.length + (data.currentCourse ? 1 : 0)})
-                  </h3>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-text-faint">
+                      Karta drogowa &middot; Kursy dzisiaj ({data.todayCourses.length + (data.currentCourse ? 1 : 0)})
+                    </h3>
+                    <span className="text-[10px] text-text-faint font-medium bg-surface-2 px-1.5 py-0.5 rounded border border-hairline">
+                      od najnowszego
+                    </span>
+                  </div>
                   <span className="text-xs text-text-faint">
                     Przebieg: <strong className="text-text">{data.stats.estimatedKmToday} km</strong> &middot; Punktualność: <strong className="text-text">{data.stats.punctualityPct}%</strong>
                   </span>
                 </div>
 
                 <div className="space-y-2.5">
-                  {/* Current Course */}
+                  {/* Current Course (newest - in progress) */}
                   {data.currentCourse && (
                     <CourseItemRow
                       course={data.currentCourse}
@@ -1047,8 +1088,8 @@ function VehicleDetailModal({
                     />
                   )}
 
-                  {/* Completed Courses */}
-                  {data.todayCourses.map((c) => (
+                  {/* Completed Courses (sorted from newest to oldest) */}
+                  {sortedTodayCourses.map((c) => (
                     <CourseItemRow
                       key={c.id}
                       course={c}
@@ -1180,33 +1221,38 @@ function CourseItemRow({
             Przebieg trasy (przystanek po przystanku):
           </p>
           <div className="max-h-60 overflow-y-auto kb-scroll pr-1 space-y-1 text-xs">
-            {course.stops.map((st, i) => (
-              <div
-                key={i}
-                className={`flex items-center justify-between py-1.5 px-2.5 rounded-lg ${
-                  st.status === "current"
-                    ? "bg-blue-600/20 font-bold text-white border border-blue-500/30"
-                    : st.status === "passed"
-                    ? "text-text-mute"
-                    : "text-text"
-                }`}
-              >
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className="font-mono text-[11px] text-text-faint w-5 text-right">{i + 1}.</span>
-                  <span className="truncate">{st.name}</span>
+            {course.stops.map((st, i) => {
+              const isCourseDone = !isCurrent || course.status === "completed";
+              const isPassed = isCourseDone || st.status === "passed";
+              const isCur = !isCourseDone && st.status === "current";
+              return (
+                <div
+                  key={i}
+                  className={`flex items-center justify-between py-1.5 px-2.5 rounded-lg ${
+                    isCur
+                      ? "bg-blue-600/20 font-bold text-white border border-blue-500/30"
+                      : isPassed
+                      ? "text-text-mute"
+                      : "text-text"
+                  }`}
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="font-mono text-[11px] text-text-faint w-5 text-right">{i + 1}.</span>
+                    <span className="truncate">{st.name}</span>
+                  </div>
+                  <div className="flex items-center gap-3 shrink-0 font-mono text-[11px] tabular-nums">
+                    <span className="text-text-mute">{st.scheduledTime}</span>
+                    {st.plannedTime && st.plannedTime !== st.scheduledTime && (
+                      <span className="text-amber-400 font-semibold">{st.plannedTime}</span>
+                    )}
+                    {isPassed && <CheckIcon className="w-3.5 h-3.5 text-good" />}
+                    {isCur && (
+                      <span className="h-2 w-2 rounded-full bg-blue-400 animate-pulse-dot" />
+                    )}
+                  </div>
                 </div>
-                <div className="flex items-center gap-3 shrink-0 font-mono text-[11px] tabular-nums">
-                  <span className="text-text-mute">{st.scheduledTime}</span>
-                  {st.plannedTime && st.plannedTime !== st.scheduledTime && (
-                    <span className="text-amber-400 font-semibold">{st.plannedTime}</span>
-                  )}
-                  {st.status === "passed" && <CheckIcon className="w-3.5 h-3.5 text-good" />}
-                  {st.status === "current" && (
-                    <span className="h-2 w-2 rounded-full bg-blue-400 animate-pulse-dot" />
-                  )}
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}

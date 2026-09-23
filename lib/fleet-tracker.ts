@@ -7,6 +7,8 @@ import path from "node:path";
 import { log } from "./logger";
 import { type MzkApi } from "./mzk-api";
 import { getAllFleetVehicles, getFleetDetails, type MzkVehicleStatic, type VehicleFeatures } from "./mzk-fleet";
+import { AGENCY_TIMEZONE } from "./config";
+import { sendScaniaCourseStartNotification } from "./discord-notify";
 import type { Stop } from "./types";
 
 export interface VehicleCourseStop {
@@ -138,14 +140,60 @@ function secsToHHMM(s: number): string {
   return `${pad2(h)}:${pad2(m)}`;
 }
 
+const warsawTimeFmt = new Intl.DateTimeFormat("en-GB", {
+  timeZone: AGENCY_TIMEZONE,
+  hour12: false,
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+});
+
+const warsawDateFmt = new Intl.DateTimeFormat("en-CA", {
+  timeZone: AGENCY_TIMEZONE,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+
 function dateToAgencySecs(ms: number): number {
-  const d = new Date(ms);
-  return d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds();
+  if (!ms || Number.isNaN(ms)) return 0;
+  try {
+    const parts = warsawTimeFmt.formatToParts(new Date(ms));
+    let h = 0;
+    let m = 0;
+    let s = 0;
+    for (const p of parts) {
+      if (p.type === "hour") h = Number(p.value) % 24;
+      else if (p.type === "minute") m = Number(p.value);
+      else if (p.type === "second") s = Number(p.value);
+    }
+    return h * 3600 + m * 60 + s;
+  } catch {
+    const d = new Date(ms);
+    return d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds();
+  }
 }
 
 function getTodayKey(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+  try {
+    return warsawDateFmt.format(new Date());
+  } catch {
+    const d = new Date();
+    return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+  }
+}
+
+/**
+ * Sorts courses descending: from the newest (latest departure/start) to the oldest (earliest departure).
+ */
+export function sortCoursesDesc(a: VehicleCourseRecord, b: VehicleCourseRecord): number {
+  const startA = a.startSecs ?? 0;
+  const startB = b.startSecs ?? 0;
+  if (startB !== startA) return startB - startA;
+  const endA = a.endSecs ?? 0;
+  const endB = b.endSecs ?? 0;
+  if (endB !== endA) return endB - endA;
+  return (b.startTime || "").localeCompare(a.startTime || "");
 }
 
 const HISTORY_DIR = path.resolve(process.cwd(), "output");
@@ -153,6 +201,7 @@ const HISTORY_DIR = path.resolve(process.cwd(), "output");
 export class FleetTracker {
   private vehicles = new Map<string, FleetVehicleDetail>();
   private lineBrigadeOrder = new Map<string, string[]>(); // line -> array of sideNumbers in sequence
+  private notifiedScaniaCourses = new Set<string>();
   private lastSaveAt = 0;
   private saveTimeout: NodeJS.Timeout | null = null;
   private currentDay = getTodayKey();
@@ -215,6 +264,9 @@ export class FleetTracker {
       longitude: number;
       angle?: number;
       orderInCourse?: number;
+      onStopPoint?: boolean | string | null;
+      nearestSymbol?: string;
+      nearestSymbolOrderNo?: number;
       stopPoints?: Array<{
         symbol: string;
         name: string;
@@ -292,7 +344,23 @@ export class FleetTracker {
       // Process course
       const stopPoints = v.stopPoints ?? [];
       const totalStops = stopPoints.length;
-      const order = v.orderInCourse != null && v.orderInCourse >= 0 ? v.orderInCourse : 0;
+
+      // Accurately resolve stop index within stopPoints
+      let order = 0;
+      if (totalStops > 0) {
+        if (v.onStopPoint && typeof v.onStopPoint === "string") {
+          const matchIdx = stopPoints.findIndex((sp) => sp.symbol === v.onStopPoint);
+          if (matchIdx !== -1) order = matchIdx;
+        } else if (v.nearestSymbol) {
+          const matchIdx = stopPoints.findIndex((sp) => sp.symbol === v.nearestSymbol);
+          if (matchIdx !== -1) order = matchIdx;
+        } else if (v.nearestSymbolOrderNo != null) {
+          const matchIdx = stopPoints.findIndex((sp) => sp.orderNo === v.nearestSymbolOrderNo);
+          if (matchIdx !== -1) order = matchIdx;
+        } else if (v.orderInCourse != null && v.orderInCourse >= 0) {
+          order = Math.min(totalStops - 1, v.orderInCourse);
+        }
+      }
 
       let firstStopName = "Początek trasy";
       let lastStopName = v.direction || v.optionalDirection || "Koniec trasy";
@@ -326,7 +394,7 @@ export class FleetTracker {
 
       // Detect course change
       if (detail.currentCourse && detail.currentCourse.courseLoid !== v.courseLoid) {
-        // Archive previous course as completed
+        // Archive previous course as completed — all its stops are passed
         const prev = detail.currentCourse;
         const exists = detail.todayCourses.some((c) => c.courseLoid === prev.courseLoid);
         if (!exists) {
@@ -347,8 +415,9 @@ export class FleetTracker {
             stopsCount: prev.stopsCount,
             status: "completed",
             completedAt: nowEpoch,
-            stops: prev.stops,
+            stops: prev.stops?.map((s) => ({ ...s, status: "passed" as const })),
           });
+          detail.todayCourses.sort(sortCoursesDesc);
         }
       }
 
@@ -379,8 +448,31 @@ export class FleetTracker {
         stops: courseStops,
       };
 
+      // Discord notification: Scania CN230UB #167 starts a course
+      if (side === "167" && v.courseLoid) {
+        const loidStr = String(v.courseLoid);
+        if (!this.notifiedScaniaCourses.has(loidStr)) {
+          this.notifiedScaniaCourses.add(loidStr);
+          sendScaniaCourseStartNotification({
+            sideNumber: "167",
+            courseLoid: v.courseLoid,
+            lineName: v.lineName,
+            direction: detail.currentCourse.direction,
+            firstStopName: detail.currentCourse.firstStopName,
+            lastStopName: detail.currentCourse.lastStopName,
+            startTime: detail.currentCourse.startTime,
+            endTime: detail.currentCourse.endTime,
+            stopsCount: detail.currentCourse.stopsCount,
+            brigadeId: detail.brigade.id,
+          }).catch((err) => {
+            log.warn("fleet-tracker", `Failed sending Scania 167 Discord notification: ${err}`);
+          });
+        }
+      }
+
       // Predict next course ("Gdzie może być dalej")
       detail.predictedNextCourse = this.computeNextCoursePrediction(detail, endSecs, lastStopName, lastStopSymbol, stopsBySymbol);
+
 
       // Backfill synthetic realistic earlier courses if needed
       if (detail.todayCourses.length === 0) {
@@ -405,6 +497,8 @@ export class FleetTracker {
               direction: finished.direction,
               firstStopName: finished.firstStopName,
               lastStopName: finished.lastStopName,
+              firstStopSymbol: finished.firstStopSymbol,
+              lastStopSymbol: finished.lastStopSymbol,
               startTime: finished.startTime,
               endTime: finished.endTime,
               startSecs: finished.startSecs,
@@ -413,8 +507,9 @@ export class FleetTracker {
               stopsCount: finished.stopsCount,
               status: "completed",
               completedAt: nowEpoch,
-              stops: finished.stops,
+              stops: finished.stops?.map((s) => ({ ...s, status: "passed" as const })),
             });
+            detail.todayCourses.sort(sortCoursesDesc);
           }
           detail.lastKnownLocation = {
             lat: finished.lat,
@@ -426,6 +521,7 @@ export class FleetTracker {
         this.recalculateStats(detail);
       }
     }
+
 
     this.scheduleSave();
   }
@@ -534,6 +630,7 @@ export class FleetTracker {
       courseIndex++;
     }
 
+    generated.sort(sortCoursesDesc);
     veh.todayCourses = generated;
   }
 
@@ -649,7 +746,10 @@ export class FleetTracker {
    */
   public getVehicleDetail(sideNumber: string): FleetVehicleDetail | null {
     const clean = sideNumber.replace(/^#/, "").trim();
-    return this.vehicles.get(clean) ?? null;
+    const veh = this.vehicles.get(clean);
+    if (!veh) return null;
+    veh.todayCourses.sort(sortCoursesDesc);
+    return veh;
   }
 
   /**
@@ -732,7 +832,9 @@ export class FleetTracker {
         fs.mkdirSync(HISTORY_DIR, { recursive: true });
       }
       const filePath = path.join(HISTORY_DIR, `fleet-history-${this.currentDay}.json`);
-      const payload: Record<string, unknown> = {};
+      const payload: Record<string, unknown> = {
+        _notifiedScaniaCourses: Array.from(this.notifiedScaniaCourses),
+      };
       for (const [side, v] of this.vehicles.entries()) {
         if (v.todayCourses.length > 0 || v.currentCourse) {
           payload[side] = {
@@ -755,13 +857,27 @@ export class FleetTracker {
       const filePath = path.join(HISTORY_DIR, `fleet-history-${this.currentDay}.json`);
       if (!fs.existsSync(filePath)) return;
       const raw = fs.readFileSync(filePath, "utf-8");
-      const data = JSON.parse(raw) as Record<string, Partial<FleetVehicleDetail>>;
-      for (const [side, saved] of Object.entries(data)) {
+      const data = JSON.parse(raw) as Record<string, unknown>;
+
+      if (Array.isArray(data._notifiedScaniaCourses)) {
+        this.notifiedScaniaCourses = new Set(data._notifiedScaniaCourses as string[]);
+      }
+
+      for (const [side, rawSaved] of Object.entries(data)) {
+        if (side.startsWith("_")) continue;
+        const saved = rawSaved as Partial<FleetVehicleDetail>;
         const v = this.vehicles.get(side);
         if (v) {
           if (saved.brigade) v.brigade = saved.brigade;
           if (Array.isArray(saved.todayCourses) && saved.todayCourses.length > 0) {
-            v.todayCourses = saved.todayCourses;
+            v.todayCourses = saved.todayCourses
+              .map((c) => ({
+                ...c,
+                stops: c.status === "completed" && c.stops
+                  ? c.stops.map((s) => ({ ...s, status: "passed" as const }))
+                  : c.stops,
+              }))
+              .sort(sortCoursesDesc);
           }
           if (saved.stats) v.stats = saved.stats;
           if (saved.lastSeenAt) v.lastSeenAt = saved.lastSeenAt;
