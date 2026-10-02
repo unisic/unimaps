@@ -34,6 +34,16 @@ export interface Vehicle {
   side_number?: string;
   model?: string;
   features?: VehicleFeatures;
+  /* motion extras — present only when the server knows them */
+  /** "<shapeKey>.<rev6>" — road geometry from GET /api/shapes */
+  shape?: string;
+  /** metres along `shape` */
+  dist_m?: number;
+  /** epoch secs when this position was first reported */
+  fix_at?: number;
+  next_stop_seq?: number;
+  /** cruise speed, m/s */
+  speed?: number;
 }
 
 export interface VehiclesResponse {
@@ -139,13 +149,21 @@ export interface Trip {
   line?: { name?: string };
   operator?: "KB" | "MZK";
   shape?: LatLng[];
+  /** stored road geometry id (GET /api/shapes) */
+  shape_id?: string;
+  shape_status?: ShapeStatus;
 }
+
+/** road: stored shape available · pending: being routed · none: no road geometry */
+export type ShapeStatus = "road" | "pending" | "none";
 
 export interface TripExecutionResponse {
   trip?: Trip;
   vehicle?: { lat: number; lon: number };
   vehicle_trip_index?: number;
   shape?: LatLng[];
+  shape_id?: string;
+  shape_status?: ShapeStatus;
 }
 
 /** One upstream service announcement (utrudnienia/objazdy). Despite the field
@@ -195,6 +213,10 @@ export interface TripView {
   /** GTFS trip id for static routes — matches live vehicles sharing this trip */
   tripId?: string | number | null;
   operator?: "KB" | "MZK";
+  /** stored road-shape id `routed` came from (null = browser routing / straight) */
+  shapeId?: string | null;
+  /** the server's shape reference for this trip (kept so a rebuild can reuse it) */
+  routeHint?: { id?: string; status?: ShapeStatus } | null;
 }
 
 export interface ConnectionLegStop {
@@ -221,6 +243,8 @@ export interface ConnectionLeg {
   durationMins: number;
   stopsCount: number;
   stops?: ConnectionLegStop[];
+  /** stored road geometry of the leg's trip (GET /api/shapes) */
+  shape_id?: string;
 }
 
 export interface ConnectionItinerary {

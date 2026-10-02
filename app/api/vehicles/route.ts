@@ -14,6 +14,9 @@ export async function GET(req: Request): Promise<Response> {
       headers: {
         "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
         Pragma: "no-cache",
+        // server clock (epoch ms) for the client motion engine — a header, not a
+        // body field, so unchanged payloads still dedupe in SWR
+        "X-Server-Time": String(Date.now()),
       },
     });
   } catch (err) {

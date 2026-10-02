@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { isValidId, isValidDate } from "../lib/api-helpers";
+import { isValidId, isValidDate, isValidShapeId } from "../lib/api-helpers";
 
 describe("isValidId", () => {
   it("accepts real designator / trip-id shapes", () => {
@@ -45,5 +45,24 @@ describe("isValidDate", () => {
     assert.equal(isValidDate("2026-07-21T00"), false);
     assert.equal(isValidDate("2026-07-21 "), false);
     assert.equal(isValidDate(""), false);
+  });
+});
+
+describe("isValidShapeId", () => {
+  it("accepts kb/mzk keys with an optional rev", () => {
+    assert.equal(isValidShapeId("kb:0123456789ab"), true);
+    assert.equal(isValidShapeId("kb:0123456789ab.7b21c0"), true);
+    assert.equal(isValidShapeId("mzk:13954"), true);
+    assert.equal(isValidShapeId("mzk:13954.0c9e1f"), true);
+  });
+
+  it("rejects anything else", () => {
+    assert.equal(isValidShapeId("kb:0123456789AB"), false);
+    assert.equal(isValidShapeId("kb:0123"), false);
+    assert.equal(isValidShapeId("mzk:abc"), false);
+    assert.equal(isValidShapeId("kb:0123456789ab.7b21c"), false);
+    assert.equal(isValidShapeId("kb:0123456789ab~7b21c0"), false);
+    assert.equal(isValidShapeId("../etc"), false);
+    assert.equal(isValidShapeId(""), false);
   });
 });

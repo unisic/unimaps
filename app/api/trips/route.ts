@@ -1,5 +1,5 @@
 import { badRequest, isValidId, upstreamError } from "@/lib/api-helpers";
-import { getApi, startPoller } from "@/lib/poller-singleton";
+import { getApi, kbShapeRef, startPoller } from "@/lib/poller-singleton";
 import { allowRequest, clientIp, tooManyRequests } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
@@ -26,7 +26,10 @@ async function handleBatch(req: Request, rawIds: string[]): Promise<Response> {
 
     if (kbIds.length > 0) {
       const kbTrips = await getApi().fetchTripsBatch(kbIds);
-      Object.assign(trips, kbTrips);
+      for (const [id, t] of Object.entries(kbTrips)) {
+        // cached shared objects — spread, never mutate
+        trips[id] = t && typeof t === "object" ? { ...(t as Record<string, unknown>), ...kbShapeRef(t, "background") } : t;
+      }
     }
 
     if (mzkIds.length > 0) {
@@ -35,7 +38,17 @@ async function handleBatch(req: Request, rawIds: string[]): Promise<Response> {
         mzkIds.map(async (id) => {
           try {
             const res = await resolveMzkTrip(id);
-            return [id, res?.trip ? { ...(res.trip as object), shape: res.shape } : null] as const;
+            return [
+              id,
+              res?.trip
+                ? {
+                    ...(res.trip as object),
+                    shape: res.shape,
+                    ...(res.shape_id ? { shape_id: res.shape_id } : {}),
+                    shape_status: res.shape_status,
+                  }
+                : null,
+            ] as const;
           } catch {
             return [id, null] as const;
           }

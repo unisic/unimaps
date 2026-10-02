@@ -1,10 +1,19 @@
 import * as config from "@/lib/config";
 import { upstreamError } from "@/lib/api-helpers";
-import { getPoller, startPoller } from "@/lib/poller-singleton";
+import { getPoller, getShapes, startPoller } from "@/lib/poller-singleton";
 import type { HealthResponse } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+
+/** Shape-store counters; a store problem must never break the healthcheck. */
+function safeShapesHealth(): Record<string, unknown> | undefined {
+  try {
+    return getShapes().health();
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * GET /api/health — status + counters. Returns "degraded" with HTTP 503 (which
@@ -37,6 +46,7 @@ export async function GET(): Promise<Response> {
       loop_restarts: h.loopRestarts,
       last_loop_error: h.lastLoopError,
       stops_loaded_at: h.stopsLoadedAt,
+      shapes: safeShapesHealth(),
     };
     return Response.json(body, { status: degraded ? 503 : 200 });
   } catch (err) {

@@ -5,6 +5,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AttributionControl, Circle, MapContainer, Marker, TileLayer, ZoomControl, useMap } from "react-leaflet";
 import L from "leaflet";
 import { fetchJSON, fetchRoute, getTrip } from "@/lib/client/api";
+import { loadShapeLatest } from "@/lib/client/shapes";
+import { projectStopsAlong, slicePolyline } from "@/lib/shared/polyline";
+import { peekVehicleAnimator } from "@/lib/client/vehicleAnimator";
 import { adjustStopRoutePoint, injectDetourPoints } from "@/lib/client/detours";
 import { tripTimeMatchesStop, hslColor } from "@/lib/client/format";
 import { makeStopPingIcon, makeUserLocationIcon } from "@/lib/client/leafletIcons";
@@ -15,6 +18,7 @@ import type {
   JourneyLegResolved,
   JourneyView as JourneyViewState,
   LatLng,
+  ShapeStatus,
   Stop,
   Trip,
   TripExecutionResponse,
@@ -218,7 +222,9 @@ export default function MapApp() {
     setVehMeta(null);
   }, []);
 
-  /** Resolve stop coords, publish trip state, then route it via OSRM.
+  /** Resolve stop coords, publish trip state, then attach its road geometry:
+   *  the server-stored shape when there is one, browser OSRM only while the
+   *  server is still routing it, straight lines when it has none.
    *  `gen` guards every async step so a newer trip cancels this one. */
   const buildTrip = useCallback(
     async (
@@ -232,6 +238,7 @@ export default function MapApp() {
       execId: string | null,
       tripId: string | number | null = null,
       precomputedRoute?: LatLng[] | null,
+      serverRoute?: { id?: string; status?: ShapeStatus } | null,
     ) => {
       if (gen !== genRef.current) return;
       const { byId, byDesig } = stopsMapsRef.current;
@@ -270,13 +277,27 @@ export default function MapApp() {
         execId,
         tripId,
         operator: tripData?.operator,
+        shapeId: initialRouted ? (serverRoute?.id ?? null) : null,
+        routeHint: serverRoute ?? null,
       });
       if (initialRouted || !needRoute) return;
-      const road = await fetchRoute(routePts);
+      let road: LatLng[] | null = null;
+      let shapeId: string | null = null;
+      if (serverRoute?.id && serverRoute.status === "road") {
+        const sh = await loadShapeLatest(serverRoute.id);
+        if (gen !== genRef.current) return;
+        if (sh) {
+          road = sh.pts;
+          shapeId = sh.id;
+        }
+      }
+      // browser OSRM only while the server hasn't routed this pattern yet
+      // (or an older server that sends no status); "none" = no road geometry
+      if (!road && serverRoute?.status !== "none") road = await fetchRoute(routePts);
       if (gen !== genRef.current) return;
-      // OSRM road geometry when available; straight lines through the stops if not
+      // road geometry when available; straight lines through the stops if not
       const routed = road && road.length >= 2 ? road : pts;
-      setTrip((prev) => (prev && prev.gen === gen ? { ...prev, routed, status: "ready" } : prev));
+      setTrip((prev) => (prev && prev.gen === gen ? { ...prev, routed, status: "ready", shapeId } : prev));
     },
     [],
   );
@@ -300,6 +321,8 @@ export default function MapApp() {
       t.note,
       t.execId,
       t.tripId,
+      null,
+      t.routeHint,
     );
   }, [stopsMaps, trip, buildTrip]);
 
@@ -320,7 +343,10 @@ export default function MapApp() {
         setTrip((prev) => (prev && prev.gen === gen ? { ...prev, status: "error" } : prev));
         return;
       }
-      await buildTrip(gen, tr, null, null, stop, false, note, null, tripId, tr.shape);
+      await buildTrip(gen, tr, null, null, stop, false, note, null, tripId, tr.shape, {
+        id: tr.shape_id,
+        status: tr.shape_status,
+      });
     },
     [buildTrip],
   );
@@ -386,6 +412,7 @@ export default function MapApp() {
           execId,
           tripId,
           resp.shape,
+          { id: resp.shape_id, status: resp.shape_status },
         );
       } catch {
         if (gen !== genRef.current) return;
@@ -505,7 +532,8 @@ export default function MapApp() {
       };
       setJourney(initialJourney);
 
-      // Asynchronously fetch road geometries via OSRM for all legs in parallel
+      // Road geometry for all legs in parallel: the server-stored trip shape
+      // sliced between the leg's first and last stop, browser OSRM otherwise
       const routedLegs = await Promise.all(
         legsResolved.map(async (lr) => {
           const stops = lr.leg.stops ?? [];
@@ -513,6 +541,13 @@ export default function MapApp() {
             .filter((s) => s.lat && s.lon)
             .map((s) => [s.lat!, s.lon!] as LatLng);
           if (pts.length < 2) return lr;
+          if (lr.leg.shape_id) {
+            const sh = await loadShapeLatest(lr.leg.shape_id);
+            const [s0, s1] = sh ? projectStopsAlong(sh.pl, [pts[0], pts[pts.length - 1]]) : [null, null];
+            if (sh && s0 != null && s1 != null && s1 > s0) {
+              return { ...lr, routed: slicePolyline(sh.pl, s0, s1) };
+            }
+          }
           const road = await fetchRoute(pts);
           return {
             ...lr,
@@ -723,8 +758,10 @@ export default function MapApp() {
       setVehMeta(v);
       const m = mapRef.current;
       if (m && Number.isFinite(v.lat) && Number.isFinite(v.lon)) {
+        // fly to where the marker is drawn (dead-reckoned), not the raw fix behind it
+        const d = peekVehicleAnimator(m)?.displayed(v.id);
         m.getContainer().classList.add("map-moving");
-        m.flyTo([v.lat, v.lon], Math.max(m.getZoom(), 15), panMotion(0.9));
+        m.flyTo(d ? [d.lat, d.lon] : [v.lat, v.lon], Math.max(m.getZoom(), 15), panMotion(0.9));
       }
       void openTripLive(v.id, null, null);
     },
@@ -856,7 +893,11 @@ export default function MapApp() {
         className="absolute inset-0 z-0 h-full w-full"
       >
         {/* bottom-left, away from the zoom + locate column in the right corner */}
-        <AttributionControl position="bottomleft" prefix={false} />
+        {/* road geometry is routed server-side with OSRM — its usage policy asks for credit */}
+        <AttributionControl
+          position="bottomleft"
+          prefix={'Trasy: <a href="https://project-osrm.org/" target="_blank" rel="noopener noreferrer">OSRM</a>'}
+        />
         <MapBridge onMap={handleMap} />
         {basemap.status !== "failed" && tiles.kind === "vector" ? (
           <VectorBaseLayer

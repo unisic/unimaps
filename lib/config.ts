@@ -91,6 +91,25 @@ export const GTFS_BUILD_HOUR = envInt("KB_GTFS_BUILD_HOUR", 3, 0);
  *  default 40 because the server keeps scanning while it builds. */
 export const GTFS_BUILD_CONCURRENCY = envInt("KB_GTFS_BUILD_CONCURRENCY", 10);
 
+/**
+ * Server-side road routing for the shape store (lib/shape-store.ts). The
+ * public OSRM demo server is shared: its policy requires an identifying
+ * User-Agent and ≤1 request/s. KB_OSRM_URL=off disables routing (KB vehicles
+ * then move straight towards the next stop; MZK shapes are unaffected).
+ */
+export const OSRM_URL: string | null = (() => {
+  const v = envStr("KB_OSRM_URL", "https://router.project-osrm.org/route/v1/driving").trim();
+  return v.toLowerCase() === "off" ? null : v;
+})();
+const PUBLIC_OSRM = OSRM_URL !== null && /(^|\/\/)router\.project-osrm\.org\b/.test(OSRM_URL);
+/** Minimum spacing between OSRM requests (clamped to ≥1000 ms on the public demo host). */
+export const OSRM_MIN_INTERVAL_MS = Math.max(PUBLIC_OSRM ? 1000 : 0, envInt("KB_OSRM_MIN_INTERVAL_MS", 1100, 250));
+export const OSRM_USER_AGENT = envStr("KB_OSRM_USER_AGENT", "kb-map/2.0 (+https://github.com/DeBondor/kb-map)");
+/** Road shapes older than this are re-routed gradually (one per 2 min). */
+export const SHAPES_MAX_AGE_DAYS = envInt("KB_SHAPES_MAX_AGE_DAYS", 14);
+/** Persisted shape store (outside output/gtfs, which the builder swaps atomically). */
+export const SHAPES_FILE = envStr("KB_SHAPES_FILE", path.join(OUTPUT_DIR, "shapes", "route-shapes.v1.json"));
+
 export const USER_AGENT = envStr(
   "KB_USER_AGENT",
   "kb-gtfs/1.0 (+https://komunikacjabeskidzka.kiedyprzyjedzie.pl)",

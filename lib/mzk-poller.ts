@@ -5,7 +5,16 @@ import { bearing, metersBetween } from "./geo";
 import { log } from "./logger";
 import { MzkApi, type MzkRunningVehicle, type MzkStopPoint, type MzkLine } from "./mzk-api";
 import { getFleetDetails, type MzkVehicleStatic } from "./mzk-fleet";
+import { mzkRemapDist, mzkStopIndices } from "./mzk-shape";
+import { nextSpeed } from "./route-info";
+import type { ShapeGeometry } from "./shape-store";
 import type { LineInfo, Stop, VehiclePos } from "./types";
+
+/** What the MZK poller needs from the shape store. */
+export interface MzkShapeSink {
+  touchMzk(variantId: number, prio?: "urgent" | "background"): void;
+  geometry(key: string): ShapeGeometry | null;
+}
 
 /**
  * Converts OnTime Cartesian angle (-180..180 or 0..360, counter-clockwise from East)
@@ -34,9 +43,13 @@ export class MzkPoller {
   startedAt = 0;
   lastGoodRefresh = Math.floor(Date.now() / 1000);
 
+  /** road-shape store hook (null = no route info on positions) */
+  shapes: MzkShapeSink | null = null;
+
   private started = false;
   private stopCtl: AbortController | null = null;
   private loopPromise: Promise<void> | null = null;
+  private routeErrLoggedAt = 0;
 
   constructor(api?: MzkApi, refreshIntervalMs = 5000) {
     this.api = api ?? new MzkApi();
@@ -140,6 +153,7 @@ export class MzkPoller {
     const nowSecs = Math.floor(Date.now() / 1000);
     const newPositions = new Map<string, VehiclePos>();
     const newRunningMap = new Map<string, MzkRunningVehicle>();
+    const touchedVariants = new Set<number>();
 
     for (const v of running) {
       if (!v.longitude || !v.latitude || !v.vehicleId) continue;
@@ -168,10 +182,13 @@ export class MzkPoller {
       let nextStopLat: number | null = null;
       let nextStopLon: number | null = null;
 
+      // the stop being served / the next one to arrive at (stopPoints[orderInCourse]
+      // is usually the stop just passed, so it must not be used as "next")
+      const { served, next } = mzkStopIndices(v);
       let targetSymbol: string | null = null;
-      if (v.stopPoints && v.orderInCourse != null && v.stopPoints[v.orderInCourse]) {
-        targetSymbol = v.stopPoints[v.orderInCourse].symbol;
-        nextStopName = v.stopPoints[v.orderInCourse].name;
+      if (next !== null && v.stopPoints?.[next]) {
+        targetSymbol = v.stopPoints[next].symbol;
+        nextStopName = v.stopPoints[next].name;
       } else if (v.nearestSymbol) {
         targetSymbol = v.nearestSymbol;
       }
@@ -243,7 +260,7 @@ export class MzkPoller {
         lat: v.latitude,
         lon: v.longitude,
         vehicleType: 3,
-        currentStopSequence: v.orderInCourse != null ? v.orderInCourse : null,
+        currentStopSequence: served ?? (v.orderInCourse != null ? v.orderInCourse : null),
         atStop: Boolean(v.onStopPoint),
         delay: v.delaySec != null && Number.isFinite(v.delaySec) ? Math.round(v.delaySec) : null,
         timestamp: v.lastPingDate ? Math.floor(v.lastPingDate / 1000) : nowSecs,
@@ -260,7 +277,9 @@ export class MzkPoller {
         sideNumber: v.vehicleId,
         model: fleet.model,
         features: fleet.features,
+        nextStopSeq: next,
       };
+      this.attachRouteInfo(pos, v, this.positions.get(execId), nowSecs, touchedVariants);
 
       newPositions.set(execId, pos);
       this.lastPositionsByVehicle.set(v.vehicleId, pos);
@@ -273,6 +292,74 @@ export class MzkPoller {
     this.lastScan = nowSecs;
     this.scanCount++;
     this.lastGoodRefresh = nowSecs;
+  }
+
+  /**
+   * Shape key, along-route distance (operator reachedMeters remapped onto our
+   * polyline metric), real fix time and cruise speed. Isolated per vehicle so
+   * a bug here can never freeze the whole fleet.
+   */
+  private attachRouteInfo(
+    pos: VehiclePos,
+    v: MzkRunningVehicle,
+    prev: VehiclePos | undefined,
+    nowSecs: number,
+    touched: Set<number>,
+  ): void {
+    try {
+      // the raw ping time (MZK server clock): clamping it to our "now" would make
+      // one ping look like two distinct fixes once the clamp lifts — the client
+      // maps it onto its own clock and clamps future fixes there instead
+      pos.fixAt = v.lastPingDate ? v.lastPingDate / 1000 : nowSecs;
+      const variant = typeof v.variantLoid === "number" && v.variantLoid > 0 ? v.variantLoid : null;
+      pos.shapeKey = variant !== null ? `mzk:${variant}` : null;
+      const shapes = this.shapes;
+      if (shapes && variant !== null) {
+        if (!touched.has(variant)) {
+          touched.add(variant);
+          shapes.touchMzk(variant);
+        }
+        const geom = shapes.geometry(`mzk:${variant}`);
+        const sp = Array.isArray(v.stopPoints) ? v.stopPoints : [];
+        // the variant's stops must line up with this course's stopPoints (stop
+        // indices on the wire refer to the latter) — otherwise ship no shape
+        if (geom && geom.stops.length !== sp.length) pos.shapeKey = null;
+        else if (geom && Number.isFinite(v.reachedMeters)) {
+          const d = mzkRemapDist(
+            v.reachedMeters,
+            sp.map((p) => p?.distance),
+            geom.stops,
+          );
+          if (d !== null) {
+            pos.distM = Math.round(d * 10) / 10;
+            pos.distRev = geom.rev;
+          }
+        }
+      }
+      if (!prev) return;
+      const prevFix = prev.fixAt ?? prev.updatedAt;
+      if (pos.fixAt - prevFix < 0.5) {
+        // same ping as last poll — not a new fix
+        pos.moveDs = prev.moveDs;
+        pos.speed = prev.speed;
+        pos.speedAt = prev.speedAt;
+        return;
+      }
+      const along = pos.distM != null && prev.distM != null && prev.distRev === pos.distRev;
+      const ds = along ? pos.distM! - prev.distM! : metersBetween(prev.lat, prev.lon, pos.lat, pos.lon);
+      const s = nextSpeed(prev.speed, prev.moveDs, ds, pos.fixAt - prevFix, 0, prev.atStop || pos.atStop);
+      pos.moveDs = ds;
+      pos.speed = s ?? prev.speed;
+      pos.speedAt = s !== null ? pos.fixAt : prev.speedAt;
+    } catch (err) {
+      pos.shapeKey = null;
+      pos.distM = null;
+      const now = Date.now();
+      if (now - this.routeErrLoggedAt > 60_000) {
+        this.routeErrLoggedAt = now;
+        log.error("mzk-poller", `route info failed for ${pos.execId}: ${err}`);
+      }
+    }
   }
 
   private async runLoop(signal: AbortSignal): Promise<void> {

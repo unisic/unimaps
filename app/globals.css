@@ -345,6 +345,10 @@ html, body {
   transition: none !important;
 }
 .leaflet-marker-icon.veh-marker:hover { z-index: 10000 !important; }
+/* smooth-motion mode ("Płynny ruch pojazdów"): the rAF animator owns marker
+   positions and arrow angles frame by frame — a CSS glide would only lag it */
+.veh-motion .leaflet-marker-icon.veh-marker { transition: none; }
+.veh-motion .veh-arrow { transition: none; }
 
 /* ---------- leaflet dark skin ---------- */
 

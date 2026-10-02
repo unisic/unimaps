@@ -1,7 +1,7 @@
 import { badRequest, upstreamError } from "@/lib/api-helpers";
-import { isRecord, parseIntStrict, pyTruthy } from "@/lib/kb-api";
+import { asRecord, isRecord, parseIntStrict, pyTruthy } from "@/lib/kb-api";
 import { resolveMzkTrip } from "@/lib/mzk-trip";
-import { getApi, getPoller, startPoller } from "@/lib/poller-singleton";
+import { getApi, getPoller, kbShapeRef, startPoller } from "@/lib/poller-singleton";
 import { allowRequest, clientIp, tooManyRequests } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
@@ -30,10 +30,13 @@ export async function GET(req: Request): Promise<Response> {
     }
 
     const data = await getApi().fetchTripExecution(execId, index);
+    let body: unknown = pyTruthy(data) ? data : {};
     if (pyTruthy(data) && isRecord(data)) {
       getPoller().ingestTripExecution(execId, data);
+      // stored road geometry for this trip's stop pattern (never mutate `data`)
+      body = { ...data, ...kbShapeRef(asRecord(data.trip)) };
     }
-    return Response.json(pyTruthy(data) ? data : {}, {
+    return Response.json(body, {
       headers: {
         "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
         Pragma: "no-cache",

@@ -111,6 +111,23 @@ export interface VehiclePos {
   sideNumber?: string;
   model?: string;
   features?: VehicleFeatures;
+  /* ---- route info for client-side motion (not part of the Python port) ---- */
+  /** epoch secs the current position was (estimated to be) first reported */
+  fixAt?: number;
+  /** road-shape store key ("kb:<hex>" / "mzk:<variant>") */
+  shapeKey?: string | null;
+  /** metres along that shape, in the shared polyline metric */
+  distM?: number | null;
+  /** shape revision distM was measured against */
+  distRev?: string;
+  /** times/stopPoints index of the next stop the vehicle will arrive at */
+  nextStopSeq?: number | null;
+  /** cruise speed m/s, from consecutive moving fixes only */
+  speed?: number | null;
+  /** epoch secs of the last speed sample */
+  speedAt?: number;
+  /** displacement (m) of the latest distinct fix vs its predecessor */
+  moveDs?: number;
 }
 
 /** Wire shape of one vehicle in GET /api/vehicles (VehiclePos.to_json()). */
@@ -136,6 +153,16 @@ export interface VehicleJson {
   side_number?: string;
   model?: string;
   features?: VehicleFeatures;
+  /* ---- motion extras (vehicleExtras in poller-singleton; emitted only when known) ---- */
+  /** "<shapeKey>.<rev6>" — road geometry from GET /api/shapes */
+  shape?: string;
+  /** metres along `shape` */
+  dist_m?: number;
+  /** epoch secs, 0.1 s — when this position was first reported */
+  fix_at?: number;
+  next_stop_seq?: number;
+  /** cruise speed m/s */
+  speed?: number;
 }
 
 /** GET /api/vehicles response. */
@@ -193,6 +220,8 @@ export interface HealthResponse {
   last_loop_error: string | null;
   /** epoch secs of the last successful stop-list load */
   stops_loaded_at: number;
+  /** road-shape store counters — informational, never affects `status` */
+  shapes?: Record<string, unknown>;
 }
 
 /** One row of an upstream departures board (loosely typed). */

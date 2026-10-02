@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useId, useRef, useState } from "react";
 import TopBarSearch, { type TopBarSearchHandle } from "@/components/TopBarSearch";
 import { useAnnouncements } from "@/lib/client/announcements";
 import {
@@ -10,6 +10,7 @@ import {
   COLOR_EARLY,
   COLOR_LATE,
 } from "@/lib/client/format";
+import { useSmoothMotion } from "@/lib/client/smoothMotion";
 import type { GeoPos } from "@/components/hooks";
 import type { Stop, Vehicle } from "@/lib/client/types";
 
@@ -87,6 +88,54 @@ export interface TopBarProps {
   onShowToast?: (msg: string) => void;
 }
 
+/** One settings toggle row (role="switch"), optionally with a hint line. */
+function SwitchRow({
+  checked,
+  onToggle,
+  label,
+  hint,
+  className = "",
+}: {
+  checked: boolean;
+  onToggle: () => void;
+  label: string;
+  hint?: string;
+  className?: string;
+}) {
+  const hintId = useId();
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      role="switch"
+      aria-checked={checked}
+      aria-describedby={hint ? hintId : undefined}
+      className={`flex w-full items-center justify-between gap-3 rounded-xl bg-white/4 px-3 py-2.5 text-left transition-colors hover:bg-white/8 ${className}`}
+    >
+      <span className="flex flex-col">
+        <span className="text-text">{label}</span>
+        {hint && (
+          <span id={hintId} className="text-[11px] leading-snug text-text-faint">
+            {hint}
+          </span>
+        )}
+      </span>
+      <span
+        className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full px-0.5 transition-colors ${
+          checked ? "bg-brand" : "bg-white/15"
+        }`}
+        aria-hidden
+      >
+        <span
+          className={`h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-200 ease-out ${
+            checked ? "translate-x-4" : "translate-x-0"
+          }`}
+        />
+      </span>
+    </button>
+  );
+}
+
 function LegendDot({ color, label }: { color: string; label: string }) {
   return (
     <span className="inline-flex items-center gap-1.5 text-text-mute">
@@ -121,6 +170,8 @@ function TopBar({
 }: TopBarProps) {
   const [menu, setMenu] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
+  /* per-browser preference; only this component re-renders on toggle */
+  const [smoothMotion, setSmoothMotion] = useSmoothMotion();
   /* store notifies at most once per 15 min — no extra work in the 5 s cycle */
   const { unseen } = useAnnouncements();
 
@@ -307,27 +358,19 @@ function TopBar({
             </>
           )}
 
-          <button
-            type="button"
-            onClick={onToggleStops}
-            role="switch"
-            aria-checked={stopsVisible}
-            className="mt-3 flex w-full items-center justify-between rounded-xl bg-white/4 px-3 py-2.5 transition-colors hover:bg-white/8"
-          >
-            <span className="text-text">Przystanki na mapie</span>
-            <span
-              className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full px-0.5 transition-colors ${
-                stopsVisible ? "bg-brand" : "bg-white/15"
-              }`}
-              aria-hidden
-            >
-              <span
-                className={`h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-200 ease-out ${
-                  stopsVisible ? "translate-x-4" : "translate-x-0"
-                }`}
-              />
-            </span>
-          </button>
+          <SwitchRow
+            checked={stopsVisible}
+            onToggle={onToggleStops}
+            label="Przystanki na mapie"
+            className="mt-3"
+          />
+          <SwitchRow
+            checked={smoothMotion}
+            onToggle={() => setSmoothMotion(!smoothMotion)}
+            label="Płynny ruch pojazdów"
+            hint="Szacuje pozycję autobusu między aktualizacjami"
+            className="mt-2"
+          />
 
           <p className="mt-4 text-[11px] font-semibold uppercase tracking-wider text-text-faint">
             Kolory pojazdów

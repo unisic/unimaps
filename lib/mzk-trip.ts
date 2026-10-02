@@ -1,44 +1,26 @@
 /**
  * Resolution of MZK trips, courses, and high-precision route shapes.
  */
-import { getMzkApi, getMzkPoller } from "./poller-singleton";
+import { getMzkApi, getMzkPoller, getShapes } from "./poller-singleton";
 
-const variantShapeCache = new Map<number, [number, number][]>();
-
+/** Road polyline of an MZK variant — served from the shape store (fetched on
+ *  demand, deduped, negative-cached and persisted there). */
 export async function getVariantShape(variantId: number): Promise<[number, number][] | null> {
-  if (variantShapeCache.has(variantId)) {
-    return variantShapeCache.get(variantId)!;
-  }
   try {
-    const api = getMzkApi();
-    const tc = (await api.fetchTheoreticalCourse(variantId)) as {
-      segments?: Array<{
-        nodes?: Array<{
-          latitude: number;
-          longitude: number;
-        }>;
-      }>;
-    };
-    if (tc?.segments?.length) {
-      const shape: [number, number][] = [];
-      for (const seg of tc.segments) {
-        if (seg.nodes) {
-          for (const node of seg.nodes) {
-            if (Number.isFinite(node.latitude) && Number.isFinite(node.longitude)) {
-              shape.push([node.latitude, node.longitude]);
-            }
-          }
-        }
-      }
-      if (shape.length >= 2) {
-        variantShapeCache.set(variantId, shape);
-        return shape;
-      }
-    }
+    return await getShapes().getMzkShape(variantId);
   } catch {
-    /* fallback to OSRM */
+    return null;
   }
-  return null;
+}
+
+/** `shape_id` (the fleet's wire id, so the client can reuse the fleet track's
+ *  shape) + `shape_status` for a trip response. */
+function shapeRef(variantId: number | null | undefined): { shape_id?: string; shape_status: string } {
+  if (!variantId) return { shape_status: "none" };
+  const shapes = getShapes();
+  const key = `mzk:${variantId}`;
+  const id = shapes.wireId(key);
+  return { ...(id ? { shape_id: id } : {}), shape_status: shapes.status(key) };
 }
 
 function formatHHMM(ms: number): string {
@@ -111,6 +93,7 @@ export async function resolveMzkTrip(identifier: string): Promise<Record<string,
       },
       vehicle_trip_index: cached.orderInCourse ?? 0,
       shape,
+      ...shapeRef(cached.variantLoid),
     };
   }
 
@@ -188,6 +171,7 @@ export async function resolveMzkTrip(identifier: string): Promise<Record<string,
         vehicle: null,
         vehicle_trip_index: 0,
         shape,
+        ...shapeRef(variantId),
       };
     }
   }

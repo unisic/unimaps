@@ -36,6 +36,8 @@ export interface ConnectionLeg {
   durationMins: number;
   stopsCount: number;
   stops?: ConnectionLegStop[];
+  /** stored road geometry of the leg's trip pattern (GET /api/shapes), when routed */
+  shape_id?: string;
 }
 
 export interface ConnectionItinerary {

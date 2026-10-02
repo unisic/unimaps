@@ -20,10 +20,11 @@ Built with **Next.js 16**, **TypeScript**, and **Leaflet / MapLibre GL**. A back
 ## Features
 
 - **Live Fleet Tracking**: Real-time GPS locations of all running buses updated every 4 s. Headings are computed from actual physical movement (with jitter filtering), with live delay badges (`+4 min`) and active stop progress tracking.
+- **Smooth Vehicle Motion**: Between position updates buses are dead-reckoned along their road shape at their cruise speed — they stop short of the next stop, wait while dwelling, and correct smoothly when a new fix arrives instead of jumping. Per-browser switch in the map settings ("Płynny ruch pojazdów", off by default when the OS asks for reduced motion).
 - **Multi-leg Journey Planner**: Connection search supporting direct trips and multi-leg transfers with automatic walkable hub transfers (up to 350 m between platforms or opposite street sides). Fuzzy stop resolution handles Polish diacritics, punctuation (`PIETRZYKOWICE, KOŚCIÓŁ`), and street suffixes seamlessly across calendar boundaries.
 - **GTFS & GTFS-Realtime Feeds**: Automatic nightly builds of static multi-day GTFS (`stops`, `routes`, `trips`, `stop_times`, `shapes`, `calendar`) published atomically, plus standard GTFS-RT `VehiclePositions` protobuf at `/api/gtfs-rt.pb`.
-- **Interactive UI & PWA**: Vector base map (OpenFreeMap with dark mode and raster fallback), stop departures boards with live countdowns, route timeline sheets with OSRM road geometry, keyboard command palette (`Cmd/Ctrl+K`), and installable PWA support.
-- **Self-Healing Poller**: 3-tier polling architecture (full scan every 180 s, smart scan every 60 s, active vehicle refresh every 15 s) with on-demand candidate discovery, ghost vehicle filtering, and health monitoring (`/api/health`).
+- **Interactive UI & PWA**: Vector base map (OpenFreeMap with dark mode and raster fallback), stop departures boards with live countdowns, route timeline sheets with road geometry routed and stored server-side, keyboard command palette (`Cmd/Ctrl+K`), and installable PWA support.
+- **Self-Healing Poller**: 3-tier polling architecture (full scan every 90 s, smart scan every 30 s, active vehicle refresh every 10 s) with on-demand candidate discovery, ghost vehicle filtering, and health monitoring (`/api/health`).
 
 ## Quick Start
 
@@ -62,7 +63,24 @@ The app is served at `http://localhost:8080`.
 | `/api/stops` | All 950+ stops with coordinates and platform metadata |
 | `/api/lines` | Active bus lines catalog extracted from GTFS |
 | `/api/stop/:id/departures` | Live & scheduled departures for a specific stop |
-| `/api/health` | Service health status, vehicle count, and feed freshness |
+| `/api/shapes?ids=...` | Stored road geometry (encoded polyline, precision 6, + per-stop distances) for the `shape` ids advertised by `/api/vehicles` and trip responses; immutable-cached |
+| `/api/health` | Service health status, vehicle count, feed freshness and road-shape store counters |
+
+## Road Shapes
+
+Road-following route geometry is computed **on the server** and stored, instead of every browser calling a router:
+
+- **KB**: each distinct stop pattern is routed through [OSRM](https://project-osrm.org/) by a single throttled worker (≥ 1 s between requests on the public demo server, identifying User-Agent, circuit breaker on errors). New patterns are queued as soon as a vehicle or GTFS trip uses them; road shapes are re-routed gradually after `KB_SHAPES_MAX_AGE_DAYS`. Bootstrap is ~600 requests (~11 min), then a few dozen a day.
+- **MZK**: the operator's own variant geometry (`getTheoreticalCourseDetails`).
+- Stored in `output/shapes/route-shapes.v1.json` (Docker volume `kb-output`), written atomically with a `.bak`; one process owns it (lock file), others are read-only. Delete the file to rebuild from scratch; `/api/health` → `shapes` shows progress.
+
+| Variable | Default | |
+|---|---|---|
+| `KB_OSRM_URL` | `https://router.project-osrm.org/route/v1/driving` | `off` disables routing (KB buses then move straight towards the next stop) |
+| `KB_OSRM_MIN_INTERVAL_MS` | `1100` | min. spacing between OSRM requests (≥ 1000 on the public host) |
+| `KB_OSRM_USER_AGENT` | `kb-map/2.0 (+https://github.com/DeBondor/kb-map)` | required by the OSRM usage policy |
+| `KB_SHAPES_MAX_AGE_DAYS` | `14` | |
+| `KB_SHAPES_FILE` | `output/shapes/route-shapes.v1.json` | |
 
 ## Static GTFS Generation
 

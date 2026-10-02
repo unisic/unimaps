@@ -7,7 +7,8 @@
  * A failed build keeps the old feed (atomic tmp-dir publish in gtfs-builder)
  * and backs off 30 min. After a successful build the process-lifetime caches
  * (stop directions, line catalog) are invalidated so arrows and the palette
- * pick up the new feed without a restart.
+ * pick up the new feed without a restart, and `onBuilt` lets the caller
+ * re-seed the road-shape store from the fresh stop patterns.
  */
 import * as config from "./config";
 import { buildGtfs, gtfsFeedDate } from "./gtfs-builder";
@@ -32,7 +33,7 @@ function warsawHour(): number {
   return Math.floor(nowSecs() / 3600);
 }
 
-async function maybeBuild(st: RefreshState): Promise<void> {
+async function maybeBuild(st: RefreshState, onBuilt?: () => void): Promise<void> {
   if (st.building || Date.now() < st.nextAttemptAt) return;
   const feedDate = gtfsFeedDate();
   const today = config.todayLocalISO();
@@ -47,6 +48,7 @@ async function maybeBuild(st: RefreshState): Promise<void> {
     invalidateLines();
     invalidateRouter();
     log.info("gtfs", `feed rebuilt for ${today}`);
+    onBuilt?.();
   } catch (err) {
     st.nextAttemptAt = Date.now() + FAIL_BACKOFF_MS;
     log.error("gtfs", `feed rebuild failed (retry in 30 min): ${err}`);
@@ -60,15 +62,15 @@ type GlobalWithState = typeof globalThis & { [KEY]?: RefreshState };
 
 /** Idempotent; the globalThis guard survives dev-mode HMR (same pattern as the
  *  poller singleton). Timers are unref'd so they never hold the process open. */
-export function startGtfsRefresh(): void {
+export function startGtfsRefresh(onBuilt?: () => void): void {
   if (!config.GTFS_AUTOBUILD) return;
   const g = globalThis as GlobalWithState;
   if (g[KEY]) return;
   const st: RefreshState = { building: false, nextAttemptAt: 0 };
   g[KEY] = st;
   const first = setTimeout(() => {
-    void maybeBuild(st);
-    const timer = setInterval(() => void maybeBuild(st), CHECK_INTERVAL_MS);
+    void maybeBuild(st, onBuilt);
+    const timer = setInterval(() => void maybeBuild(st, onBuilt), CHECK_INTERVAL_MS);
     timer.unref?.();
   }, FIRST_CHECK_DELAY_MS);
   first.unref?.();

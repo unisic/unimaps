@@ -1,11 +1,31 @@
 import { badRequest } from "@/lib/api-helpers";
-import { findConnections } from "@/lib/router";
+import { getShapes } from "@/lib/poller-singleton";
+import { findConnections, type ConnectionItinerary } from "@/lib/router";
+import { rawTripId } from "@/lib/shape-patterns";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Attach the stored road-shape id to each leg whose trip pattern is routed,
+ *  so the client draws legs from server geometry instead of calling OSRM.
+ *  Best effort — a store problem just leaves the ids off. */
+function attachLegShapes(connections: ConnectionItinerary[]): void {
+  try {
+    const shapes = getShapes();
+    for (const c of connections) {
+      for (const leg of c.legs) {
+        const key = shapes.keyForRawTrip(rawTripId(String(leg.tripId)));
+        const id = key ? shapes.wireId(key) : null;
+        if (id) leg.shape_id = id;
+      }
+    }
+  } catch {
+    /* no shapes — legs fall back to client routing */
+  }
+}
 
 /**
  * GET /api/connections?from=...&to=...[&time=HH:MM][&date=YYYY-MM-DD][&direct=true][&minTransfer=N][&sortBy=departure|duration][&limit=N]
@@ -62,6 +82,7 @@ export async function GET(req: Request): Promise<Response> {
       dayLabel,
       sortBy,
     });
+    attachLegShapes(connections);
     return Response.json(
       { count: connections.length, connections },
       { headers: { "Cache-Control": "public, max-age=60" } },

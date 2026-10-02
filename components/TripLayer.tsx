@@ -1,12 +1,16 @@
 "use client";
 
-import { memo, useEffect, useMemo, useState } from "react";
-import { CircleMarker, Marker, Polyline, Tooltip, useMap } from "react-leaflet";
+import { memo, useEffect, useRef, useState } from "react";
+import { CircleMarker, Polyline, Tooltip, useMap } from "react-leaflet";
 import L from "leaflet";
 import { displayStopName, formatPlatform, isBusStation, isMzk, operatorColor } from "@/lib/client/format";
-import { bearingBucket, makeVehicleIcon } from "@/lib/client/leafletIcons";
+import { makeVehicleIcon } from "@/lib/client/leafletIcons";
 import { prefersReducedMotion } from "@/lib/client/motion";
 import type { LatLng, TripView, Vehicle } from "@/lib/client/types";
+import { acquireVehicleAnimator, releaseVehicleAnimator, type VehicleAnimator } from "@/lib/client/vehicleAnimator";
+
+/** Animator view id of the tracked bus (fleet views are keyed by vehicle id). */
+const TRACKED = "trip:tracked";
 
 interface Props {
   trip: TripView | null;
@@ -38,25 +42,116 @@ function TripLayer({ trip, desktop, vehMeta, liveVehicle }: Props) {
   const tripOp = trip?.operator ?? lastLive?.operator ?? vehMeta?.operator;
   const isMzkTrip = isMzk(tripOp, trip?.line);
   const lineColor = trip ? operatorColor(tripOp, trip.line === "…" ? null : trip.line) : "";
-  const liveBB = bearingBucket(lastLive?.bearing);
-  /* primitive presence flags so the icon memo can key on values, not identities */
-  const hasLive = lastLive != null;
-  const hasTripVeh = trip?.vehicle != null;
+  const op: "KB" | "MZK" = isMzkTrip ? "MZK" : "KB";
 
-  const vehicleIcon = useMemo(() => {
-    if (!trip) return null;
-    const op: "KB" | "MZK" = isMzkTrip ? "MZK" : "KB";
-    // live fix present → line color + live heading arrow
-    if (lastLive) return makeVehicleIcon(trip.line, lineColor, liveBB, op);
-    if (trip.vehicle) return makeVehicleIcon(trip.line, lineColor, null, op);
-    // fallback to the clicked vehicle (live only), with its own line + heading
-    if (trip.isLive && vehMeta) {
-      const fLine = vehMeta.line || trip.line;
-      return makeVehicleIcon(fLine, lineColor, vehMeta.bearing ?? null, op);
+  /* The tracked bus marker. A live fleet vehicle → an animator view bound to
+   * the SAME track as its fleet marker (it continues from where it was drawn,
+   * no jump on open/close); otherwise a fixed marker at the exec's opening fix
+   * or the clicked vehicle. Icons key on primitives only — the heading arrow
+   * is rotated by the animator, so no setIcon (and no pop) on turns. */
+  const trackId = lastLive?.id ?? null;
+  let iconLine: string | null = null;
+  let iconHeading = false;
+  if (trip) {
+    if (lastLive) {
+      iconLine = trip.line;
+      iconHeading = lastLive.bearing != null || lastLive.shape != null;
+    } else if (trip.vehicle) {
+      iconLine = trip.line;
+    } else if (trip.isLive && vehMeta) {
+      // fallback to the clicked vehicle (live only), with its own line + heading
+      iconLine = vehMeta.line || trip.line;
+      iconHeading = vehMeta.bearing != null;
     }
-    return null;
+  }
+  const iconKey = iconLine === null ? null : `${iconLine}|${lineColor}|${op}|${iconHeading ? 1 : 0}`;
+  const staticLat = trip?.vehicle?.lat ?? (trip?.isLive && vehMeta ? vehMeta.lat : null);
+  const staticLon = trip?.vehicle?.lon ?? (trip?.isLive && vehMeta ? vehMeta.lon : null);
+  const staticHeading = vehMeta?.bearing ?? null;
+  const liveLat = lastLive?.lat ?? null;
+  const liveLon = lastLive?.lon ?? null;
+
+  const animRef = useRef<VehicleAnimator | null>(null);
+  const markerRef = useRef<{ marker: L.Marker; key: string } | null>(null);
+
+  useEffect(() => {
+    const anim = acquireVehicleAnimator(map);
+    animRef.current = anim;
+    return () => {
+      anim.removeView(TRACKED);
+      markerRef.current?.marker.remove();
+      markerRef.current = null;
+      animRef.current = null;
+      releaseVehicleAnimator(map);
+    };
+  }, [map]);
+
+  useEffect(() => {
+    const anim = animRef.current;
+    if (!anim) return;
+    // where the fleet marker of this bus is drawn right now, else its raw fix
+    const live = trackId !== null ? anim.displayed(trackId) : null;
+    const pos: LatLng | null = live
+      ? [live.lat, live.lon]
+      : liveLat !== null && liveLon !== null
+        ? [liveLat, liveLon]
+        : staticLat !== null && staticLon !== null
+          ? [staticLat, staticLon]
+          : null;
+    if (!iconKey || iconLine === null || !pos) {
+      anim.removeView(TRACKED);
+      markerRef.current?.marker.remove();
+      markerRef.current = null;
+      return;
+    }
+    const heading = iconHeading ? (live?.heading ?? staticHeading ?? 0) : null;
+    let cur = markerRef.current;
+    if (!cur) {
+      const marker = L.marker(pos, {
+        icon: makeVehicleIcon(iconLine, lineColor, heading, op),
+        zIndexOffset: 200,
+        keyboard: false,
+      }).addTo(map);
+      cur = { marker, key: iconKey };
+      markerRef.current = cur;
+    } else if (cur.key !== iconKey) {
+      cur.marker.setIcon(makeVehicleIcon(iconLine, lineColor, heading, op));
+      cur.key = iconKey;
+      anim.refreshViewDom(TRACKED);
+    }
+    if (trackId !== null) {
+      // the track may not be ingested yet (deep link): the view waits for it
+      anim.addView(TRACKED, trackId, cur.marker, "tracked");
+    } else {
+      anim.removeView(TRACKED);
+      cur.marker.setLatLng(pos);
+    }
+    // liveLat/liveLon only seed a brand-new marker — not deps, or every poll would re-run this
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [trip?.line, lineColor, hasLive, liveBB, hasTripVeh, trip?.isLive, vehMeta?.line, vehMeta?.bearing, isMzkTrip]);
+  }, [map, iconKey, iconLine, iconHeading, lineColor, op, trackId, staticLat, staticLon, staticHeading]);
+
+  /* follow the drawn route — unless it IS the fleet shape the track already uses */
+  const tripGen = trip?.gen ?? -1;
+  const routed = trip?.routed ?? null;
+  const tripShapeId = trip?.shapeId ?? null;
+  const liveShape = lastLive?.shape ?? null;
+  const tripStops = trip?.stops;
+  const rawTimes = trip?.rawTimes;
+  useEffect(() => {
+    const anim = animRef.current;
+    if (!anim || trackId === null || !routed || routed.length < 2 || !tripStops || !rawTimes) return;
+    if (tripShapeId && tripShapeId === liveShape) return;
+    const key = `trip:${tripGen}`;
+    // stop coords aligned with the trip's times (current_stop_sequence indexes them)
+    const byTime = new Map(tripStops.map((r) => [r.t, r.s]));
+    const refs = rawTimes.map((t): LatLng | null => {
+      const st = byTime.get(t);
+      return st ? [st.lat, st.lon] : null;
+    });
+    anim.setTripShape(key, routed, refs);
+    anim.overrideShape(trackId, key);
+    return () => anim.overrideShape(trackId, null);
+  }, [trackId, routed, tripShapeId, liveShape, tripGen, tripStops, rawTimes]);
 
   // Fit bounds once per drawn trip, after routing settles — padded so the
   // route is not hidden under the sheet (mobile) or the panel (desktop).
@@ -119,20 +214,6 @@ function TripLayer({ trip, desktop, vehMeta, liveVehicle }: Props) {
           </Tooltip>
         </CircleMarker>
       ))}
-      {vehicleIcon && (() => {
-        // freshest source first: the last live fix from the poll, then the
-        // exec's opening fix, then the clicked vehicle's own position
-        const pos: LatLng | null = lastLive
-          ? [lastLive.lat, lastLive.lon]
-          : trip.vehicle
-            ? [trip.vehicle.lat, trip.vehicle.lon]
-            : trip.isLive && vehMeta
-              ? [vehMeta.lat, vehMeta.lon]
-              : null;
-        return pos ? (
-          <Marker position={pos} icon={vehicleIcon} zIndexOffset={200} keyboard={false} />
-        ) : null;
-      })()}
     </>
   );
 }

@@ -9,6 +9,8 @@ import * as config from "./config";
 import { bearing, metersBetween } from "./geo";
 import { KbApi, asRecord, isRecord, parseIntStrict, pyTruthy } from "./kb-api";
 import { log } from "./logger";
+import { estimateFixAt, kbDistAlong, nextSpeed, type KbShapeSink } from "./route-info";
+import { buildKbPattern, type KbPattern } from "./shape-patterns";
 import type { Stop, VehicleJson, VehiclePos, VehiclesResponse } from "./types";
 
 const rt = GtfsRealtimeBindings.transit_realtime;
@@ -105,6 +107,21 @@ function isIdx(v: unknown): v is number {
   return typeof v === "number" && Number.isInteger(v);
 }
 
+/**
+ * Index of the next stop a KB vehicle will arrive at (port of the inline
+ * _parse_position logic): next_departure_index, else vehicle_trip_index — and
+ * past the stop being served while the bus sits in its zone. Null when out of
+ * range.
+ */
+export function kbNextStopIndex(vti: unknown, ndi: unknown, atStop: boolean, n: number): number | null {
+  let targetIdx: number | null = null;
+  if (isIdx(ndi) && ndi >= 0 && ndi < n) targetIdx = ndi;
+  if (targetIdx === null && isIdx(vti) && vti >= 0 && vti < n) targetIdx = vti;
+  if (targetIdx === null) return null;
+  const idx = atStop && isIdx(vti) && targetIdx === vti ? targetIdx + 1 : targetIdx;
+  return idx >= 0 && idx < n ? idx : null;
+}
+
 /** VehiclePos -> wire JSON (port of VehiclePos.to_json). */
 export function vehicleToJson(v: VehiclePos): VehicleJson {
   return {
@@ -184,6 +201,8 @@ export interface LivePollerOptions {
   smartScanInterval?: number;
   smartScanWindow?: number;
   batchSize?: number;
+  /** road-shape store: pattern keys, along-route distance (optional) */
+  shapes?: KbShapeSink | null;
 }
 
 /**
@@ -233,6 +252,11 @@ export class LivePoller {
   private stopEarliest = new Map<string, number>();
   private stopsById = new Map<number, Stop>();
   private stopsByUrlId = new Map<string, Stop>();
+  /** road-shape store hook (null = no route info on positions) */
+  shapes: KbShapeSink | null = null;
+  /** stop-list-dependent pattern memo; cleared on every stop reload */
+  private patternMemo = new Map<string, KbPattern | null>();
+  private routeErrLoggedAt = 0;
 
   private started = false;
   private stopCtl: AbortController | null = null;
@@ -253,6 +277,7 @@ export class LivePoller {
     this.smartScanInterval = opts.smartScanInterval ?? config.LIVE_SMART_SCAN_INTERVAL;
     this.smartScanWindow = opts.smartScanWindow ?? config.LIVE_SMART_SCAN_WINDOW_SEC;
     this.batchSize = opts.batchSize ?? config.LIVE_BATCH_SIZE;
+    this.shapes = opts.shapes ?? null;
   }
 
   /**
@@ -277,6 +302,8 @@ export class LivePoller {
       this.stops = stops;
       this.stopsById = byId;
       this.stopsByUrlId = byUrlId;
+      // pattern keys/coords depend on the stop list
+      this.patternMemo.clear();
       // drop scan state for stops that no longer exist so the maps stay bounded;
       // surviving keys are urlIds, their carried state remains valid
       for (const key of [...this.stopRescanAt.keys()]) if (!byUrlId.has(key)) this.stopRescanAt.delete(key);
@@ -608,6 +635,7 @@ export class LivePoller {
               pos.bearing = prev.bearing;
             }
           }
+          this.attachRouteInfo(pos, prev, asRecord(resp), "urgent");
           this.positions.set(eid, pos);
           this.notFound.delete(eid);
           changed = true;
@@ -723,18 +751,16 @@ export class LivePoller {
     let nextName: string | null = null;
     let nextLat: number | null = null;
     let nextLon: number | null = null;
-    if (targetIdx !== null) {
-      const idx = atStop && isIdx(vti) && targetIdx === vti ? targetIdx + 1 : targetIdx;
-      if (idx >= 0 && idx < times.length) {
-        const entry = times[idx];
-        if (isRecord(entry)) {
-          const c = this.stopCoords(entry);
-          if (c !== null) {
-            const [clat, clon] = c;
-            nextName = pyTruthy(entry.stop_name) ? String(entry.stop_name) : "";
-            nextLat = clat;
-            nextLon = clon;
-          }
+    const nextIdx = kbNextStopIndex(vti, ndi, atStop, times.length);
+    if (nextIdx !== null) {
+      const entry = times[nextIdx];
+      if (isRecord(entry)) {
+        const c = this.stopCoords(entry);
+        if (c !== null) {
+          const [clat, clon] = c;
+          nextName = pyTruthy(entry.stop_name) ? String(entry.stop_name) : "";
+          nextLat = clat;
+          nextLon = clon;
         }
       }
     }
@@ -782,7 +808,94 @@ export class LivePoller {
       anchorLat: lat,
       anchorLon: lon,
       finished,
+      nextStopSeq: nextIdx,
     };
+  }
+
+  /** Resolve a trip times entry to its physical stop (same rules as stopCoords). */
+  private resolveStop(t: Record<string, unknown>): { id: string; lat: number; lon: number } | null {
+    const desig = t.designator;
+    let s: Stop | undefined;
+    if (isIdx(desig)) s = this.stopsById.get(desig);
+    if (!s && typeof t.place_id === "string") s = this.stopsByUrlId.get(t.place_id);
+    return s ? { id: s.stopId, lat: s.lat, lon: s.lon } : null;
+  }
+
+  /** Road-shape pattern for a trip's times (memoized per stop list). */
+  kbPatternFor(times: readonly unknown[], line: string, dir: string): KbPattern | null {
+    const sig =
+      `${line}\u0001${dir}\u0001` +
+      times
+        .map((t) => {
+          const r = isRecord(t) ? t : {};
+          return isIdx(r.designator) ? String(r.designator) : typeof r.place_id === "string" ? `p${r.place_id}` : "?";
+        })
+        .join(",");
+    if (this.patternMemo.has(sig)) return this.patternMemo.get(sig) ?? null;
+    const p = buildKbPattern(times, line, dir, (t) => this.resolveStop(t));
+    if (this.patternMemo.size >= 4000) this.patternMemo.clear();
+    this.patternMemo.set(sig, p);
+    return p;
+  }
+
+  /**
+   * Route info for the client motion engine: shape key, fix time, along-route
+   * distance and cruise speed. Isolated per vehicle — a bug here must never
+   * abort a refresh (the vehicle just ships without route info).
+   */
+  private attachRouteInfo(
+    pos: VehiclePos,
+    prev: VehiclePos | undefined,
+    resp: Record<string, unknown>,
+    prio: "urgent" | "background",
+  ): void {
+    try {
+      const moved = !prev || Math.abs(pos.lat - prev.lat) > 1e-7 || Math.abs(pos.lon - prev.lon) > 1e-7;
+      pos.fixAt = estimateFixAt(prev, pos.updatedAt, moved, Math.max(30, 3 * this.refreshInterval));
+      const shapes = this.shapes;
+      let geomRev: string | undefined;
+      if (shapes) {
+        const trip = asRecord(resp.trip);
+        const times: unknown[] = Array.isArray(trip.times) ? trip.times : [];
+        const pattern = this.kbPatternFor(times, pos.line, pos.headsign);
+        pos.shapeKey = pattern?.key ?? null;
+        if (pattern) shapes.touchKb(pattern, prio);
+        const geom = pos.shapeKey ? shapes.geometry(pos.shapeKey) : null;
+        geomRev = geom?.rev;
+        const sameShape = !!prev && prev.shapeKey === pos.shapeKey && prev.distRev === geomRev;
+        if (geom && (moved || !sameShape)) {
+          const hint = sameShape && prev?.distM != null ? prev.distM : undefined;
+          pos.distM = kbDistAlong(geom, pos.lat, pos.lon, pos.currentStopSequence, pos.nextStopSeq ?? null, hint);
+          pos.distRev = geom.rev;
+        } else if (geom && prev) {
+          pos.distM = prev.distM;
+          pos.distRev = prev.distRev;
+        }
+      }
+      if (!prev) return;
+      if (!moved) {
+        pos.moveDs = prev.moveDs;
+        pos.speed = prev.speed;
+        pos.speedAt = prev.speedAt;
+        return;
+      }
+      const along =
+        pos.distM != null && prev.distM != null && prev.shapeKey === pos.shapeKey && prev.distRev === pos.distRev;
+      const ds = along ? pos.distM! - prev.distM! : metersBetween(prev.lat, prev.lon, pos.lat, pos.lon);
+      const prevFix = prev.fixAt ?? prev.updatedAt;
+      const v = nextSpeed(prev.speed, prev.moveDs, ds, pos.fixAt - prevFix, prev.updatedAt - prevFix, prev.atStop || pos.atStop);
+      pos.moveDs = ds;
+      pos.speed = v ?? prev.speed;
+      pos.speedAt = v !== null ? pos.fixAt : prev.speedAt;
+    } catch (err) {
+      pos.shapeKey = null;
+      pos.distM = null;
+      const now = Date.now();
+      if (now - this.routeErrLoggedAt > 60_000) {
+        this.routeErrLoggedAt = now;
+        log.error("rt", `route info failed for ${pos.execId}: ${err}`);
+      }
+    }
   }
 
   /** A vehicle whose feed has frozen: no live delay estimate and not moving. */
@@ -843,6 +956,7 @@ export class LivePoller {
         pos.bearing = prev.bearing;
       }
     }
+    this.attachRouteInfo(pos, prev, resp, "urgent");
     this.positions.set(eid, pos);
     this.notFound.delete(eid);
     this.lastGoodRefresh = nowTs;

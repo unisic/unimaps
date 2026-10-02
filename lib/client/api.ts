@@ -1,4 +1,4 @@
-import type { ConnectionItinerary, ConnectionsResponse, LatLng, Trip } from "./types";
+import type { ConnectionItinerary, ConnectionsResponse, LatLng, Trip, VehiclesResponse } from "./types";
 
 export class HttpError extends Error {
   constructor(public status: number, url: string) {
@@ -14,6 +14,26 @@ export async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> 
 
 /** SWR fetcher — always bypass the HTTP cache. */
 export const swrFetcher = <T>(url: string): Promise<T> => fetchJSON<T>(url, { cache: "no-store" });
+
+/**
+ * Receive time (performance.now) and server clock (X-Server-Time, epoch ms) of
+ * each /api/vehicles payload, keyed by its `vehicles` array — the motion
+ * engine maps the server's fix times onto the local clock with it. A side
+ * table rather than a body field, so unchanged payloads still dedupe in SWR.
+ */
+export const vehiclesClock = new WeakMap<object, { recvPerf: number; serverMs: number | null }>();
+
+export async function vehiclesFetcher(url: string): Promise<VehiclesResponse> {
+  const r = await fetch(url, { cache: "no-store" });
+  if (!r.ok) throw new HttpError(r.status, url);
+  const recvPerf = performance.now();
+  const st = Number(r.headers.get("x-server-time"));
+  const body = (await r.json()) as VehiclesResponse;
+  if (body && Array.isArray(body.vehicles)) {
+    vehiclesClock.set(body.vehicles, { recvPerf, serverMs: Number.isFinite(st) && st > 0 ? st : null });
+  }
+  return body;
+}
 
 /* ---------- trip cache (dedupes concurrent + repeated fetches) ---------- */
 
@@ -41,7 +61,8 @@ export function getTrip(tripId: string | number, signal?: AbortSignal): Promise<
   const fetchWithRetry = async (retries = 2, delayMs = 150): Promise<Trip | null> => {
     try {
       const tr = await fetchJSON<Trip>(`/api/trip/${encodeURIComponent(key)}`, { signal });
-      if (!tr?.times?.length) tripCache.delete(key);
+      // a still-routing road shape will be ready soon — don't pin "pending" for the session
+      if (!tr?.times?.length || tr.shape_status === "pending") tripCache.delete(key);
       return tr;
     } catch (err: unknown) {
       if (retries > 0 && err instanceof HttpError && err.status === 429 && !signal?.aborted) {
@@ -97,8 +118,7 @@ export async function getTripsBatch(
       );
       for (const id of chunk) {
         const tr = res.trips?.[id] ?? null;
-        const p = Promise.resolve(tr);
-        tripCache.set(id, p);
+        if (tr && tr.shape_status !== "pending") tripCache.set(id, Promise.resolve(tr));
         result.set(id, tr);
       }
     } catch {

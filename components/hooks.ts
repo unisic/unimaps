@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import useSWR from "swr";
-import { fetchJSON, swrFetcher } from "@/lib/client/api";
+import { fetchJSON, vehiclesFetcher } from "@/lib/client/api";
 import { nowSecs } from "@/lib/client/format";
 import type { LinesResponse, StopsResponse, VehiclesResponse } from "@/lib/client/types";
 
@@ -11,7 +11,7 @@ const cachedFetcher = <T>(url: string): Promise<T> => fetchJSON<T>(url);
 
 /** Live vehicle positions, polled every 4 s, never HTTP-cached. */
 export function useVehicles() {
-  return useSWR<VehiclesResponse>("/api/vehicles", swrFetcher, {
+  return useSWR<VehiclesResponse>("/api/vehicles", vehiclesFetcher, {
     refreshInterval: 4000,
     dedupingInterval: 1500,
     keepPreviousData: true,
