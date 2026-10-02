@@ -43,7 +43,7 @@ function buildVehicleTooltip(v: Vehicle | undefined): HTMLElement {
     (v.headsign ? ` → ${displayStopName(v.headsign)}` : "") +
     (v.side_number ? ` · #${v.side_number}` : "") +
     (v.model ? ` (${v.model})` : "") +
-    (v.delay != null ? ` · ${delayTxt(v.delay)}` : "");
+    (v.not_started ? " · czeka na odjazd" : v.delay != null ? ` · ${delayTxt(v.delay)}` : "");
   if (rest) root.append(rest);
   return root;
 }

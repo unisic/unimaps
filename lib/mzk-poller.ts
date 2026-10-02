@@ -2,12 +2,15 @@
  * Background poller for MZK Bielsko-Biała live fleet and stops.
  */
 import { bearing, metersBetween } from "./geo";
+import * as config from "./config";
 import { log } from "./logger";
 import { MzkApi, type MzkRunningVehicle, type MzkStopPoint, type MzkLine } from "./mzk-api";
 import { getFleetDetails, type MzkVehicleStatic } from "./mzk-fleet";
 import { getFleetTracker } from "./fleet-tracker";
+import { hasPlannedDip, isMzkNotStarted } from "./mzk-state";
 import { mzkRemapDist, mzkStopIndices } from "./mzk-shape";
 import { nextSpeed } from "./route-info";
+import { loadMzkStopDirs, MzkStopDirs, saveMzkStopDirs } from "./mzk-stop-dirs";
 import type { ShapeGeometry } from "./shape-store";
 import type { LineInfo, Stop, VehiclePos } from "./types";
 
@@ -35,6 +38,17 @@ export class MzkPoller {
   runningVehiclesMap = new Map<string, MzkRunningVehicle>();
   stops: Stop[] = [];
   stopsBySymbol = new Map<string, Stop>();
+  /** epoch secs of the last successful getStops load (0 = never) */
+  stopsLoadedAt = 0;
+  /** when a reload was last ATTEMPTED (success or not) — throttles the unknown-symbol trigger */
+  private stopsReloadAttemptAt = 0;
+  private stopsReloadInFlight = false;
+  /** unknown symbols that the last reload attempt already tried to resolve — only NEW ones trigger the next one */
+  private unknownHandled = new Set<string>();
+  /** travel direction of every stop, learned from running courses (lib/stop-merge.ts needs it) */
+  stopDirs = new MzkStopDirs();
+  private stopDirsSavedAt = 0;
+  private stopDirsSaveTimer: ReturnType<typeof setTimeout> | null = null;
   lines: LineInfo[] = [];
   staticVehicles = new Map<string, MzkVehicleStatic>();
   courseMetaMap = new Map<number, { lineName: string; variantId?: number; direction?: string }>();
@@ -47,6 +61,8 @@ export class MzkPoller {
   /** road-shape store hook (null = no route info on positions) */
   shapes: MzkShapeSink | null = null;
 
+  /** courseLoid -> last time a non-monotone OnTime estimate was logged (throttle) */
+  private dipLoggedAt = new Map<number, number>();
   private started = false;
   private stopCtl: AbortController | null = null;
   private loopPromise: Promise<void> | null = null;
@@ -62,6 +78,8 @@ export class MzkPoller {
     this.started = true;
     this.startedAt = Math.floor(Date.now() / 1000);
     this.stopCtl = new AbortController();
+
+    this.stopDirs = loadMzkStopDirs(config.MZK_STOP_DIRS_FILE);
 
     // Initial load of static metadata
     try {
@@ -85,6 +103,7 @@ export class MzkPoller {
   async stop(): Promise<void> {
     if (!this.started) return;
     this.started = false;
+    this.flushStopDirs();
     this.stopCtl?.abort();
     try {
       await this.loopPromise;
@@ -93,8 +112,16 @@ export class MzkPoller {
     }
   }
 
-  async loadStops(): Promise<void> {
+  /**
+   * Fetch the stop list and swap it in atomically. An empty or failed fetch keeps the previous
+   * list (a transient upstream hiccup must not wipe a good one). Returns true when a list was installed.
+   */
+  async loadStops(): Promise<boolean> {
     const rawStops = await this.api.fetchStops();
+    if (rawStops.length === 0) {
+      log.error("mzk-poller", "stops reload: upstream returned an empty list, keeping previous");
+      return false;
+    }
     const stops: Stop[] = rawStops.map((s: MzkStopPoint) => {
       const isStation = /(?:^|[\s(])(?:D\.A\.?|DWORZEC\s+AUTOBUSOWY)(?:$|[\s)])/i.test(s.name);
       return {
@@ -113,11 +140,48 @@ export class MzkPoller {
         gettingOut: s.gettingOut,
       };
     });
-
+    const bySymbol = new Map<string, Stop>();
+    for (const s of stops) if (s.symbol) bySymbol.set(s.symbol, s);
+    const prev = this.stops.length;
+    // two synchronous assignments, no await in between
     this.stops = stops;
-    this.stopsBySymbol.clear();
-    for (const s of stops) {
-      if (s.symbol) this.stopsBySymbol.set(s.symbol, s);
+    this.stopsBySymbol = bySymbol;
+    this.stopsLoadedAt = Date.now() / 1000;
+    if (prev > 0) log.info("mzk-poller", `stops reloaded: ${stops.length} (was ${prev})`);
+    // upstream re-versioned its stop data (a stop moved / vanished): what was learned about it is void
+    if (this.stopDirs.reconcile(bySymbol)) log.warn("mzk-poller", "stop data changed, learned stop directions reset");
+    return true;
+  }
+
+  /**
+   * Re-load the stop list when it is a day old, or (at most every 10 min) as soon as a running course
+   * references a stop symbol we did not already try to resolve — the sign that upstream re-versioned its
+   * stop data while we were up (all 530 stops got stopPointValidity.from = 2026-09-30; this class never
+   * reloaded). A symbol that stays unknown after a reload does not trigger another one. Never throws,
+   * never overlaps.
+   */
+  private async maybeReloadStops(unknownSymbols: ReadonlySet<string>): Promise<void> {
+    if (this.stopsReloadInFlight) return;
+    const nowMs = Date.now();
+    const age = nowMs / 1000 - this.stopsLoadedAt;
+    const due = age >= config.STOPS_RELOAD_SEC;
+    let fresh = 0;
+    for (const sym of unknownSymbols) if (!this.unknownHandled.has(sym)) fresh++;
+    const stale = fresh > 0 && nowMs - this.stopsReloadAttemptAt >= 10 * 60_000;
+    if (!due && !stale) return;
+    this.stopsReloadInFlight = true;
+    this.stopsReloadAttemptAt = nowMs;
+    this.unknownHandled = new Set(unknownSymbols);
+    try {
+      if (stale) log.warn("mzk-poller", `unknown stop symbols on running courses (${[...unknownSymbols].slice(0, 5).join(",")}), reloading stops`);
+      if (!(await this.loadStops())) this.unknownHandled.clear(); // empty list: nothing was resolved, try again later
+    } catch (err) {
+      log.warn("mzk-poller", `stops reload failed: ${err}`);
+      this.unknownHandled.clear();
+      // keep the old list; a due reload is retried in 30 min, not every 5 s
+      if (due) this.stopsLoadedAt = nowMs / 1000 - config.STOPS_RELOAD_SEC + 1800;
+    } finally {
+      this.stopsReloadInFlight = false;
     }
   }
 
@@ -139,6 +203,51 @@ export class MzkPoller {
     }
   }
 
+  /** Write a pending trailing save now (shutdown). */
+  flushStopDirs(): void {
+    if (!this.stopDirsSaveTimer) return;
+    clearTimeout(this.stopDirsSaveTimer);
+    this.stopDirsSaveTimer = null;
+    this.stopDirsSavedAt = Date.now();
+    saveMzkStopDirs(config.MZK_STOP_DIRS_FILE, this.stopDirs);
+  }
+
+  /** Persist what was learned: at once when the last save is a minute old, else one trailing save (never throws). */
+  private persistStopDirs(): void {
+    const save = (): void => {
+      this.stopDirsSaveTimer = null;
+      this.stopDirsSavedAt = Date.now();
+      saveMzkStopDirs(config.MZK_STOP_DIRS_FILE, this.stopDirs);
+    };
+    const wait = 60_000 - (Date.now() - this.stopDirsSavedAt);
+    if (wait <= 0) save();
+    else if (!this.stopDirsSaveTimer) {
+      this.stopDirsSaveTimer = setTimeout(save, wait);
+      this.stopDirsSaveTimer.unref?.();
+    }
+  }
+
+  /** Feed the direction learner and spot symbols missing from the stop list (never throws). */
+  private learnFromRunning(running: readonly MzkRunningVehicle[]): void {
+    try {
+      const unknown = new Set<string>();
+      let learned = false;
+      for (const v of running) {
+        const sp = Array.isArray(v.stopPoints) ? v.stopPoints : [];
+        const stops = sp.map((p) => {
+          const st = this.stopsBySymbol.get(p.symbol);
+          if (!st && p.symbol && p.symbol !== "00") unknown.add(p.symbol); // "00" = depot, never a real stop
+          return { symbol: p.symbol, at: st ? { lat: st.lat, lon: st.lon } : null };
+        });
+        if (typeof v.variantLoid === "number" && this.stopDirs.learn(v.variantLoid, stops)) learned = true;
+      }
+      if (learned) this.persistStopDirs();
+      if (this.stops.length > 0) void this.maybeReloadStops(unknown);
+    } catch (err) {
+      log.warn("mzk-poller", `learning stop directions failed: ${err}`);
+    }
+  }
+
   async pollOnce(): Promise<void> {
     if (this.stops.length === 0 || this.lines.length === 0) {
       try {
@@ -152,6 +261,7 @@ export class MzkPoller {
 
     const running = await this.api.fetchRunningVehicles();
     const nowSecs = Math.floor(Date.now() / 1000);
+    this.learnFromRunning(running);
     const newPositions = new Map<string, VehiclePos>();
     const newRunningMap = new Map<string, MzkRunningVehicle>();
     const touchedVariants = new Set<number>();
@@ -186,6 +296,11 @@ export class MzkPoller {
       // the stop being served / the next one to arrive at (stopPoints[orderInCourse]
       // is usually the stop just passed, so it must not be used as "next")
       const { served, next } = mzkStopIndices(v);
+      // course not begun: OnTime's delaySec / plannedDeparture are a placeholder
+      // (now - scheduled start, floor -60 s), not a delay — publish "unknown"
+      const firstSym = v.stopPoints?.[0]?.symbol;
+      const firstStop = firstSym ? this.stopsBySymbol.get(firstSym) : undefined;
+      const notStarted = isMzkNotStarted(v, firstStop ? { lat: firstStop.lat, lon: firstStop.lon } : null);
       let targetSymbol: string | null = null;
       if (next !== null && v.stopPoints?.[next]) {
         targetSymbol = v.stopPoints[next].symbol;
@@ -263,7 +378,7 @@ export class MzkPoller {
         vehicleType: 3,
         currentStopSequence: served ?? (v.orderInCourse != null ? v.orderInCourse : null),
         atStop: Boolean(v.onStopPoint),
-        delay: v.delaySec != null && Number.isFinite(v.delaySec) ? Math.round(v.delaySec) : null,
+        delay: !notStarted && v.delaySec != null && Number.isFinite(v.delaySec) ? Math.round(v.delaySec) : null,
         timestamp: v.lastPingDate ? Math.floor(v.lastPingDate / 1000) : nowSecs,
         updatedAt: Date.now() / 1000,
         bearing: computedBearing !== null ? Math.round(computedBearing * 10) / 10 : null,
@@ -274,6 +389,7 @@ export class MzkPoller {
         anchorLat: v.latitude,
         anchorLon: v.longitude,
         finished: false,
+        notStarted,
         operator: "MZK",
         sideNumber: v.vehicleId,
         model: fleet.model,
@@ -281,6 +397,7 @@ export class MzkPoller {
         nextStopSeq: next,
       };
       this.attachRouteInfo(pos, v, this.positions.get(execId), nowSecs, touchedVariants);
+      this.noteEstimateDip(v);
 
       newPositions.set(execId, pos);
       this.lastPositionsByVehicle.set(v.vehicleId, pos);
@@ -303,6 +420,29 @@ export class MzkPoller {
       );
     } catch (err) {
       log.warn("mzk-poller", `FleetTracker update failed: ${err}`);
+    }
+  }
+
+  /**
+   * OnTime estimates that go backwards along the course (a later stop earlier than the previous
+   * one) were seen by users but never reproduced in a capture: log each course once per 10 min
+   * with the raw per-stop diffs so the next occurrence can be diagnosed from the server log.
+   */
+  private noteEstimateDip(v: MzkRunningVehicle): void {
+    try {
+      const sp = Array.isArray(v.stopPoints) ? v.stopPoints : [];
+      if (!hasPlannedDip(sp.map((p) => p?.plannedDeparture), v.orderInCourse ?? 0)) return;
+      const now = Date.now();
+      if (now - (this.dipLoggedAt.get(v.courseLoid) ?? 0) < 600_000) return;
+      if (this.dipLoggedAt.size > 500) this.dipLoggedAt.clear();
+      this.dipLoggedAt.set(v.courseLoid, now);
+      const diffs = sp.map((p) => (p?.plannedDeparture ? Math.round((p.plannedDeparture - p.scheduledDeparture) / 1000) : null));
+      log.warn(
+        "mzk-poller",
+        `non-monotone planned times: course ${v.courseLoid} line ${v.lineName} veh ${v.vehicleId} ord ${v.orderInCourse} lastStopOrderNo ${v.lastStopOrderNo} onStop ${v.onStopPoint} delaySec ${v.delaySec} diffs(s) ${JSON.stringify(diffs)}`,
+      );
+    } catch {
+      /* diagnostics must never break a poll */
     }
   }
 

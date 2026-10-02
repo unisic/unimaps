@@ -3,6 +3,8 @@
  * HTTP response shapes).
  */
 
+import type { KbProgState } from "./kb-progress";
+
 /** A generic upstream JSON object we only loosely trust. */
 export type UpstreamRecord = Record<string, unknown>;
 
@@ -91,7 +93,7 @@ export interface VehiclePos {
   /** null when upstream's vehicle_trip_index is absent/invalid ("unknown") */
   currentStopSequence: number | null;
   atStop: boolean;
-  /** seconds, negative = early */
+  /** seconds, negative = early; null = unknown (MZK: course not begun — see lib/mzk-state.ts) */
   delay: number | null;
   timestamp: number;
   updatedAt: number;
@@ -107,6 +109,10 @@ export interface VehiclePos {
   /** true once the vehicle has reached its final stop — the course is over, so
    *  it's hidden from the map instead of lingering with an ever-growing delay */
   finished: boolean;
+  /** MZK only: the vehicle waits at (or idles next to) the first stop of a course
+   *  that has not begun. OnTime's delaySec is then a placeholder (now - scheduled
+   *  start, floor -60 s), so `delay` is null instead — see lib/mzk-state.ts */
+  notStarted?: boolean;
   operator?: "KB" | "MZK";
   sideNumber?: string;
   model?: string;
@@ -128,6 +134,17 @@ export interface VehiclePos {
   speedAt?: number;
   /** displacement (m) of the latest distinct fix vs its predecessor */
   moveDs?: number;
+  /* ---- GPS progress (lib/kb-progress.ts; KB only) ---- */
+  /** parsePosition's upstream-derived delay, kept when `delay` was replaced (isStale must test this one) */
+  delayUp?: number | null;
+  /** set only while upstream's stop index is stale: "gps" = delay is the schedule deviation at the GPS position,
+   *  "gps-held" = the last such value (bus momentarily unplaceable), "unknown" = delay withheld (null) */
+  delaySrc?: "gps" | "gps-held" | "unknown";
+  /** GPS-derived last passed / next stop index; set only while upstream's index is stale */
+  geoLastSeq?: number | null;
+  geoNextSeq?: number | null;
+  /** tracker state carried across polls */
+  prog?: KbProgState;
 }
 
 /** Wire shape of one vehicle in GET /api/vehicles (VehiclePos.to_json()). */
@@ -163,6 +180,14 @@ export interface VehicleJson {
   next_stop_seq?: number;
   /** cruise speed m/s */
   speed?: number;
+  /* ---- GPS progress (only while upstream's stop index is stale; see lib/kb-progress.ts) ---- */
+  /** "gps" | "gps-held": `delay` is the schedule deviation at the GPS position, not upstream's estimate;
+   *  "unknown": upstream's estimate is known wrong and the bus can't be placed, `delay` is null */
+  delay_src?: "gps" | "gps-held" | "unknown";
+  /** GPS-derived index of the last stop the bus passed (use instead of `current_stop_sequence` as the progress hint) */
+  geo_seq?: number;
+  /** MZK course not begun (bus waiting for its departure); `delay` is null then. Emitted only when true. */
+  not_started?: boolean;
 }
 
 /** GET /api/vehicles response. */
@@ -193,11 +218,15 @@ export type WireStop = {
   kbDesignator?: string;
   mzkDesignator?: string;
   mzkSymbol?: string;
+  /** station hub (D.A.) only: every MZK symbol whose departures the station panel lists, primary (`mzkSymbol`) first */
+  mzkSymbols?: string[];
 };
 
 export interface StopsResponse {
   count: number;
   stops: WireStop[];
+  /** present (true) while one operator's stop list is still missing — the client re-fetches soon */
+  partial?: boolean;
 }
 
 /** GET /api/health response. "degraded" (served as HTTP 503) = the scan loop
@@ -220,8 +249,29 @@ export interface HealthResponse {
   last_loop_error: string | null;
   /** epoch secs of the last successful stop-list load */
   stops_loaded_at: number;
+  /** MZK + merged stop list state — informational, never affects `status` (diagnoses "MZK missing at a stop") */
+  mzk_stops?: number;
+  /** epoch secs of the last successful MZK getStops load (0 = never) */
+  mzk_stops_loaded_at?: number;
+  merged_stops?: {
+    both: number;
+    kb: number;
+    mzk: number;
+    /** one operator's list is still missing */
+    partial: boolean;
+    /** MZK stops with learned travel directions */
+    mzk_dir_stops: number;
+    /** epoch secs the current merge was computed */
+    built_at: number;
+  };
   /** road-shape store counters — informational, never affects `status` */
   shapes?: Record<string, unknown>;
+  /** KB vehicles whose upstream stop index is currently detected stale (delay GPS-corrected) — informational */
+  stale_index?: number;
+  /** polls placed on the route by GPS / polls where an in-sync upstream delay still differed from the GPS schedule
+   *  deviation by >= 2 min — informational (measures upstream's estimate error that the stale detector can't see) */
+  gps_polls?: number;
+  gps_disagree?: number;
 }
 
 /** One row of an upstream departures board (loosely typed). */

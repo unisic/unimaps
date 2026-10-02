@@ -8,8 +8,9 @@ import type { transit_realtime } from "gtfs-realtime-bindings";
 import * as config from "./config";
 import { bearing, metersBetween } from "./geo";
 import { KbApi, asRecord, isRecord, parseIntStrict, pyTruthy } from "./kb-api";
+import { stepKbProgress, straightGeom, type ProgressGeom } from "./kb-progress";
 import { log } from "./logger";
-import { estimateFixAt, kbDistAlong, nextSpeed, type KbShapeSink } from "./route-info";
+import { estimateFixAt, kbAheadM, kbDistAlong, nextSpeed, type KbShapeSink } from "./route-info";
 import { buildKbPattern, type KbPattern } from "./shape-patterns";
 import type { Stop, VehicleJson, VehiclePos, VehiclesResponse } from "./types";
 
@@ -122,6 +123,20 @@ export function kbNextStopIndex(vti: unknown, ndi: unknown, atStop: boolean, n: 
   return idx >= 0 && idx < n ? idx : null;
 }
 
+/**
+ * A vehicle whose feed has frozen: no live delay estimate from upstream and not
+ * moving. Tests the RAW upstream value (`delayUp`) when the delay was replaced
+ * by the GPS value, otherwise a frozen feed would stop being hidden.
+ */
+export function isFeedStale(
+  v: Pick<VehiclePos, "delay" | "delayUp" | "lastMovedAt">,
+  nowEpoch: number,
+  staleSec: number,
+): boolean {
+  const raw = v.delayUp !== undefined ? v.delayUp : v.delay;
+  return raw === null && nowEpoch - v.lastMovedAt > staleSec;
+}
+
 /** VehiclePos -> wire JSON (port of VehiclePos.to_json). */
 export function vehicleToJson(v: VehiclePos): VehicleJson {
   return {
@@ -188,6 +203,12 @@ export interface PollerHealth {
   lastLoopErrorAt: number;
   /** Epoch secs of the last successful stop-list load. */
   stopsLoadedAt: number;
+  /** vehicles whose upstream stop index is currently detected stale (GPS-corrected delay). */
+  staleIndex: number;
+  /** polls where the bus was placed on its route / where upstream's index looked in sync but its delay differed
+   *  from the GPS schedule deviation by >= 2 min (an unknown failure mode of upstream's estimate, if non-zero). */
+  gpsPolls: number;
+  gpsDisagree: number;
 }
 
 export interface LivePollerOptions {
@@ -256,7 +277,12 @@ export class LivePoller {
   shapes: KbShapeSink | null = null;
   /** stop-list-dependent pattern memo; cleared on every stop reload */
   private patternMemo = new Map<string, KbPattern | null>();
+  /** straight stop-to-stop geometry per pattern object (dies with the memo on a stop reload) */
+  private straightMemo = new WeakMap<KbPattern, ProgressGeom | null>();
   private routeErrLoggedAt = 0;
+  private progressErrLoggedAt = 0;
+  private gpsPolls = 0;
+  private gpsDisagree = 0;
 
   private started = false;
   private stopCtl: AbortController | null = null;
@@ -635,6 +661,7 @@ export class LivePoller {
               pos.bearing = prev.bearing;
             }
           }
+          this.attachProgress(pos, prev, asRecord(resp));
           this.attachRouteInfo(pos, prev, asRecord(resp), "urgent");
           this.positions.set(eid, pos);
           this.notFound.delete(eid);
@@ -839,6 +866,77 @@ export class LivePoller {
   }
 
   /**
+   * GPS progress (lib/kb-progress.ts): detects an upstream stop index that has
+   * stalled behind the bus and then replaces `delay` by the schedule deviation
+   * at the real position. Runs on EVERY poll (a standing late bus must keep
+   * getting later), before attachRouteInfo (whose along-route search uses the
+   * GPS indices). Isolated like attachRouteInfo: an error leaves the upstream
+   * value untouched.
+   */
+  private attachProgress(pos: VehiclePos, prev: VehiclePos | undefined, resp: Record<string, unknown>): void {
+    pos.delayUp = pos.delay;
+    if (!config.GPS_DELAY) return;
+    try {
+      const trip = asRecord(resp.trip);
+      const times: unknown[] = Array.isArray(trip.times) ? trip.times : [];
+      const pattern = this.kbPatternFor(times, pos.line, pos.headsign);
+      if (!pattern) return;
+      let geom = this.straightMemo.get(pattern);
+      if (geom === undefined) {
+        geom = straightGeom(pattern.stopPts);
+        this.straightMemo.set(pattern, geom);
+      }
+      if (!geom) return;
+      const plan = times.map((t) => (isRecord(t) ? hhmmToSecs(t.departure_time) : null));
+      const o = stepKbProgress(
+        {
+          geom,
+          plan,
+          lat: pos.lat,
+          lon: pos.lon,
+          tEpoch: pos.updatedAt,
+          localSecs: nowSecs(),
+          vti: pos.currentStopSequence,
+          nextUp: pos.nextStopSeq ?? null,
+          delayUp: pos.delay,
+        },
+        prev?.prog ?? null,
+      );
+      if (o.state) pos.prog = o.state;
+      if (o.dev !== null) {
+        this.gpsPolls += 1;
+        if (!o.stale && pos.delayUp !== null && Math.abs(o.dev - pos.delayUp) >= 120) this.gpsDisagree += 1;
+      }
+      if (o.stale && prev?.delaySrc === undefined) {
+        log.info("rt", `stale stop index: ${pos.execId} line ${pos.line} vti ${pos.currentStopSequence} upstream ${pos.delayUp}s -> gps ${o.delay === null ? "?" : Math.round(o.delay)}s (last stop ${o.lastIdx})`);
+      }
+      if (o.src === "gps" || o.src === "gps-held") {
+        pos.delay = o.delay === null ? null : Math.round(o.delay);
+        pos.delaySrc = o.src;
+      } else if (o.src === "unknown") {
+        pos.delay = null;
+        pos.delaySrc = "unknown";
+      }
+      if (o.stale && o.lastIdx !== null && o.lastIdx >= 0) {
+        pos.geoLastSeq = o.lastIdx;
+        pos.geoNextSeq = o.nextIdx;
+      }
+      // reached its last stop with upstream's index stale (parsePosition's own rule can't fire: vti never gets there)
+      if (o.finished) pos.finished = true;
+    } catch (err) {
+      pos.delay = pos.delayUp;
+      pos.delaySrc = undefined;
+      pos.geoLastSeq = undefined;
+      pos.geoNextSeq = undefined;
+      const now = Date.now();
+      if (now - this.progressErrLoggedAt > 60_000) {
+        this.progressErrLoggedAt = now;
+        log.error("rt", `gps progress failed for ${pos.execId}: ${err}`);
+      }
+    }
+  }
+
+  /**
    * Route info for the client motion engine: shape key, fix time, along-route
    * distance and cruise speed. Isolated per vehicle — a bug here must never
    * abort a refresh (the vehicle just ships without route info).
@@ -865,7 +963,17 @@ export class LivePoller {
         const sameShape = !!prev && prev.shapeKey === pos.shapeKey && prev.distRev === geomRev;
         if (geom && (moved || !sameShape)) {
           const hint = sameShape && prev?.distM != null ? prev.distM : undefined;
-          pos.distM = kbDistAlong(geom, pos.lat, pos.lon, pos.currentStopSequence, pos.nextStopSeq ?? null, hint);
+          // continuity first (hint = previous dist_m, window widened by the poll gap); while upstream's index is
+          // stale the GPS indices keep the fallback vti-window on the leg the bus is really on
+          pos.distM = kbDistAlong(
+            geom,
+            pos.lat,
+            pos.lon,
+            pos.geoLastSeq ?? pos.currentStopSequence,
+            pos.geoNextSeq ?? pos.nextStopSeq ?? null,
+            hint,
+            { aheadM: kbAheadM(prev ? pos.updatedAt - prev.updatedAt : 0) },
+          );
           pos.distRev = geom.rev;
         } else if (geom && prev) {
           pos.distM = prev.distM;
@@ -900,7 +1008,7 @@ export class LivePoller {
 
   /** A vehicle whose feed has frozen: no live delay estimate and not moving. */
   private isStale(v: VehiclePos, nowEpoch: number): boolean {
-    return v.delay === null && nowEpoch - v.lastMovedAt > config.LIVE_STALE_VEHICLE_SEC;
+    return isFeedStale(v, nowEpoch, config.LIVE_STALE_VEHICLE_SEC);
   }
 
   /** Live vehicles shown on the map: not frozen (stale feed), not finished,
@@ -956,6 +1064,7 @@ export class LivePoller {
         pos.bearing = prev.bearing;
       }
     }
+    this.attachProgress(pos, prev, resp);
     this.attachRouteInfo(pos, prev, resp, "urgent");
     this.positions.set(eid, pos);
     this.notFound.delete(eid);
@@ -984,6 +1093,9 @@ export class LivePoller {
       lastLoopError: this.lastLoopError,
       lastLoopErrorAt: this.lastLoopErrorAt,
       stopsLoadedAt: this.stopsLoadedAt,
+      staleIndex: [...this.positions.values()].filter((v) => v.delaySrc !== undefined).length,
+      gpsPolls: this.gpsPolls,
+      gpsDisagree: this.gpsDisagree,
     };
   }
 

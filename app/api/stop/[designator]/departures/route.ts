@@ -2,9 +2,18 @@ import { badRequest, isValidId, upstreamError } from "@/lib/api-helpers";
 import { pyTruthy } from "@/lib/kb-api";
 import { log } from "@/lib/logger";
 import { getFleetDetails } from "@/lib/mzk-fleet";
-import { nowSecs } from "@/lib/poller";
-import { getApi, getMzkApi, getMzkPoller, getPoller, startPoller } from "@/lib/poller-singleton";
+import { isMzkNotStarted, mzkRowTiming } from "@/lib/mzk-state";
+import { getApi, getMergedStopsView, getMzkApi, getMzkPoller, getPoller, startPoller } from "@/lib/poller-singleton";
+import { departuresBoardCache, type Board } from "@/lib/departures-board-cache";
 import { allowRequest, clientIp, tooManyRequests } from "@/lib/rate-limit";
+import {
+  enrichKbRow,
+  kbAnchorTs,
+  mzkWireFields,
+  preSortRows,
+  type KbUpstreamRow,
+  type TimingRow,
+} from "@/lib/shared/departures";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -19,40 +28,29 @@ export async function GET(
   if (!isValidId(designator)) return badRequest("Invalid stop designator");
   try {
     await startPoller();
+    // the key carries the merged-stop identity: a late MZK list changes who is asked, so a KB-only board must not be reused
+    const m = getMergedStopsView().lookup(designator);
+    const key = `${designator}|${m?.operator ?? ""}|${(m?.mzkSymbols ?? (m?.mzkSymbol ? [m.mzkSymbol] : [])).join(",")}`;
+    const { value: board } = await departuresBoardCache.get(key, () => buildBoard(designator));
+    // every upstream leg failed: an honest 502, not a 200 "no departures" that blanks a populated list
+    if (board.failed.length >= board.legs) throw new Error(`all ${board.legs} upstream leg(s) failed (${board.failed.join(",")})`);
+    return Response.json(
+      { rows: board.rows, server_ts: Date.now() / 1000, ...(board.failed.length ? { warnings: board.failed } : {}) },
+      { headers: { "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0", Pragma: "no-cache" } },
+    );
+  } catch (err) {
+    return upstreamError("departures", err);
+  }
+}
 
-    const poller = getPoller();
+async function buildBoard(designator: string): Promise<Board> {
+  {
     const mzkPoller = getMzkPoller();
-    const { getMergedStop, mergeStops } = await import("@/lib/stop-merge");
-    type WireStop = import("@/lib/types").WireStop;
-    let mergedStop = getMergedStop(designator);
-    if (!mergedStop && (poller.stops.length > 0 || mzkPoller.stops.length > 0)) {
-      const kbFormatted: WireStop[] = poller.stops.map((s) => ({
-        id: s.stopId,
-        designator: s.urlId,
-        name: s.name,
-        lat: s.lat,
-        lon: s.lon,
-        operator: "KB",
-        dirs: s.dirs,
-        isStation: s.isStation,
-        showPlatforms: s.showPlatforms,
-      }));
-      const mzkFormatted: WireStop[] = mzkPoller.stops.map((s) => ({
-        id: s.stopId,
-        designator: s.urlId,
-        name: s.name,
-        lat: s.lat,
-        lon: s.lon,
-        operator: "MZK",
-        symbol: s.symbol,
-        isStation: s.isStation,
-        onRequest: s.onRequest,
-        gettingOut: s.gettingOut,
-      }));
-      mergeStops(kbFormatted, mzkFormatted);
-      mergedStop = getMergedStop(designator);
-    }
+    // one shared, memoized merge (same list the client got from /api/stops) — never an ad hoc re-merge
+    const mergedStop = getMergedStopsView().lookup(designator);
 
+    /* a failed upstream fetch used to look exactly like "no departures": a BOTH stop then showed one operator's rows only */
+    const failed = new Set<"kb" | "mzk">();
     const fetchMzk = async (symbol: string) => {
       try {
         const mzkApi = getMzkApi();
@@ -67,17 +65,25 @@ export async function GET(
           const sM = Math.floor((d.scheduledDepartureSec % 3600) / 60);
           const staticTime = `${String(sH).padStart(2, "0")}:${String(sM).padStart(2, "0")}`;
 
-          let time = staticTime;
-          let timeDiff = 0;
-          let isEstimated = false;
-          if (d.realDeparture && !d.lack) {
-            timeDiff = Math.round((d.realDeparture - d.scheduledDeparture) / 1000);
-            const realSecs = d.scheduledDepartureSec + timeDiff;
-            const rH = Math.floor(realSecs / 3600) % 24;
-            const rM = Math.floor((realSecs % 3600) / 60);
-            time = `${String(rH).padStart(2, "0")}:${String(rM).padStart(2, "0")}`;
-            isEstimated = true;
-          }
+          // the course has not begun (bus waits at its first stop): OnTime's realDeparture is a
+          // placeholder (now - scheduled start), not an estimate — show the earliest possible
+          // time instead (the schedule pushed back by how long the bus already overstayed its
+          // first departure; a lower bound, also the sort key) and no delay
+          const running = mzkPoller.runningVehiclesMap.get(String(d.courseId));
+          const firstSp = running?.stopPoints?.[0];
+          const firstStop = firstSp ? mzkPoller.stopsBySymbol.get(firstSp.symbol) : undefined;
+          const notStarted =
+            !!running && !!firstSp && isMzkNotStarted(running, firstStop ? { lat: firstStop.lat, lon: firstStop.lon } : null);
+
+          const { time, timeDiff, isEstimated } = mzkRowTiming({
+            scheduledDepartureSec: d.scheduledDepartureSec,
+            scheduledDeparture: d.scheduledDeparture,
+            realDeparture: d.realDeparture,
+            lack: d.lack,
+            notStarted,
+            firstScheduledMs: firstSp?.scheduledDeparture,
+            nowMs: Date.now(),
+          });
 
           // Register in courseMetaMap so trip resolution has line/variant/direction
           mzkPoller.courseMetaMap.set(d.courseId, {
@@ -93,6 +99,7 @@ export async function GET(
             time,
             time_diff: timeDiff,
             is_estimated: isEstimated,
+            ...(notStarted ? { not_started: true } : {}),
             direction: d.directionName,
             line_name: d.lineName,
             operator: "MZK" as const,
@@ -100,9 +107,22 @@ export async function GET(
             side_number: d.vehicleId,
             model: fleet?.model,
             features: fleet?.features,
+            // absolute instants (epoch s) — the client sorts and counts down on these, never on "HH:MM"
+            ...mzkWireFields(d),
+            // a course that has not begun has NO measured ETA/delay (OnTime's is a placeholder that grows 1 s/s):
+            // earliest possible instant = schedule pushed back by the overstay, never "leaving now"
+            ...(notStarted
+              ? {
+                  eta_ts: d.scheduledDeparture / 1000 + Math.max(0, (Date.now() - (firstSp?.scheduledDeparture ?? d.scheduledDeparture)) / 1000),
+                  delay_sec: null,
+                  at_stop: false,
+                  is_estimated: false,
+                }
+              : {}),
           };
         });
       } catch (err) {
+        failed.add("mzk");
         log.warn("mzk-departures", `Realtime fetch failed for symbol ${symbol}: ${err}`);
         return [];
       }
@@ -112,93 +132,60 @@ export async function GET(
       try {
         const data = await getApi().fetchDepartures(kbDesig);
         if (pyTruthy(data) && typeof data === "object" && data !== null) {
-          const rec = data as {
-            rows?: Array<{
-              trip_execution_id?: string;
-              operator?: string;
-              time?: string;
-              static_time?: string;
-              [key: string]: unknown;
-            }>;
-          };
+          const rec = data as { timestamp?: unknown; directions?: unknown; rows?: KbUpstreamRow[] };
           if (Array.isArray(rec.rows)) {
-            rec.rows.forEach((r) => {
-              r.operator = "KB";
-            });
-            const eids = rec.rows
+            // KB's "N min" strings are relative to the moment upstream built the board
+            const anchorTs = kbAnchorTs(rec.timestamp, Date.now() / 1000);
+            const rows = rec.rows.map((r) => enrichKbRow(r, rec.directions, anchorTs));
+            const eids = rows
               .map((r) => r?.trip_execution_id)
               .filter((eid): eid is string => Boolean(eid));
             if (eids.length > 0) {
               getPoller().addCandidates(eids);
             }
-            return rec.rows;
+            return rows;
           }
         }
       } catch (err) {
+        failed.add("kb");
         log.warn("kb-departures", `Departures fetch failed for ${kbDesig}: ${err}`);
       }
       return [];
     };
 
-    const parseRowSecs = (row: { time?: unknown; static_time?: unknown }) => {
-      const t = typeof row.time === "string" ? row.time : typeof row.static_time === "string" ? row.static_time : "";
-      if (!t) return 999999;
-      if (t.includes(":")) {
-        const parts = t.split(":");
-        const h = parseInt(parts[0], 10);
-        const m = parseInt(parts[1], 10);
-        if (!isNaN(h) && !isNaN(m)) return (h % 24) * 3600 + m * 60;
-      }
-      const minMatch = t.match(/(\d+)\s*min/);
-      if (minMatch) {
-        const curSec = nowSecs();
-        return curSec + parseInt(minMatch[1], 10) * 60;
-      }
-      return 999999;
-    };
+    /* Nearest departure first. The server only pre-sorts (it cannot see the live vehicle delays);
+       StopView re-sorts with the same lib/shared/departures rules after enrichment. */
+    const respond = (rows: Array<Record<string, unknown>>, legs: number): Board => ({
+      rows: preSortRows(rows as TimingRow[], Date.now() / 1000) as Array<Record<string, unknown>>,
+      failed: [...failed],
+      legs,
+    });
 
-    if (mergedStop?.operator === "BOTH" && mergedStop.mzkSymbol && mergedStop.kbDesignator) {
-      const [mzkRes, kbRes] = await Promise.allSettled([
-        fetchMzk(mergedStop.mzkSymbol),
+    if (mergedStop?.operator === "BOTH" && mergedStop.kbDesignator) {
+      // a station hub lists several MZK symbols (mzkSymbols); an ordinary stop has just mzkSymbol
+      const symbols = mergedStop.mzkSymbols ?? (mergedStop.mzkSymbol ? [mergedStop.mzkSymbol] : []);
+      const [kbRes, ...mzkRes] = await Promise.allSettled([
         fetchKb(mergedStop.kbDesignator),
+        ...symbols.map((s) => fetchMzk(s)),
       ]);
-      const mzkRows = mzkRes.status === "fulfilled" ? mzkRes.value : [];
       const kbRows = kbRes.status === "fulfilled" ? kbRes.value : [];
-      const combined = [...mzkRows, ...kbRows].sort((a, b) => parseRowSecs(a) - parseRowSecs(b));
-      return Response.json(
-        { rows: combined },
-        {
-          headers: {
-            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
-            Pragma: "no-cache",
-          },
-        },
-      );
+      const mzkAll = mzkRes.flatMap((r) => (r.status === "fulfilled" ? r.value : []));
+      // a course can call at two stops of the same hub: keep its earliest departure only
+      const seen = new Set<string>();
+      const mzkRows = preSortRows(mzkAll as unknown as TimingRow[], Date.now() / 1000).filter((r) => {
+        if (symbols.length <= 1) return true;
+        const id = String((r as Record<string, unknown>).trip_execution_id);
+        return !seen.has(id) && !!seen.add(id);
+      });
+      return respond([...mzkRows, ...kbRows] as Array<Record<string, unknown>>, mzkRes.length > 0 ? 2 : 1);
     }
 
     if (designator.startsWith("mzk:")) {
       const symbol = designator.slice(4);
-      const rows = await fetchMzk(symbol);
-      return Response.json(
-        { rows },
-        {
-          headers: {
-            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
-            Pragma: "no-cache",
-          },
-        },
-      );
+      return respond(await fetchMzk(symbol), 1);
     }
 
-    const kbRows = await fetchKb(designator);
-    return Response.json({ rows: kbRows }, {
-      headers: {
-        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
-        Pragma: "no-cache",
-      },
-    });
-  } catch (err) {
-    return upstreamError("departures", err);
+    return respond(await fetchKb(designator), 1);
   }
 }
 

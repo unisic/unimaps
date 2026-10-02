@@ -139,10 +139,6 @@ export default function MapApp() {
   useEffect(() => {
     vehiclesRef.current = vehicles;
   });
-  const stopPingIcon = useMemo(
-    () => makeStopPingIcon(selectedStop?.operator),
-    [selectedStop?.operator],
-  );
   const userIcon = useMemo(() => makeUserLocationIcon(), []);
 
   /* geolocation — the blue "you are here" dot follows the user once granted */
@@ -194,6 +190,15 @@ export default function MapApp() {
   useEffect(() => {
     stopsMapsRef.current = stopsMaps;
   }, [stopsMaps]);
+
+  /* /api/stops is revalidated while the app stays open (an MZK list that arrived late, a better merge): the
+     open stop follows its fresh record — by id, the designator changes when a stop becomes BOTH — so its
+     badges and departure sources update; identical to `selectedStop` while the list is unchanged */
+  const liveStop = useMemo(
+    () => (selectedStop ? (stopsMaps.byId.get(selectedStop.id) ?? selectedStop) : null),
+    [selectedStop, stopsMaps],
+  );
+  const stopPingIcon = useMemo(() => makeStopPingIcon(liveStop?.operator), [liveStop?.operator]);
 
   const filteredStops = useMemo(() => {
     if (operatorFilter === "all") return stops;
@@ -917,9 +922,9 @@ export default function MapApp() {
         )}
         <ZoomControl position="bottomright" />
         <StopsLayer stops={filteredStops} visible={stopsVisible} onSelect={handleSelectStop} />
-        {selectedStop && (
+        {liveStop && (
           <Marker
-            position={[selectedStop.lat, selectedStop.lon]}
+            position={[liveStop.lat, liveStop.lon]}
             icon={stopPingIcon}
             interactive={false}
             keyboard={false}
@@ -1048,10 +1053,10 @@ export default function MapApp() {
           onFocusStop={handleFocusJourneyStop}
         />
       ) : (
-        selectedStop && (
+        liveStop && (
           <StopView
-            key={selectedStop.designator}
-            stop={selectedStop}
+            key={liveStop.designator}
+            stop={liveStop}
             desktop={desktop}
             vehicles={vehicles}
             onClose={handleCloseStop}

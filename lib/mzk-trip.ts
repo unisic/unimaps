@@ -1,6 +1,8 @@
 /**
  * Resolution of MZK trips, courses, and high-precision route shapes.
  */
+import type { MzkRunningVehicle } from "./mzk-api";
+import { clampPlannedMonotone, isMzkNotStarted } from "./mzk-state";
 import { getMzkApi, getMzkPoller, getShapes } from "./poller-singleton";
 
 /** Road polyline of an MZK variant — served from the shape store (fetched on
@@ -33,7 +35,46 @@ function formatHHMM(ms: number): string {
   });
 }
 
-export async function resolveMzkTrip(identifier: string): Promise<Record<string, unknown> | null> {
+/**
+ * `trip.times` of a running vehicle. `estimate.time_diff` (planned - scheduled, s) is attached
+ * only for live callers and never while the course has not begun. Planned times of the stops
+ * still ahead are made forward-monotone (a later stop cannot precede an earlier one).
+ */
+export function buildMzkTimes(
+  cached: Pick<MzkRunningVehicle, "stopPoints" | "orderInCourse">,
+  opts: { live: boolean; notStarted: boolean; nowMs?: number },
+) {
+  const planned = clampPlannedMonotone(
+    cached.stopPoints.map((sp) => sp.plannedDeparture),
+    cached.orderInCourse ?? 0,
+  );
+  return cached.stopPoints.map((sp, idx) => {
+    const schedMs = sp.scheduledDeparture || (opts.nowMs ?? Date.now());
+    const plannedMs = planned[idx] || schedMs;
+    const diff = Math.round((plannedMs - schedMs) / 1000);
+    return {
+      stop_name: sp.name,
+      designator: null,
+      place_id: `mzk:${sp.symbol}`,
+      departure_time: formatHHMM(schedMs),
+      index: idx,
+      platform: null,
+      ...(opts.live && !opts.notStarted ? { estimate: { time_diff: diff } } : {}),
+    };
+  });
+}
+
+/**
+ * `live` (default) = the caller is a live trip view (`/api/trip_execution`): per-stop
+ * `estimate`s are attached, except for a course that has not begun — OnTime's numbers
+ * are a placeholder then (see lib/mzk-state.ts). Static callers (`/api/trip`, `/api/trips`:
+ * cached for minutes/hours by browsers and the client) must not carry live estimates.
+ */
+export async function resolveMzkTrip(
+  identifier: string,
+  opts: { live?: boolean } = {},
+): Promise<Record<string, unknown> | null> {
+  const live = opts.live ?? true;
   const cleanId = String(identifier).replace(/^mzk:/, "");
   const parts = cleanId.split(":");
   const courseIdStr = parts[0];
@@ -53,20 +94,9 @@ export async function resolveMzkTrip(identifier: string): Promise<Record<string,
     mzkPoller.runningVehiclesMap.get(identifier);
 
   if (cached && cached.stopPoints?.length) {
-    const times = cached.stopPoints.map((sp, idx) => {
-      const schedMs = sp.scheduledDeparture || Date.now();
-      const plannedMs = sp.plannedDeparture || schedMs;
-      const diff = Math.round((plannedMs - schedMs) / 1000);
-      return {
-        stop_name: sp.name,
-        designator: null,
-        place_id: `mzk:${sp.symbol}`,
-        departure_time: formatHHMM(schedMs),
-        index: idx,
-        platform: null,
-        estimate: { time_diff: diff },
-      };
-    });
+    const first = mzkPoller.stopsBySymbol.get(cached.stopPoints[0].symbol);
+    const notStarted = live && isMzkNotStarted(cached, first ? { lat: first.lat, lon: first.lon } : null);
+    const times = buildMzkTimes(cached, { live, notStarted });
 
     let shape: [number, number][] | null = null;
     if (cached.variantLoid) {
@@ -92,6 +122,7 @@ export async function resolveMzkTrip(identifier: string): Promise<Record<string,
         ...(pos?.bearing != null ? { bearing: pos.bearing } : {}),
       },
       vehicle_trip_index: cached.orderInCourse ?? 0,
+      ...(notStarted ? { not_started: true } : {}),
       shape,
       ...shapeRef(cached.variantLoid),
     };
@@ -151,7 +182,7 @@ export async function resolveMzkTrip(identifier: string): Promise<Record<string,
           departure_time: depTime,
           index: idx,
           platform: null,
-          estimate: { time_diff: diff },
+          ...(live ? { estimate: { time_diff: diff } } : {}),
         };
       });
 

@@ -36,7 +36,8 @@ export interface MzkRunningVehicle {
   orderInCourse: number;
   direction: string;
   lastStopSymbol: string;
-  lastStopOrderNo: number;
+  /** null until OnTime has confirmed a stop (always present on the wire) */
+  lastStopOrderNo: number | null;
   stopPoints: MzkRunningStopPoint[];
   optionalDirection: string;
 }
@@ -130,9 +131,23 @@ export interface MzkMessagesResponse {
   messages: MzkMessage[];
 }
 
+interface CacheEntry<T> {
+  at: number;
+  p: Promise<T>;
+}
+
+/** getRealtime of one stop changes every few seconds; concurrent viewers (and a station hub's several symbols) share a request. */
+export const MZK_REALTIME_TTL_MS = 5_000;
+/** A day's schedule of one stop never changes within the day (~165 KB each, so the cache is small and bounded). */
+export const MZK_SCHEDULE_TTL_MS = 15 * 60_000;
+const MZK_REALTIME_CACHE_MAX = 256;
+const MZK_SCHEDULE_CACHE_MAX = 24;
+
 export class MzkApi {
   readonly baseUrl: string;
   private readonly timeoutMs: number;
+  private readonly realtimeCache = new Map<string, CacheEntry<MzkRealtimeResponse>>();
+  private readonly scheduleCache = new Map<string, CacheEntry<MzkAtomicScheduleResponse>>();
 
   constructor(baseUrl = "https://rozklady.bielsko.pl", timeoutMs = 10_000) {
     this.baseUrl = baseUrl.replace(/\/+$/, "");
@@ -161,6 +176,30 @@ export class MzkApi {
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  /**
+   * TTL cache + in-flight de-duplication. A failed request is never cached (the entry is dropped as soon as it
+   * rejects, so the next caller retries); the map stays bounded (expired entries first, then the oldest).
+   */
+  private cached<T>(map: Map<string, CacheEntry<T>>, key: string, ttlMs: number, max: number, load: () => Promise<T>): Promise<T> {
+    const now = Date.now();
+    const hit = map.get(key);
+    if (hit && now - hit.at < ttlMs) return hit.p;
+    const entry: CacheEntry<T> = { at: now, p: load() };
+    map.set(key, entry);
+    entry.p.catch(() => {
+      if (map.get(key) === entry) map.delete(key);
+    });
+    if (map.size > max) {
+      for (const [k, e] of map) if (now - e.at >= ttlMs) map.delete(k);
+      while (map.size > max) {
+        const oldest = map.keys().next().value;
+        if (oldest === undefined) break;
+        map.delete(oldest);
+      }
+    }
+    return entry.p;
   }
 
   /**
@@ -201,8 +240,8 @@ export class MzkApi {
    * Fetches live departures for a specific stop symbol (e.g. "341", "2").
    */
   async fetchRealtime(symbol: string): Promise<MzkRealtimeResponse> {
-    return this.requestJson<MzkRealtimeResponse>(
-      `getRealtime.json?stopPointSymbol=${encodeURIComponent(symbol)}`,
+    return this.cached(this.realtimeCache, symbol, MZK_REALTIME_TTL_MS, MZK_REALTIME_CACHE_MAX, () =>
+      this.requestJson<MzkRealtimeResponse>(`getRealtime.json?stopPointSymbol=${encodeURIComponent(symbol)}`),
     );
   }
 
@@ -238,8 +277,10 @@ export class MzkApi {
       const now = new Date();
       dateParam = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate(), 12, 0, 0);
     }
-    return this.requestJson<MzkAtomicScheduleResponse>(
-      `getAtomicSchedule.json?symbol=${encodeURIComponent(symbol)}&date=${dateParam}`,
+    return this.cached(this.scheduleCache, `${symbol}|${dateParam}`, MZK_SCHEDULE_TTL_MS, MZK_SCHEDULE_CACHE_MAX, () =>
+      this.requestJson<MzkAtomicScheduleResponse>(
+        `getAtomicSchedule.json?symbol=${encodeURIComponent(symbol)}&date=${dateParam}`,
+      ),
     );
   }
 

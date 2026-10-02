@@ -60,11 +60,11 @@ The app is served at `http://localhost:8080`.
 | `/api/vehicles` | All active vehicle positions with delays and heading (`JSON`) |
 | `/api/gtfs-rt.pb` | Standard **GTFS-RT VehiclePositions** (`protobuf`) |
 | `/api/connections?from=...&to=...` | Transit routing engine (direct & transfer itineraries) |
-| `/api/stops` | All 950+ stops with coordinates and platform metadata |
+| `/api/stops` | KB and MZK stops merged into one list (~1300 entries; `operator` is `KB`, `MZK` or `BOTH`), with coordinates, direction arrows and platform metadata; `ETag` + 304 |
 | `/api/lines` | Active bus lines catalog extracted from GTFS |
 | `/api/stop/:id/departures` | Live & scheduled departures for a specific stop |
 | `/api/shapes?ids=...` | Stored road geometry (encoded polyline, precision 6, + per-stop distances) for the `shape` ids advertised by `/api/vehicles` and trip responses; immutable-cached |
-| `/api/health` | Service health status, vehicle count, feed freshness and road-shape store counters |
+| `/api/health` | Service health status, vehicle count, feed freshness, MZK / merged stop-list counters (`mzk_stops`, `merged_stops`) and road-shape store counters |
 
 ## Road Shapes
 
@@ -81,6 +81,17 @@ Road-following route geometry is computed **on the server** and stored, instead 
 | `KB_OSRM_USER_AGENT` | `kb-map/2.0 (+https://github.com/DeBondor/kb-map)` | required by the OSRM usage policy |
 | `KB_SHAPES_MAX_AGE_DAYS` | `14` | |
 | `KB_SHAPES_FILE` | `output/shapes/route-shapes.v1.json` | |
+
+## Live Delay (GPS-corrected)
+
+Upstream registers a stop only when one of its GPS samples lands in the stop zone. A bus that passes stops without slowing down is not registered, upstream's `vehicle_trip_index` / `next_departure_index` stall behind the bus and the delay derived from them grows +1 min per minute (observed: +5 → +11 min for a bus running on time). `lib/kb-progress.ts` tracks the bus along its trip's stops from GPS (monotone, upstream's last registered stop as a lower bound) and, only while the bus is already beyond the stop upstream calls "next", replaces `delay` by the schedule deviation at the real position. `/api/vehicles` then carries `delay_src` (`gps` | `gps-held` | `unknown`) and `geo_seq` (GPS index of the last passed stop) for that vehicle; `/api/health` → `stale_index` counts such vehicles.
+
+| Variable | Default | |
+|---|---|---|
+| `KB_GPS_DELAY` | `1` | `0` restores upstream's raw delay (kill switch) |
+## Stop Merging (KB + MZK)
+
+`/api/stops` pairs the stops of the two operators that are the same physical pole (`lib/stop-merge.ts`): within 35 m, or within 120 m with matching names, one MZK stop per KB stop, opposite carriageways never paired. The pairing is a global assignment (it does not depend on the order the upstreams list their stops) and uses the travel direction of both sides: KB from the GTFS feed, MZK learned from the stop order of running courses and persisted to `output/mzk-stop-dirs.v1.json` (`KB_MZK_STOP_DIRS_FILE`). A bus station (D.A.) also lists the departures of every same-name MZK stop within 200 m. The MZK stop list is reloaded daily and as soon as a running course references a stop it does not know. `/api/health` → `mzk_stops` / `merged_stops` show what the current list is made of.
 
 ## Static GTFS Generation
 

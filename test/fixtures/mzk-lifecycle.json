@@ -1,0 +1,272 @@
+[
+ {
+  "label": "waiting_early_floor_-60",
+  "expectNotStarted": true,
+  "note": "bus parked at its first stop 20 min before departure; OnTime delaySec is the -60 s floor, every plannedDeparture = scheduled - 60 s",
+  "record": {
+   "vehicleId": "208",
+   "lineName": "1",
+   "courseLoid": 5088502,
+   "orderInCourse": 0,
+   "lastStopOrderNo": null,
+   "reachedMeters": 0,
+   "latitude": 49.7909,
+   "longitude": 19.049643,
+   "onStopPoint": "247",
+   "delaySec": -60,
+   "firstSymbol": "247",
+   "firstSched": 1790975700000,
+   "firstPlanned": 1790975640000,
+   "nextPlanned": 1790975700000,
+   "nextSched": 1790975760000,
+   "at": "22:55:00",
+   "firstStop": {
+    "lat": 49.79091,
+    "lon": 19.049877
+   }
+  }
+ },
+ {
+  "label": "waiting_late_placeholder",
+  "expectNotStarted": true,
+  "note": "sched 22:54:00, bus still at the first stop: delaySec = now - sched0 (placeholder, grows 1 s/s)",
+  "record": {
+   "vehicleId": "149",
+   "lineName": "29",
+   "courseLoid": 5089417,
+   "orderInCourse": 0,
+   "lastStopOrderNo": null,
+   "reachedMeters": 0,
+   "latitude": 49.879996,
+   "longitude": 19.054143,
+   "onStopPoint": "43",
+   "delaySec": 46,
+   "firstSymbol": "43",
+   "firstSched": 1790974440000,
+   "firstPlanned": 1790974486784,
+   "nextPlanned": 1790974606784,
+   "nextSched": 1790974560000,
+   "at": "22:55:00",
+   "firstStop": {
+    "lat": 49.879959,
+    "lon": 19.054126
+   }
+  }
+ },
+ {
+  "label": "waiting_late_162s",
+  "expectNotStarted": true,
+  "note": "2 min 43 s past the scheduled start, still parked: placeholder 162 s",
+  "record": {
+   "vehicleId": "236",
+   "lineName": "31",
+   "courseLoid": 5090555,
+   "orderInCourse": 0,
+   "lastStopOrderNo": null,
+   "reachedMeters": 0,
+   "latitude": 49.867341,
+   "longitude": 19.116284,
+   "onStopPoint": "356",
+   "delaySec": 162,
+   "firstSymbol": "356",
+   "firstSched": 1790974740000,
+   "firstPlanned": 1790974901410,
+   "nextPlanned": 1790975021410,
+   "nextSched": 1790974860000,
+   "at": "23:01:43",
+   "firstStop": {
+    "lat": 49.8674,
+    "lon": 19.116321
+   }
+  }
+ },
+ {
+  "label": "pocket_lastNo0_reached0",
+  "expectNotStarted": true,
+  "note": "OnTime flagged the first stop as passed (lastStopOrderNo 0) but the bus idles ~85 m away in a layover pocket: reachedMeters 0, delay still the placeholder",
+  "record": {
+   "vehicleId": "128",
+   "lineName": "7",
+   "courseLoid": 5089206,
+   "orderInCourse": 0,
+   "lastStopOrderNo": 0,
+   "reachedMeters": 0,
+   "latitude": 49.80978,
+   "longitude": 18.96968,
+   "onStopPoint": null,
+   "delaySec": 35,
+   "firstSymbol": "81",
+   "firstSched": 1790974500000,
+   "firstPlanned": 1790974485975,
+   "nextPlanned": 1790974628856,
+   "nextSched": 1790974620000,
+   "at": "22:55:19",
+   "firstStop": {
+    "lat": 49.809057,
+    "lon": 18.969957
+   }
+  }
+ },
+ {
+  "label": "at_stop_lastNo0_flicker",
+  "expectNotStarted": true,
+  "note": "parked 13 m from the stop, OnTime flickers lastStopOrderNo null<->0 and onStopPoint on/off",
+  "record": {
+   "vehicleId": "240",
+   "lineName": "2",
+   "courseLoid": 5088601,
+   "orderInCourse": 0,
+   "lastStopOrderNo": 0,
+   "reachedMeters": 17,
+   "latitude": 49.817159,
+   "longitude": 19.014478,
+   "onStopPoint": null,
+   "delaySec": -11,
+   "firstSymbol": "132",
+   "firstSched": 1790975160000,
+   "firstPlanned": 1790975100000,
+   "nextPlanned": 1790975209000,
+   "nextSched": 1790975220000,
+   "at": "23:05:01",
+   "firstStop": {
+    "lat": 49.817133,
+    "lon": 19.014254
+   }
+  }
+ },
+ {
+  "label": "just_departed_reached48",
+  "expectNotStarted": false,
+  "note": "first ping after the real departure: moving, reached 48 m, delay is now a measurement",
+  "record": {
+   "vehicleId": "236",
+   "lineName": "31",
+   "courseLoid": 5090555,
+   "orderInCourse": 0,
+   "lastStopOrderNo": 0,
+   "reachedMeters": 48,
+   "latitude": 49.866909,
+   "longitude": 19.116343,
+   "onStopPoint": null,
+   "delaySec": 188,
+   "firstSymbol": "356",
+   "firstSched": 1790974740000,
+   "firstPlanned": 1790974901410,
+   "nextPlanned": 1790975035686,
+   "nextSched": 1790974860000,
+   "at": "23:02:02",
+   "firstStop": {
+    "lat": 49.8674,
+    "lon": 19.116321
+   }
+  }
+ },
+ {
+  "label": "first_segment_moving",
+  "expectNotStarted": false,
+  "note": "lastStopOrderNo 0, 464 m along the first segment",
+  "record": {
+   "vehicleId": "192",
+   "lineName": "20",
+   "courseLoid": 5090156,
+   "orderInCourse": 0,
+   "lastStopOrderNo": 0,
+   "reachedMeters": 464,
+   "latitude": 49.805566,
+   "longitude": 19.05652,
+   "onStopPoint": null,
+   "delaySec": 31,
+   "firstSymbol": "136",
+   "firstSched": 1790974320000,
+   "firstPlanned": 1790974319926,
+   "nextPlanned": 1790974471000,
+   "nextSched": 1790974440000,
+   "at": "22:53:06",
+   "firstStop": {
+    "lat": 49.806225,
+    "lon": 19.062241
+   }
+  }
+ },
+ {
+  "label": "running_second_stop",
+  "expectNotStarted": false,
+  "note": "orderInCourse 2",
+  "record": {
+   "vehicleId": "223",
+   "lineName": "10",
+   "courseLoid": 5089737,
+   "orderInCourse": 2,
+   "lastStopOrderNo": 2,
+   "reachedMeters": 2713,
+   "latitude": 49.822313,
+   "longitude": 18.975433,
+   "onStopPoint": null,
+   "delaySec": -81,
+   "firstSymbol": "427",
+   "firstSched": 1790974200000,
+   "firstPlanned": 1790974215022,
+   "nextPlanned": 1790974539000,
+   "nextSched": 1790974620000,
+   "at": "22:55:00",
+   "firstStop": {
+    "lat": 49.837811,
+    "lon": 18.979687
+   }
+  }
+ },
+ {
+  "label": "mid_course_join",
+  "expectNotStarted": false,
+  "note": "joined at stop 5: lastStopOrderNo null but orderInCourse 5 (stops 0..4 carry -60 placeholders) — running, NOT not-started",
+  "record": {
+   "vehicleId": "100",
+   "lineName": "53",
+   "courseLoid": 5089469,
+   "orderInCourse": 5,
+   "lastStopOrderNo": null,
+   "reachedMeters": 4649,
+   "latitude": 49.811755,
+   "longitude": 19.02504,
+   "onStopPoint": null,
+   "delaySec": 47,
+   "firstSymbol": "2240",
+   "firstSched": 1790974200000,
+   "firstPlanned": 1790974140000,
+   "nextPlanned": 1790974200000,
+   "nextSched": 1790974260000,
+   "at": "22:58:13",
+   "firstStop": {
+    "lat": 49.846462,
+    "lon": 18.992433
+   }
+  }
+ },
+ {
+  "label": "approach_from_loop_268m",
+  "expectNotStarted": true,
+  "note": "line 34: the bus is still driving up to its first stop through a terminal loop, 268 m away (reached 267), OnTime: ord 0, lastStopOrderNo null, onStopPoint null, delay -60 floor, 3 min 22 s before the start",
+  "record": {
+   "vehicleId": "124",
+   "lineName": "34",
+   "courseLoid": 5089967,
+   "orderInCourse": 0,
+   "lastStopOrderNo": null,
+   "reachedMeters": 267,
+   "latitude": 49.81359,
+   "longitude": 18.997251,
+   "onStopPoint": null,
+   "delaySec": -60,
+   "firstSymbol": "324",
+   "firstSched": 1790976000000,
+   "firstPlanned": 1790976000000,
+   "nextPlanned": 1790976000000,
+   "nextSched": 1790976060000,
+   "at": "23:17:38",
+   "firstStop": {
+    "lat": 49.811764,
+    "lon": 18.994806
+   }
+  }
+ }
+]

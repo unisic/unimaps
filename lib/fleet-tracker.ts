@@ -7,6 +7,7 @@ import path from "node:path";
 import { log } from "./logger";
 import { type MzkApi } from "./mzk-api";
 import { getAllFleetVehicles, getFleetDetails, type MzkVehicleStatic, type VehicleFeatures } from "./mzk-fleet";
+import { isMzkNotStarted } from "./mzk-state";
 import { AGENCY_TIMEZONE } from "./config";
 import type { Stop } from "./types";
 
@@ -70,6 +71,8 @@ export interface FleetVehicleDetail {
     mainLine: string;
   };
   currentCourse: (VehicleCourseRecord & {
+    /** waiting at the first stop; delaySec is 0 and must not be shown or counted */
+    notStarted?: boolean;
     currentStopIndex: number;
     currentStopName: string;
     nextStopName: string | null;
@@ -110,7 +113,10 @@ export interface FleetSummaryItem {
   direction?: string;
   currentStopName?: string;
   nextStopName?: string;
+  /** undefined while the course has not begun (OnTime's delay is a placeholder then) */
   delaySec?: number;
+  /** the bus waits at the first stop of a course that has not begun */
+  notStarted?: boolean;
   coursesCountToday: number;
   cancelledCoursesToday?: number;
   progressPct?: number;
@@ -304,6 +310,8 @@ export class FleetTracker {
       longitude: number;
       angle?: number;
       orderInCourse?: number;
+      lastStopOrderNo?: number | null;
+      reachedMeters?: number;
       onStopPoint?: boolean | string | null;
       nearestSymbol?: string;
       nearestSymbolOrderNo?: number;
@@ -402,6 +410,12 @@ export class FleetTracker {
         }
       }
 
+      // course not begun: OnTime's delay / planned times are a placeholder (lib/mzk-state.ts);
+      // the "current" stop is the first one (the nearest-stop heuristic above would point at stop 2)
+      const firstCoords = totalStops > 0 ? stopsBySymbol?.get(stopPoints[0].symbol) : undefined;
+      const notStarted = isMzkNotStarted(v, firstCoords ? { lat: firstCoords.lat, lon: firstCoords.lon } : null);
+      if (notStarted) order = 0;
+
       let firstStopName = "Początek trasy";
       let lastStopName = v.direction || v.optionalDirection || "Koniec trasy";
       let firstStopSymbol: string | undefined;
@@ -427,7 +441,8 @@ export class FleetTracker {
         symbol: sp.symbol,
         name: sp.name,
         scheduledTime: secsToHHMM(dateToAgencySecs(sp.scheduledDeparture)),
-        plannedTime: secsToHHMM(dateToAgencySecs(sp.plannedDeparture)),
+        // no estimate yet (not begun) or none sent (null planned) -> the schedule, never "00:00"
+        plannedTime: secsToHHMM(dateToAgencySecs(notStarted || !sp.plannedDeparture ? sp.scheduledDeparture : sp.plannedDeparture)),
         status: idx < order ? "passed" : idx === order ? "current" : "upcoming",
         distanceMeters: sp.distance,
       }));
@@ -442,7 +457,8 @@ export class FleetTracker {
       if (detail.currentCourse && detail.currentCourse.courseLoid !== v.courseLoid) {
         const prev = detail.currentCourse;
         const exists = detail.todayCourses.some((c) => c.courseLoid === prev.courseLoid);
-        if (!exists) {
+        // a course that never began is not history: no "completed" row with every stop passed
+        if (!exists && !prev.notStarted) {
           const outcome = determineCourseOutcome(prev);
           detail.todayCourses.push({
             id: `c-${prev.courseLoid}`,
@@ -492,7 +508,8 @@ export class FleetTracker {
         endTime: secsToHHMM(endSecs),
         startSecs,
         endSecs,
-        delaySec: Math.round(v.delaySec || 0),
+        delaySec: notStarted ? 0 : Math.round(v.delaySec || 0),
+        notStarted,
         stopsCount: totalStops,
         currentStopIndex: order,
         currentStopName,
@@ -524,7 +541,7 @@ export class FleetTracker {
         if (detail.currentCourse) {
           const finished = detail.currentCourse;
           const exists = detail.todayCourses.some((c) => c.courseLoid === finished.courseLoid);
-          if (!exists) {
+          if (!exists && !finished.notStarted) {
             const outcome = determineCourseOutcome(finished);
             detail.todayCourses.push({
               id: `c-${finished.courseLoid}`,
@@ -564,7 +581,9 @@ export class FleetTracker {
           detail.lastKnownLocation = {
             lat: finished.lat,
             lon: finished.lon,
-            name: isCancelled
+            name: finished.notStarted
+              ? `Linia ${finished.lineName} → ${finished.lastStopName} (kurs nie został rozpoczęty)`
+              : isCancelled
               ? `Utrata sygnału GPS / awaria (przerwany kurs: linia ${finished.lineName} na przystanku ${finished.currentStopName}${delayMins >= 5 ? `, opóźnienie ${delayMins} min` : ""})`
               : `Zajezdnia MZK (ostatni kurs: ${finished.lineName} do ${finished.lastStopName})`,
           };
@@ -703,7 +722,8 @@ export class FleetTracker {
       if (c.delaySec <= 180 && c.delaySec >= -60) onTimeCount++;
       count++;
     }
-    if (veh.currentCourse) {
+    // a course that has not begun has no delay yet — neither late nor punctual
+    if (veh.currentCourse && !veh.currentCourse.notStarted) {
       totalDelay += Math.abs(veh.currentCourse.delaySec);
       if (veh.currentCourse.delaySec <= 180 && veh.currentCourse.delaySec >= -60) onTimeCount++;
       count++;
@@ -771,7 +791,8 @@ export class FleetTracker {
         direction: v.currentCourse?.direction,
         currentStopName: v.currentCourse?.currentStopName,
         nextStopName: v.currentCourse?.nextStopName ?? undefined,
-        delaySec: v.currentCourse?.delaySec,
+        delaySec: v.currentCourse?.notStarted ? undefined : v.currentCourse?.delaySec,
+        notStarted: v.currentCourse?.notStarted || undefined,
         coursesCountToday: v.stats.totalCoursesToday,
         cancelledCoursesToday: v.stats.cancelledCoursesToday ?? 0,
         progressPct: v.currentCourse?.progressPct,
@@ -825,10 +846,13 @@ export class FleetTracker {
     for (const v of this.vehicles.values()) {
       if (v.status === "active") {
         active++;
-        countedActive++;
+        // waiting buses (course not begun) have no delay: out of the punctuality average
+        if (!v.currentCourse?.notStarted) countedActive++;
         if (v.currentCourse) {
-          totalDelay += v.currentCourse.delaySec;
-          if (v.currentCourse.delaySec <= 180 && v.currentCourse.delaySec >= -60) onTimeCount++;
+          if (!v.currentCourse.notStarted) {
+            totalDelay += v.currentCourse.delaySec;
+            if (v.currentCourse.delaySec <= 180 && v.currentCourse.delaySec >= -60) onTimeCount++;
+          }
           if (v.currentCourse.lineName) lines.add(v.currentCourse.lineName);
         }
       } else {

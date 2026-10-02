@@ -64,6 +64,8 @@ export interface FleetVehicleDetail {
     mainLine: string;
   };
   currentCourse: (VehicleCourseRecord & {
+    /** waiting at the first stop of a course that has not begun (delaySec is 0, not a delay) */
+    notStarted?: boolean;
     currentStopIndex: number;
     currentStopName: string;
     nextStopName: string | null;
@@ -105,6 +107,8 @@ export interface FleetSummaryItem {
   currentStopName?: string;
   nextStopName?: string;
   delaySec?: number;
+  /** waiting at the first stop of a course that has not begun (delaySec absent) */
+  notStarted?: boolean;
   coursesCountToday: number;
   cancelledCoursesToday?: number;
   progressPct?: number;

@@ -270,7 +270,14 @@ function PropulsionBadge({ fuelType, lengthCategory }: { fuelType: string; lengt
   );
 }
 
-function DelayBadge({ delaySec }: { delaySec?: number | null }) {
+function DelayBadge({ delaySec, notStarted }: { delaySec?: number | null; notStarted?: boolean }) {
+  if (notStarted) {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-md bg-white/6 px-2 py-0.5 text-[11px] font-semibold text-text-mute border border-hairline">
+        Czeka na odjazd
+      </span>
+    );
+  }
   if (delaySec == null) return null;
   const mins = Math.round(delaySec / 60);
 
@@ -831,7 +838,7 @@ const VehicleCard = memo(function VehicleCard({
                     &rarr; {vehicle.direction}
                   </span>
                 </div>
-                <DelayBadge delaySec={vehicle.delaySec} />
+                <DelayBadge delaySec={vehicle.delaySec} notStarted={vehicle.notStarted} />
               </div>
 
               {vehicle.currentStopName && (
@@ -1043,7 +1050,7 @@ function VehicleDetailModal({
                             &rarr; {data.currentCourse.direction}
                           </span>
                         </div>
-                        <DelayBadge delaySec={data.currentCourse.delaySec} />
+                        <DelayBadge delaySec={data.currentCourse.delaySec} notStarted={data.currentCourse.notStarted} />
                       </div>
 
                       {/* Stops progression */}

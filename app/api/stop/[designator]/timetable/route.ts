@@ -2,7 +2,7 @@ import { badRequest, isValidDate, isValidId, upstreamError } from "@/lib/api-hel
 import { todayLocalISO } from "@/lib/config";
 import { pyTruthy } from "@/lib/kb-api";
 import { log } from "@/lib/logger";
-import { getApi, getMzkApi, getMzkPoller, getPoller, startPoller } from "@/lib/poller-singleton";
+import { getApi, getMergedStopsView, getMzkApi, getMzkPoller, startPoller } from "@/lib/poller-singleton";
 import { allowRequest, clientIp, tooManyRequests } from "@/lib/rate-limit";
 import type { TimetableDeparture, TimetableResponse } from "@/lib/client/types";
 
@@ -23,38 +23,17 @@ export async function GET(
   try {
     await startPoller();
 
-    const poller = getPoller();
     const mzkPoller = getMzkPoller();
-    const { getMergedStop, mergeStops } = await import("@/lib/stop-merge");
-    type WireStop = import("@/lib/types").WireStop;
-    let mergedStop = getMergedStop(designator);
-    if (!mergedStop && (poller.stops.length > 0 || mzkPoller.stops.length > 0)) {
-      const kbFormatted: WireStop[] = poller.stops.map((s) => ({
-        id: s.stopId,
-        designator: s.urlId,
-        name: s.name,
-        lat: s.lat,
-        lon: s.lon,
-        operator: "KB",
-        dirs: s.dirs,
-        isStation: s.isStation,
-        showPlatforms: s.showPlatforms,
-      }));
-      const mzkFormatted: WireStop[] = mzkPoller.stops.map((s) => ({
-        id: s.stopId,
-        designator: s.urlId,
-        name: s.name,
-        lat: s.lat,
-        lon: s.lon,
-        operator: "MZK",
-        symbol: s.symbol,
-        isStation: s.isStation,
-        onRequest: s.onRequest,
-        gettingOut: s.gettingOut,
-      }));
-      mergeStops(kbFormatted, mzkFormatted);
-      mergedStop = getMergedStop(designator);
-    }
+    // one shared, memoized merge (same list the client got from /api/stops) — never an ad hoc re-merge
+    const mergedStop = getMergedStopsView().lookup(designator);
+
+    /* a failed upstream fetch used to look like "no departures today" — and the 200 was cached for 15 min */
+    const failed = new Set<"kb" | "mzk">();
+    const respond = (body: object): Response =>
+      Response.json(
+        { ...body, ...(failed.size ? { warnings: [...failed] } : {}) },
+        { headers: { "Cache-Control": failed.size ? "no-store" : "public, max-age=900" } },
+      );
 
     const fetchMzk = async (symbol: string): Promise<TimetableDeparture[]> => {
       try {
@@ -88,6 +67,7 @@ export async function GET(
         departures.sort((a, b) => a.departure - b.departure);
         return departures;
       } catch (err) {
+        failed.add("mzk");
         log.warn("mzk-timetable", `Atomic schedule fetch failed for symbol ${symbol}: ${err}`);
         return [];
       }
@@ -105,39 +85,38 @@ export async function GET(
           return { departures: deps, main_direction: rec.main_direction };
         }
       } catch (err) {
+        failed.add("kb");
         log.warn("kb-timetable", `Timetable fetch failed for ${kbDesig}: ${err}`);
       }
       return { departures: [] };
     };
 
-    if (mergedStop?.operator === "BOTH" && mergedStop.mzkSymbol && mergedStop.kbDesignator) {
-      const [mzkRes, kbRes] = await Promise.allSettled([
-        fetchMzk(mergedStop.mzkSymbol),
+    if (mergedStop?.operator === "BOTH" && mergedStop.kbDesignator) {
+      const symbols = mergedStop.mzkSymbols ?? (mergedStop.mzkSymbol ? [mergedStop.mzkSymbol] : []);
+      const [kbRes, ...mzkRes] = await Promise.allSettled([
         fetchKb(mergedStop.kbDesignator),
+        ...symbols.map((s) => fetchMzk(s)),
       ]);
-      const mzkDeps = mzkRes.status === "fulfilled" ? mzkRes.value : [];
       const kbData = kbRes.status === "fulfilled" ? kbRes.value : { departures: [] };
       const kbDeps = kbData.departures || [];
+      const seen = new Set<string>();
+      const mzkDeps = mzkRes
+        .flatMap((r) => (r.status === "fulfilled" ? r.value : []))
+        .sort((a, b) => a.departure - b.departure)
+        // a course can call at two stops of the same hub: keep its earliest departure only
+        .filter((d) => (symbols.length > 1 ? !seen.has(String(d.trip_id)) && !!seen.add(String(d.trip_id)) : true));
       const combined = [...mzkDeps, ...kbDeps].sort((a, b) => a.departure - b.departure);
-      return Response.json(
-        { departures: combined, main_direction: kbData.main_direction },
-        { headers: { "Cache-Control": "public, max-age=900" } },
-      );
+      return respond({ departures: combined, main_direction: kbData.main_direction });
     }
 
     if (designator.startsWith("mzk:")) {
       const symbol = designator.slice(4);
       const departures = await fetchMzk(symbol);
-      return Response.json(
-        { departures },
-        { headers: { "Cache-Control": "public, max-age=900" } },
-      );
+      return respond({ departures });
     }
 
     const kbData = await fetchKb(designator);
-    return Response.json(kbData, {
-      headers: { "Cache-Control": "public, max-age=900" },
-    });
+    return respond(kbData);
   } catch (err) {
     return upstreamError("timetable", err);
   }

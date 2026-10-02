@@ -78,9 +78,21 @@ export function findActiveStop(
   const vLat = vehicle.lat;
   const vLon = vehicle.lon;
 
+  // 0. Upstream says "at stop vtiHint" and the bus really is inside that pole's zone: believe it. Plain
+  //    nearest-stop cannot: twin stops of an out-and-back (opposite sides of one road, 14-50 m apart,
+  //    visited minutes apart) and a pattern that revisits the very same stop object (D.A. at both ends)
+  //    are equally near, and the lowest index / the nearer pole wins.
+  if (vehicle.at_stop === true && vtiHint != null && vtiHint >= 0 && vtiHint < n) {
+    const h = stops[vtiHint];
+    if (h && Number.isFinite(h.lat) && Number.isFinite(h.lon) && haversineMeters(vLat, vLon, h.lat, h.lon) <= 90) {
+      return { index: vtiHint, isAtStop: true, progress: 1 };
+    }
+  }
+
   // 1. Check if the vehicle is physically at any stop
   let closestStopIdx = 0;
   let minStopDist = Infinity;
+  const near: Array<{ i: number; d: number }> = [];
   for (let i = 0; i < n; i++) {
     const s = stops[i];
     if (!s || !Number.isFinite(s.lat) || !Number.isFinite(s.lon)) continue;
@@ -89,6 +101,15 @@ export function findActiveStop(
       minStopDist = d;
       closestStopIdx = i;
     }
+    if (d <= 55) near.push({ i, d });
+  }
+  // twins / revisited stop objects: of the poles about as near as the nearest one, the one closest
+  // to the hint index is the visit upstream is on (the lowest index is just an iteration artefact)
+  if (near.length > 1 && vtiHint != null && vtiHint >= 0 && vtiHint < n) {
+    const cands = near.filter((c) => c.d <= minStopDist + 30);
+    cands.sort((a, b) => Math.abs(a.i - vtiHint) - Math.abs(b.i - vtiHint) || a.d - b.d);
+    closestStopIdx = cands[0].i;
+    minStopDist = cands[0].d;
   }
 
   // If vehicle is physically at the stop (<= 55m when explicitly at_stop, or <= 35m dwell)

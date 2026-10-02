@@ -21,12 +21,20 @@ export function useVehicles() {
   });
 }
 
-/** Static stop list (~950 entries) — fetched once per session, HTTP cached. */
+/**
+ * Merged stop list (~1300 entries). Revalidated cheaply (ETag → 304) on focus (at most once a minute) and every 15 min — and every 20 s
+ * while the server says one operator's stops are still missing (`partial`): a page that lives for days (iOS PWA)
+ * must not keep the list it got while the MZK stops were still loading, or from before an upstream data change.
+ * SWR ignores focus events during the first `focusThrottleInterval` after mount, hence the interval refresh.
+ * An unchanged payload keeps its identity (SWR compares deeply), so the 4 s heartbeat tree never re-renders for it.
+ */
 export function useStops() {
   return useSWR<StopsResponse>("/api/stops", cachedFetcher, {
-    revalidateOnFocus: false,
-    revalidateIfStale: false,
-    revalidateOnReconnect: false,
+    revalidateOnFocus: true,
+    focusThrottleInterval: 60_000,
+    revalidateOnReconnect: true,
+    refreshInterval: (latest) => (latest?.partial ? 20_000 : 15 * 60_000),
+    keepPreviousData: true,
   });
 }
 

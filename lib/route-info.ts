@@ -77,10 +77,32 @@ function finiteAt(stops: ReadonlyArray<number | null>, from: number, step: 1 | -
   return null;
 }
 
+export interface DistOpts {
+  /** how far ahead of `hint` the vehicle may have moved since the hint was measured (m); default 500 */
+  aheadM?: number;
+}
+
+const round1 = (x: number): number => Math.round(x * 10) / 10;
+
 /**
- * Metres along the shape for a KB fix, searched between the last reached stop
- * (vti) and the next one so the opposite leg of an out-and-back can't win.
- * Falls back to a strict whole-line search; null when the fix is off-route.
+ * Forward window for kbDistAlong's continuity step after `gapS` seconds without a poll: a bus can
+ * cover ~30 m/s at most, plus margin; never less than 500 m (the poller's normal 10-16 s cadence)
+ * and never more than 2 km (so the opposite leg of a short spur stays out of reach).
+ */
+export function kbAheadM(gapS: number): number {
+  const g = Number.isFinite(gapS) ? Math.min(90, Math.max(0, gapS)) : 0;
+  return Math.min(2000, Math.max(500, 30 * g + 150));
+}
+
+/**
+ * Metres along the shape for a KB fix. Out-and-back / loop patterns run on twin stops and overlapping
+ * roads, and upstream's vti freezes for minutes whenever a pole is passed outside its geofence, so
+ * the answer is built from what a bus cannot do, in this order:
+ *  1. continuity: it moves forward from where it was last poll — [hint-60, hint+aheadM]. This keeps
+ *     the return leg on the return leg while vti is stale (the vti window below would accept the
+ *     outbound twin, same road, <=60 m);
+ *  2. upstream's window between the last reached stop (vti) and the next one (cold start / lost);
+ *  3. a strict whole-line search; null when the fix is off-route.
  */
 export function kbDistAlong(
   geom: ShapeGeometry,
@@ -89,17 +111,22 @@ export function kbDistAlong(
   vti: number | null,
   nextSeq: number | null,
   hint?: number,
+  opts: DistOpts = {},
 ): number | null {
   const maxOff = geom.src === "straight" ? 150 : 60;
+  if (hint !== undefined && Number.isFinite(hint)) {
+    const c = projectOnPolyline(geom.pl, lat, lon, hint - 60, hint + (opts.aheadM ?? 500), { hint });
+    if (c && c.d <= maxOff) return round1(c.s);
+  }
   if (vti !== null && vti >= 0) {
     const lo = finiteAt(geom.stops, Math.min(vti, geom.stops.length - 1), -1);
     const hiIdx = nextSeq !== null && nextSeq > vti ? nextSeq : vti + 1;
     const hi = finiteAt(geom.stops, hiIdx, 1);
     const p = projectOnPolyline(geom.pl, lat, lon, (lo ?? 0) - 100, (hi ?? geom.pl.length) + 100, { hint });
-    if (p && p.d <= maxOff) return Math.round(p.s * 10) / 10;
+    if (p && p.d <= maxOff) return round1(p.s);
   }
   const p = projectOnPolyline(geom.pl, lat, lon, 0, Infinity, { hint });
-  return p && p.d <= 40 ? Math.round(p.s * 10) / 10 : null;
+  return p && p.d <= 40 ? round1(p.s) : null;
 }
 
 /**
@@ -111,6 +138,9 @@ export function vehicleExtras(v: VehiclePos, shapes: { wireId(key: string): stri
     const out: Partial<VehicleJson> = {};
     if (v.fixAt != null && Number.isFinite(v.fixAt)) out.fix_at = Math.round(v.fixAt * 10) / 10;
     if (v.nextStopSeq != null) out.next_stop_seq = v.nextStopSeq;
+    if (v.delaySrc) out.delay_src = v.delaySrc;
+    if (v.geoLastSeq != null && v.geoLastSeq >= 0) out.geo_seq = v.geoLastSeq;
+    if (v.notStarted) out.not_started = true;
     if (v.speed != null && Number.isFinite(v.speed) && v.speedAt != null && nowEpoch - v.speedAt <= 90) {
       out.speed = Math.round(v.speed * 10) / 10;
     }

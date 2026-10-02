@@ -1,0 +1,545 @@
+{
+ "capturedAt": "2026-10-02",
+ "source": "KB /stops + GTFS dirs, MZK getStops + variant bearings",
+ "places": {
+  "Bestwińska Strefa Przemysłowa": {
+   "kb": [
+    "10091",
+    "10092"
+   ],
+   "mzk": [
+    "35",
+    "36"
+   ]
+  },
+  "Wapienica Centrum": {
+   "kb": [
+    "10431",
+    "10432"
+   ],
+   "mzk": [
+    "66",
+    "57"
+   ]
+  },
+  "Wilkowice Sklep": {
+   "kb": [
+    "21601",
+    "21602"
+   ],
+   "mzk": [
+    "2044",
+    "2045"
+   ]
+  },
+  "Grunwaldzka Szpital Miejski": {
+   "kb": [
+    "11072"
+   ],
+   "mzk": [
+    "112",
+    "113"
+   ]
+  },
+  "Cieszyńska Os. Wojska Polskiego": {
+   "kb": [
+    "10341",
+    "10342"
+   ],
+   "mzk": [
+    "62",
+    "63"
+   ]
+  },
+  "Mazańcowicka Katowicka": {
+   "kb": [
+    "10881"
+   ],
+   "mzk": [
+    "220",
+    "221"
+   ]
+  },
+  "Piastowska Lubertowicza": {
+   "kb": [
+    "10302"
+   ],
+   "mzk": [
+    "265"
+   ]
+  },
+  "Dworzec (D.A. hub)": {
+   "kb": [
+    "10000",
+    "10021"
+   ],
+   "mzk": [
+    "343",
+    "341",
+    "342",
+    "264",
+    "469",
+    "2"
+   ]
+  },
+  "Czechowice Górnicza Węglowa US": {
+   "kb": [
+    "29021",
+    "29022"
+   ],
+   "mzk": [
+    "2374",
+    "2376"
+   ]
+  },
+  "Cieszyńska Lotnisko": {
+   "kb": [
+    "10291",
+    "10292"
+   ],
+   "mzk": [
+    "64",
+    "65",
+    "441"
+   ]
+  }
+ },
+ "kb": [
+  {
+   "id": "10021",
+   "designator": "19117:39660",
+   "name": "BIELSKO-BIAŁA 3 MAJA DWORZEC",
+   "lat": 49.827666,
+   "lon": 19.044778,
+   "dirs": [
+    333
+   ]
+  },
+  {
+   "id": "10091",
+   "designator": "19125:39674",
+   "name": "BIELSKO-BIAŁA BESTWIŃSKA STREFA PRZEMYSŁOWA",
+   "lat": 49.866768,
+   "lon": 19.047389,
+   "dirs": [
+    181
+   ]
+  },
+  {
+   "id": "10092",
+   "designator": "19125:39675",
+   "name": "BIELSKO-BIAŁA BESTWIŃSKA STREFA PRZEMYSŁOWA",
+   "lat": 49.867766,
+   "lon": 19.04736,
+   "dirs": [
+    2
+   ]
+  },
+  {
+   "id": "10291",
+   "designator": "19145:39712",
+   "name": "BIELSKO-BIAŁA CIESZYŃSKA LOTNISKO",
+   "lat": 49.809294,
+   "lon": 18.998706,
+   "dirs": [
+    75
+   ]
+  },
+  {
+   "id": "10292",
+   "designator": "19145:39713",
+   "name": "BIELSKO-BIAŁA CIESZYŃSKA LOTNISKO",
+   "lat": 49.809261,
+   "lon": 18.997509,
+   "dirs": [
+    256
+   ]
+  },
+  {
+   "id": "10341",
+   "designator": "19150:39721",
+   "name": "BIELSKO-BIAŁA CIESZYŃSKA OS. WOJSKA POLSKIEGO",
+   "lat": 49.812094,
+   "lon": 19.009464,
+   "dirs": [
+    68
+   ]
+  },
+  {
+   "id": "10342",
+   "designator": "19150:39722",
+   "name": "BIELSKO-BIAŁA CIESZYŃSKA OS. WOJSKA POLSKIEGO",
+   "lat": 49.811658,
+   "lon": 19.007041,
+   "dirs": [
+    249
+   ]
+  },
+  {
+   "id": "10000",
+   "designator": "19120",
+   "name": "BIELSKO-BIAŁA D.A.",
+   "lat": 49.830227,
+   "lon": 19.042746,
+   "isStation": true,
+   "showPlatforms": true
+  },
+  {
+   "id": "11072",
+   "designator": "2113302:2186563",
+   "name": "BIELSKO-BIAŁA GRUNWALDZKA SZPITAL MIEJSKI",
+   "lat": 49.823333,
+   "lon": 19.034472,
+   "dirs": [
+    218
+   ]
+  },
+  {
+   "id": "10881",
+   "designator": "279904:323504",
+   "name": "BIELSKO-BIAŁA MAZAŃCOWICKA KATOWICKA",
+   "lat": 49.855414,
+   "lon": 19.034182,
+   "dirs": [
+    109
+   ]
+  },
+  {
+   "id": "10302",
+   "designator": "19146:39714",
+   "name": "BIELSKO-BIAŁA PIASTOWSKA LUBERTOWICZA",
+   "lat": 49.827047,
+   "lon": 19.036152,
+   "dirs": [
+    218
+   ]
+  },
+  {
+   "id": "10431",
+   "designator": "19159:39735",
+   "name": "BIELSKO-BIAŁA WAPIENICA CENTRUM",
+   "lat": 49.807828,
+   "lon": 18.985035,
+   "dirs": [
+    77
+   ]
+  },
+  {
+   "id": "10432",
+   "designator": "19159:39736",
+   "name": "BIELSKO-BIAŁA WAPIENICA CENTRUM",
+   "lat": 49.808032,
+   "lon": 18.983911,
+   "dirs": [
+    257
+   ]
+  },
+  {
+   "id": "29021",
+   "designator": "1733560:1800430",
+   "name": "CZECHOWICE-DZIEDZICE GÓRNICZA WĘGLOWA URZĄD SKARBOWY",
+   "lat": 49.93258,
+   "lon": 19.012837,
+   "dirs": [
+    18
+   ]
+  },
+  {
+   "id": "29022",
+   "designator": "1733560:1800431",
+   "name": "CZECHOWICE-DZIEDZICE GÓRNICZA WĘGLOWA URZĄD SKARBOWY",
+   "lat": 49.932833,
+   "lon": 19.012444,
+   "dirs": [
+    197
+   ]
+  },
+  {
+   "id": "21601",
+   "designator": "19432:40167",
+   "name": "WILKOWICE SKLEP",
+   "lat": 49.760261,
+   "lon": 19.102024,
+   "dirs": [
+    283
+   ]
+  },
+  {
+   "id": "21602",
+   "designator": "19432:40168",
+   "name": "WILKOWICE SKLEP",
+   "lat": 49.759988,
+   "lon": 19.103147,
+   "dirs": [
+    103
+   ]
+  }
+ ],
+ "mzk": [
+  {
+   "id": "mzk:2",
+   "designator": "mzk:2",
+   "name": "3 Maja Dworzec",
+   "lat": 49.82777,
+   "lon": 19.044842,
+   "symbol": "2",
+   "dirs": [
+    339
+   ]
+  },
+  {
+   "id": "mzk:36",
+   "designator": "mzk:36",
+   "name": "Bestwińska Strefa Przemysłowa",
+   "lat": 49.867507,
+   "lon": 19.047194,
+   "symbol": "36",
+   "dirs": [
+    181
+   ]
+  },
+  {
+   "id": "mzk:35",
+   "designator": "mzk:35",
+   "name": "Bestwińska Strefa Przemysłowa",
+   "lat": 49.867766,
+   "lon": 19.047333,
+   "symbol": "35",
+   "dirs": [
+    2
+   ]
+  },
+  {
+   "id": "mzk:64",
+   "designator": "mzk:64",
+   "name": "Cieszyńska Lotnisko",
+   "lat": 49.80937,
+   "lon": 18.998631,
+   "symbol": "64",
+   "dirs": [
+    75
+   ]
+  },
+  {
+   "id": "mzk:65",
+   "designator": "mzk:65",
+   "name": "Cieszyńska Lotnisko",
+   "lat": 49.809933,
+   "lon": 19.000608,
+   "symbol": "65",
+   "dirs": [
+    255
+   ]
+  },
+  {
+   "id": "mzk:62",
+   "designator": "mzk:62",
+   "name": "Cieszyńska Osiedle Wojska Polskiego",
+   "lat": 49.811477,
+   "lon": 19.006873,
+   "symbol": "62",
+   "dirs": [
+    70
+   ]
+  },
+  {
+   "id": "mzk:63",
+   "designator": "mzk:63",
+   "name": "Cieszyńska Osiedle Wojska Polskiego",
+   "lat": 49.811658,
+   "lon": 19.007041,
+   "symbol": "63",
+   "dirs": [
+    251
+   ]
+  },
+  {
+   "id": "mzk:2374",
+   "designator": "mzk:2374",
+   "name": "Czechowice-Dz. Górnicza Węglowa Urząd Skarbowy",
+   "lat": 49.932811,
+   "lon": 19.01247,
+   "symbol": "2374",
+   "dirs": [
+    18
+   ]
+  },
+  {
+   "id": "mzk:2376",
+   "designator": "mzk:2376",
+   "name": "Czechowice-Dz. Górnicza Węglowa Urząd Skarbowy",
+   "lat": 49.93262,
+   "lon": 19.01294,
+   "symbol": "2376",
+   "dirs": [
+    197
+   ]
+  },
+  {
+   "id": "mzk:112",
+   "designator": "mzk:112",
+   "name": "Grunwaldzka Szpital Miejski",
+   "lat": 49.823214,
+   "lon": 19.034361,
+   "symbol": "112",
+   "dirs": [
+    23
+   ]
+  },
+  {
+   "id": "mzk:113",
+   "designator": "mzk:113",
+   "name": "Grunwaldzka Szpital Miejski",
+   "lat": 49.823318,
+   "lon": 19.034445,
+   "symbol": "113",
+   "dirs": [
+    235
+   ]
+  },
+  {
+   "id": "mzk:441",
+   "designator": "mzk:441",
+   "name": "Lotnisko",
+   "lat": 49.808092,
+   "lon": 18.996908,
+   "symbol": "441",
+   "dirs": [
+    10,
+    201
+   ]
+  },
+  {
+   "id": "mzk:221",
+   "designator": "mzk:221",
+   "name": "Mazańcowicka Katowicka",
+   "lat": 49.85551,
+   "lon": 19.033939,
+   "symbol": "221",
+   "dirs": [
+    285
+   ]
+  },
+  {
+   "id": "mzk:220",
+   "designator": "mzk:220",
+   "name": "Mazańcowicka Katowicka",
+   "lat": 49.855408,
+   "lon": 19.034385,
+   "symbol": "220",
+   "dirs": [
+    98
+   ]
+  },
+  {
+   "id": "mzk:264",
+   "designator": "mzk:264",
+   "name": "Piastowska Dworzec",
+   "lat": 49.828915,
+   "lon": 19.042782,
+   "symbol": "264",
+   "dirs": [
+    96
+   ]
+  },
+  {
+   "id": "mzk:469",
+   "designator": "mzk:469",
+   "name": "Piastowska Dworzec",
+   "lat": 49.82879,
+   "lon": 19.0415,
+   "symbol": "469",
+   "dirs": [
+    256
+   ]
+  },
+  {
+   "id": "mzk:265",
+   "designator": "mzk:265",
+   "name": "Piastowska Lubertowicza",
+   "lat": 49.827047,
+   "lon": 19.036152,
+   "symbol": "265",
+   "dirs": [
+    220
+   ]
+  },
+  {
+   "id": "mzk:66",
+   "designator": "mzk:66",
+   "name": "Wapienica Centrum",
+   "lat": 49.808056,
+   "lon": 18.984675,
+   "symbol": "66",
+   "dirs": [
+    263
+   ]
+  },
+  {
+   "id": "mzk:57",
+   "designator": "mzk:57",
+   "name": "Wapienica Centrum",
+   "lat": 49.807864,
+   "lon": 18.984018,
+   "symbol": "57",
+   "dirs": [
+    84
+   ]
+  },
+  {
+   "id": "mzk:341",
+   "designator": "mzk:341",
+   "name": "Warszawska Dworzec",
+   "lat": 49.831563,
+   "lon": 19.043212,
+   "symbol": "341",
+   "dirs": [
+    167
+   ]
+  },
+  {
+   "id": "mzk:342",
+   "designator": "mzk:342",
+   "name": "Warszawska Dworzec",
+   "lat": 49.831477,
+   "lon": 19.043537,
+   "symbol": "342",
+   "dirs": [
+    338
+   ]
+  },
+  {
+   "id": "mzk:343",
+   "designator": "mzk:343",
+   "name": "Warszawska Dworzec",
+   "lat": 49.831005,
+   "lon": 19.043022,
+   "symbol": "343",
+   "dirs": [
+    345
+   ]
+  },
+  {
+   "id": "mzk:2044",
+   "designator": "mzk:2044",
+   "name": "Wilkowice Sklep",
+   "lat": 49.760262,
+   "lon": 19.101711,
+   "symbol": "2044",
+   "dirs": [
+    103
+   ]
+  },
+  {
+   "id": "mzk:2045",
+   "designator": "mzk:2045",
+   "name": "Wilkowice Sklep",
+   "lat": 49.760291,
+   "lon": 19.102042,
+   "symbol": "2045",
+   "dirs": [
+    283
+   ]
+  }
+ ]
+}

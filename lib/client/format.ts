@@ -14,6 +14,7 @@ export function tripTimeMatchesStop(
     mzkDesignator?: string;
     symbol?: string;
     mzkSymbol?: string;
+    mzkSymbols?: string[];
   },
 ): boolean {
   if (t.designator != null) {
@@ -34,7 +35,8 @@ export function tripTimeMatchesStop(
       (stop.mzkSymbol && t.place_id === `mzk:${stop.mzkSymbol}`) ||
       (stop.mzkSymbol && t.place_id === stop.mzkSymbol) ||
       (stop.symbol && t.place_id === `mzk:${stop.symbol}`) ||
-      (stop.symbol && t.place_id === stop.symbol)
+      (stop.symbol && t.place_id === stop.symbol) ||
+      (stop.mzkSymbols?.some((sym) => t.place_id === `mzk:${sym}` || t.place_id === sym) ?? false)
     ) {
       return true;
     }
@@ -303,6 +305,30 @@ export function detectLoopStops(times: Array<{ stop_name: string }>): string[] {
   // If even the turnaround stop was doubled, pick the center stop of the spur
   const centerIdx = Math.floor(spurSlice.length / 2);
   return [spurSlice[centerIdx].stop_name];
+}
+
+/**
+ * Trip-header banner for a bus that has not begun its course (it waits at the
+ * first stop). Replaces the delay/ETA line: OnTime has no measurement yet, so
+ * neither "+N min" nor a per-stop estimate may be shown.
+ */
+export function notStartedEta(trip: Pick<TripView, "stop" | "rawTimes">, now: number): string {
+  const first = trip.rawTimes[0];
+  if (!first) return "Pojazd jeszcze nie wyruszył";
+  let eta = `Pojazd jeszcze nie wyruszył · odjazd z ${displayStopName(first.stop_name)} wg rozkładu ${first.departure_time}`;
+  // the stop the trip was opened from: the earliest possible arrival (the schedule pushed back
+  // by however long the bus already overstayed its first departure) — a lower bound, not a forecast
+  const stop = trip.stop;
+  const st = stop ? trip.rawTimes.find((t, i) => i > 0 && tripTimeMatchesStop(t, stop)) : undefined;
+  const sched0 = secsFromHHMM(first.departure_time);
+  const schedI = st ? secsFromHHMM(st.departure_time) : null;
+  if (stop && st && sched0 != null && schedI != null) {
+    let overstay = now - sched0;
+    if (overstay > 43200) overstay -= 86400; // first departure is "tomorrow" (post-midnight) while now is before midnight
+    else if (overstay < -43200) overstay += 86400;
+    eta += ` · na ${stop.name}: najwcześniej ${hhmmFromSecs(schedI + Math.max(0, overstay))}`;
+  }
+  return eta;
 }
 
 /** ETA line for the trip header. */

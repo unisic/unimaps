@@ -9,11 +9,13 @@ import * as config from "./config";
 import { startGtfsRefresh } from "./gtfs-refresh";
 import { KbApi } from "./kb-api";
 import { log } from "./logger";
+import { createMergedStopsCache, type MergedView } from "./merged-stops";
 import { MzkApi } from "./mzk-api";
 import { MzkPoller } from "./mzk-poller";
 import { LivePoller, vehicleToJson } from "./poller";
 import { vehicleExtras } from "./route-info";
 import { readGtfsPatternSeeds } from "./shape-patterns";
+import { getStopDirections } from "./stop-directions";
 import { getShapeStore as getStoreSingleton, ShapeStore } from "./shape-store";
 import type { LineInfo, Stop, VehicleJson, VehiclesResponse } from "./types";
 
@@ -23,6 +25,8 @@ interface SingletonState {
   mzkApi: MzkApi;
   mzkPoller: MzkPoller;
   shapes: ShapeStore;
+  /** memoized merged KB+MZK stop list (see getMergedStopsView) */
+  merged?: ReturnType<typeof createMergedStopsCache>;
   startPromise: Promise<void> | null;
   signalsRegistered: boolean;
   /** Epoch ms of the last failed start — gates the retry cooldown. */
@@ -140,6 +144,27 @@ export function kbShapeRef(
 /** The shared KB upstream API client. */
 export function getApi(): KbApi {
   return state().api;
+}
+
+/** Shared "no learned MZK directions" Map — a stable identity so the memoized merge is not recomputed per call. */
+const NO_MZK_DIRS: ReadonlyMap<string, readonly number[]> = new Map();
+
+/**
+ * The merged KB+MZK stop list, its JSON body and the alias lookup — ONE memoized source shared by
+ * GET /api/stops, the stop departures/timetable routes and /api/health (they used to re-merge ad hoc and
+ * overwrite a process-global registry). Recomputed exactly when a poller swaps its stop list, the KB
+ * direction map is rebuilt or a learned MZK stop direction changed.
+ */
+export function getMergedStopsView(): MergedView {
+  const st = state();
+  st.merged ??= createMergedStopsCache();
+  return st.merged({
+    kb: st.poller.stops,
+    mzk: st.mzkPoller.stops,
+    kbDirs: getStopDirections(),
+    // dev HMR: an MzkPoller instance created by older code has no direction learner yet
+    mzkDirs: st.mzkPoller.stopDirs?.dirs() ?? NO_MZK_DIRS,
+  });
 }
 
 /** The shared KB poller; lazily kicks off startPoller() when not yet started. */

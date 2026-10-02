@@ -17,6 +17,7 @@ import {
   isBusStation,
   isMzk,
   normalizeText,
+  notStartedEta,
   operatorColor,
   przystanekPlural,
   secsFromHHMM,
@@ -354,5 +355,45 @@ describe("24h time and Polish date formatting", () => {
     const full = formatDayFull("2026-09-15");
     assert.ok(full.includes("15"));
     assert.ok(full.includes("września"));
+  });
+});
+
+describe("notStartedEta", () => {
+  const T = (stop_name: string, departure_time: string, index: number, place_id: string): TripTime => ({
+    stop_name,
+    departure_time,
+    index,
+    place_id,
+  });
+  const rawTimes = [
+    T("UNIWERSYTET BŁONIA", "15:05", 0, "mzk:321"),
+    T("PARTYZANTÓW BELOS", "15:10", 4, "mzk:252"),
+    T("BIELSKO-BIAŁA PARTYZANTÓW ANDERSA", "15:12", 5, "mzk:254"),
+  ];
+  const andersa = { id: "mzk:254", designator: "mzk:254", name: "BIELSKO-BIAŁA PARTYZANTÓW ANDERSA", mzkSymbol: "254" };
+  const at = (h: number, m: number) => h * 3600 + m * 60;
+
+  it("replaces the delay/ETA line of a bus that has not begun its course", () => {
+    assert.equal(
+      notStartedEta({ stop: null, rawTimes }, at(15, 22)),
+      "Pojazd jeszcze nie wyruszył · odjazd z Uniwersytet Błonia wg rozkładu 15:05",
+    );
+    assert.equal(notStartedEta({ stop: null, rawTimes: [] }, 0), "Pojazd jeszcze nie wyruszył");
+  });
+
+  it("opened from a stop: the earliest possible arrival, never a delay (screenshot B/C numbers)", () => {
+    // 15:22, course scheduled 15:05 and still parked -> Andersa not before 15:12 + 17 min
+    const eta = notStartedEta({ stop: andersa as never, rawTimes }, at(15, 22));
+    assert.match(eta, /na BIELSKO-BIAŁA PARTYZANTÓW ANDERSA: najwcześniej 15:29$/);
+    assert.doesNotMatch(eta, /\+\d+ min/);
+    // before the scheduled start the schedule stands
+    assert.match(notStartedEta({ stop: andersa as never, rawTimes }, at(14, 50)), /najwcześniej 15:12$/);
+  });
+
+  it("wraps midnight", () => {
+    const night = [T("A", "23:55", 0, "mzk:1"), T("B", "00:03", 1, "mzk:2")];
+    const b = { id: "mzk:2", designator: "mzk:2", name: "B", mzkSymbol: "2" };
+    assert.match(notStartedEta({ stop: b as never, rawTimes: night }, at(0, 5)), /najwcześniej 00:13$/); // 10 min overstay
+    assert.match(notStartedEta({ stop: b as never, rawTimes: night }, at(23, 50)), /najwcześniej 00:03$/); // still early
   });
 });

@@ -2,19 +2,17 @@
 
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import BottomSheet from "@/components/BottomSheet";
-import { useNow } from "@/components/hooks";
 import { CloseIcon, EmptyState, ErrorState, IconButton, LineBadge, ShareButton, SkeletonRows, StarIcon } from "@/components/ui";
 import { fetchJSON, getTripsBatch } from "@/lib/client/api";
 import { useFavorites } from "@/lib/client/favorites";
+import { createLivePoll, LIVE_STALE_MS, type LivePoll } from "@/lib/client/live-poll";
 import {
-  countdown,
   delayClass,
   delayTxt,
   displayStopName,
   formatPlatform,
   hhmmFromSecs,
   isBusStation,
-  secsFromHHMM,
   todayISO,
 } from "@/lib/client/format";
 import type {
@@ -26,6 +24,7 @@ import type {
   Trip,
   Vehicle,
 } from "@/lib/client/types";
+import { etaLabel, hhmm, resolveTiming, sortBoard, uniqueKeys, type BoardItem } from "@/lib/shared/departures";
 
 type Tab = "live" | "tt";
 
@@ -55,6 +54,18 @@ function Chevron() {
 
 const timetableRowCache = new Map<string, TtRow[]>();
 
+/** An upstream source failed: the list is incomplete, not empty (a failed MZK fetch used to look like "no MZK buses"). */
+function SourceWarning({ sources }: { sources: ReadonlyArray<"kb" | "mzk"> }) {
+  return (
+    <p
+      role="status"
+      className="mx-4 mt-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[12px] text-amber-300"
+    >
+      Brak danych z {sources.map((s) => s.toUpperCase()).join(" i ")} — lista może być niepełna.
+    </p>
+  );
+}
+
 function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, onPlanRoute }: Props) {
   const [tab, setTab] = useState<Tab>("live");
 
@@ -78,61 +89,101 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
      stale — a failed 30 s background refresh must not nuke a list we show */
   const liveRowsRef = useRef<DepartureRow[] | null>(null);
   const [liveErr, setLiveErr] = useState(false);
-  const [liveTick, setLiveTick] = useState(0);
+  const [liveWarn, setLiveWarn] = useState<ReadonlyArray<"kb" | "mzk">>([]);
+  const [ttWarn, setTtWarn] = useState<ReadonlyArray<"kb" | "mzk">>([]);
   const [tt, setTt] = useState<TtRow[] | null>(null);
   const [ttErr, setTtErr] = useState(false);
   const [ttPhase, setTtPhase] = useState<"timetable" | "trips" | null>(null);
-  const now = useNow();
+  /* "now" on the SERVER's clock (epoch s): every row time is an absolute instant, so there is no
+     seconds-of-day / midnight arithmetic left, and a wrong device clock cannot shift the countdowns.
+     skewRef = server_ts - device clock, refreshed by every successful fetch. */
+  const skewRef = useRef(0);
+  const [nowTs, setNowTs] = useState(() => Date.now() / 1000);
+  /* server clock (epoch s) of the last SUCCESSFUL fetch — a list whose rows have all aged out while
+     refetches keep failing must read as "no fresh data", not as "no departures" */
+  const [fetchedTs, setFetchedTs] = useState(0);
+  /* device clock (ms) of the last successful fetch + a 5 s tick: drives the "data is old" stamp */
+  const [lastOkMs, setLastOkMs] = useState(0);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  /* the .stagger entrance animation must play ONCE: a keyed reorder re-inserts DOM nodes and would
+     replay it on every row that React moves (verified in Chromium) */
+  const [fresh, setFresh] = useState(true);
   /* module-level store — the palette's favorites section updates live too */
   const { isFav, toggle } = useFavorites();
   const fav = isFav(stop.designator);
   const isStation = isBusStation(stop.name, stop);
 
-  /* live departures — fetch on open / manual retry + 30 s auto refresh
-     (the component is keyed by stop.designator in MapApp, so state resets per stop) */
+  /* live departures: poll controller (lib/client/live-poll) — 10 s cadence while visible, per-request timeout,
+     backoff, immediate catch-up on visibility/pageshow/focus/online, never two requests in flight, a failing
+     refresh never wipes a list we show. The component is keyed by stop.designator in MapApp. */
+  const pollRef = useRef<LivePoll | null>(null);
   useEffect(() => {
     if (tab !== "live") return;
-    const ac = new AbortController();
-    let cancelled = false;
-    (async () => {
-      try {
-        const d = await fetchJSON<DeparturesResponse>(
-          `/api/stop/${encodeURIComponent(stop.designator)}/departures`,
-          { cache: "no-store", signal: ac.signal },
-        );
-        if (!cancelled) {
-          liveRowsRef.current = d.rows ?? [];
-          setLiveRows(liveRowsRef.current);
-          setLiveErr(false);
-        }
-      } catch {
-        // only surface the error sheet when there is nothing to show; with a
-        // list on screen stay silent and let the next 30 s tick retry
-        if (!cancelled && !ac.signal.aborted && liveRowsRef.current === null) setLiveErr(true);
-      }
-    })();
-    return () => {
-      cancelled = true;
-      ac.abort();
-    };
-  }, [stop.designator, tab, liveTick]);
-
-  useEffect(() => {
-    if (tab !== "live") return;
-    /* hidden tab: skip the 30 s refetch (no one is looking); catch up with one
-       immediate refresh the moment the tab becomes visible again */
+    const url = `/api/stop/${encodeURIComponent(stop.designator)}/departures`;
+    const poll = createLivePoll<DeparturesResponse>({
+      load: (signal) => fetchJSON<DeparturesResponse>(url, { cache: "no-store", signal }),
+      onOk: (d) => {
+        liveRowsRef.current = d.rows ?? [];
+        if (typeof d.server_ts === "number") skewRef.current = d.server_ts - Date.now() / 1000;
+        const t = Date.now() / 1000 + skewRef.current;
+        setNowTs(t);
+        setFetchedTs(t);
+        setLastOkMs(Date.now());
+        setLiveRows(liveRowsRef.current);
+        setLiveWarn(d.warnings ?? []);
+        setLiveErr(false);
+      },
+      // the error sheet only when there is nothing to show; with a list on screen the next poll retries
+      onFail: () => {
+        if (liveRowsRef.current === null) setLiveErr(true);
+      },
+      isVisible: () => !document.hidden,
+    });
+    pollRef.current = poll;
+    poll.start();
+    const kick = () => poll.kick();
+    document.addEventListener("visibilitychange", kick);
+    window.addEventListener("pageshow", kick);
+    window.addEventListener("focus", kick);
+    window.addEventListener("online", kick);
+    /* 5 s UI tick: countdowns on the server clock + freshness stamp + poll watchdog */
     const id = setInterval(() => {
-      if (!document.hidden) setLiveTick((t) => t + 1);
-    }, 30000);
-    const onVisible = () => {
-      if (!document.hidden) setLiveTick((t) => t + 1);
-    };
-    document.addEventListener("visibilitychange", onVisible);
+      setNowTs(Date.now() / 1000 + skewRef.current);
+      setNowMs(Date.now());
+      poll.tick();
+    }, 5000);
     return () => {
+      poll.stop();
+      pollRef.current = null;
       clearInterval(id);
-      document.removeEventListener("visibilitychange", onVisible);
+      document.removeEventListener("visibilitychange", kick);
+      window.removeEventListener("pageshow", kick);
+      window.removeEventListener("focus", kick);
+      window.removeEventListener("online", kick);
     };
-  }, [tab, stop.designator]);
+  }, [stop.designator, tab]);
+
+  const hasRows = liveRows !== null;
+  useEffect(() => {
+    if (!hasRows) return;
+    const t = setTimeout(() => setFresh(false), 900);
+    return () => clearTimeout(t);
+  }, [hasRows]);
+
+  /* ONE canonical ETA per row (lib/shared/departures): the countdown on screen and the order of the
+     list come from the same number — nearest departure first, as displayed */
+  const board = useMemo(() => {
+    const items = (liveRows ?? []).map((row) => {
+      const veh =
+        (row.trip_execution_id ? vehByExec.get(row.trip_execution_id) : null) ??
+        (row.trip_id != null ? vehByTrip.get(String(row.trip_id)) : null) ??
+        null;
+      return { row, veh, timing: resolveTiming(row, veh) } satisfies BoardItem<DepartureRow> & { veh: Vehicle | null };
+    });
+    const sorted = sortBoard(items, nowTs);
+    const keys = uniqueKeys(sorted.map((it) => it.row));
+    return sorted.map((it, i) => ({ ...it, key: keys[i] }));
+  }, [liveRows, vehByExec, vehByTrip, nowTs]);
 
   /* today's timetable + per-trip line/direction (client-cached, deduped) */
   useEffect(() => {
@@ -177,7 +228,8 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
           };
         });
         if (!cancelled) {
-          timetableRowCache.set(cacheKey, rows);
+          if (!d.warnings?.length) timetableRowCache.set(cacheKey, rows);
+          setTtWarn(d.warnings ?? []);
           setTt(rows);
         }
       } catch {
@@ -193,6 +245,7 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
   }, [tab, tt, ttErr, stop.designator]);
 
   const liveLoading = liveRows === null && !liveErr;
+  const staleEmpty = liveRows !== null && liveRows.length > 0 && board.length === 0 && nowTs - fetchedTs > 90;
 
   const header = (
     <header className="px-4 pb-3 pt-2 md:pt-4">
@@ -303,51 +356,56 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
       header={header}
     >
       <div key={tab} className="kb-scroll h-full overflow-y-auto pb-4 animate-fade">
+        {(tab === "live" ? liveWarn : ttWarn).length > 0 && !liveErr && (
+          <SourceWarning sources={tab === "live" ? liveWarn : ttWarn} />
+        )}
         {tab === "live" ? (
-          liveErr ? (
+          liveErr || staleEmpty ? (
             <ErrorState
               onRetry={() => {
                 setLiveErr(false);
                 liveRowsRef.current = null;
                 setLiveRows(null);
-                setLiveTick((t) => t + 1);
+                pollRef.current?.refreshNow();
               }}
             />
           ) : liveLoading ? (
             <SkeletonRows />
-          ) : liveRows && liveRows.length === 0 ? (
+          ) : board.length === 0 ? (
             <EmptyState text="Brak przyjazdów w najbliższych godzinach." />
           ) : (
-            <ul className="stagger px-2" style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 1.25rem)" }}>
-              {(liveRows ?? []).map((row, i) => {
-                const liveVeh =
-                  (row.trip_execution_id ? vehByExec.get(row.trip_execution_id) : null) ??
-                  (row.trip_id != null ? vehByTrip.get(String(row.trip_id)) : null);
-                const planned = row.static_time || (row.time?.includes(":") ? row.time : "");
-                const td = liveVeh?.delay != null ? liveVeh.delay : (row.is_estimated ? row.time_diff : null);
-                const est = (liveVeh != null && liveVeh.delay != null) || (!!row.is_estimated && td != null);
-                const plannedSecs = secsFromHHMM(planned);
-                const actualSecs = est && plannedSecs != null && td != null ? plannedSecs + td : null;
+            <>
+            {lastOkMs > 0 && nowMs - lastOkMs > LIVE_STALE_MS && (
+              <p className="mx-4 mt-2 text-[11px] text-amber-300" role="status">
+                Dane sprzed {Math.round((nowMs - lastOkMs) / 1000)} s —{" "}
+                <button type="button" className="underline" onClick={() => pollRef.current?.refreshNow()}>
+                  odśwież
+                </button>
+              </p>
+            )}
+          <ul className={`${fresh ? "stagger " : ""}px-2`} style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 1.25rem)" }}>
+              {board.map(({ row, veh, timing, key }) => {
                 const line = row.line_name || row.symbol || "?";
                 const plat = formatPlatform(row.platform, isStation);
-                const sideNum = row.side_number || liveVeh?.side_number;
-                const vehModel = row.model || liveVeh?.model;
+                const sideNum = row.side_number || veh?.side_number;
+                const vehModel = row.model || veh?.model;
                 const vehDetails = sideNum ? `#${sideNum}${vehModel ? ` · ${vehModel}` : ""}` : null;
                 const sub = [
-                  planned ? `plan ${planned}` : "",
+                  timing.planTs != null ? `plan ${hhmm(timing.planTs)}` : "",
                   plat,
                   vehDetails,
                 ]
                   .filter(Boolean)
                   .join(" · ");
-
-                const timeText =
-                  actualSecs != null
-                    ? countdown(actualSecs, now) || planned || row.time || ""
-                    : row.time || planned || "";
+                const timeText = etaLabel(timing, nowTs, row.time ?? "");
+                const td = timing.delaySec;
+                const est = timing.estimated && !timing.canceled;
+                /* KB boards carry only direction_id; the server resolves it through the board's
+                   `directions` map, the live vehicle's headsign is the fallback */
+                const dest = row.direction || veh?.headsign;
 
                 return (
-                  <li key={i}>
+                  <li key={key}>
                     <button
                       type="button"
                       onClick={() => onShowLive(row.trip_execution_id || "", row.trip_id ?? null)}
@@ -356,20 +414,26 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
                       <LineBadge line={line} operator={row.operator} />
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-[13px] font-medium text-text">
-                          {row.direction ? displayStopName(row.direction) : `Linia ${line}`}
+                          {dest ? displayStopName(dest) : `Linia ${line}`}
                         </p>
                         {sub && (
                           <p className="mt-0.5 text-[11px] tabular-nums text-text-faint">{sub}</p>
                         )}
                       </div>
                       <div className="shrink-0 text-right">
-                        <p className={`text-[15px] font-bold tabular-nums ${est ? delayClass(td) : "text-text"}`}>
+                        <p
+                          className={`text-[15px] font-bold tabular-nums ${
+                            timing.canceled ? "text-text-faint line-through" : est ? delayClass(td) : "text-text"
+                          }`}
+                        >
                           {timeText}
                         </p>
-                        {est ? (
+                        {timing.canceled ? null : est ? (
                           <p className={`text-[11px] font-medium tabular-nums ${delayClass(td)}`}>
                             {delayTxt(td)}
                           </p>
+                        ) : timing.source === "waiting" ? (
+                          <p className="text-[11px] font-medium text-late">czeka na odjazd</p>
                         ) : (
                           <p className="text-[11px] text-text-faint">
                             rozkładowo
@@ -382,6 +446,7 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
                 );
               })}
             </ul>
+          </>
           )
         ) : ttErr ? (
           <ErrorState

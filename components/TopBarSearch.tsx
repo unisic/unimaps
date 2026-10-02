@@ -808,7 +808,7 @@ function TopBarSearch({
                                     </span>
                                     <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-text-faint">
                                       <span className="h-1.5 w-1.5 shrink-0 animate-pulse-dot rounded-full bg-good" aria-hidden />
-                                      na żywo{it.v.delay != null ? ` · ${delayTxt(it.v.delay)}` : ""}
+                                      {it.v.not_started ? "czeka na odjazd" : `na żywo${it.v.delay != null ? ` · ${delayTxt(it.v.delay)}` : ""}`}
                                       {it.v.model && (
                                         <span className="truncate text-text-mute font-normal"> · {it.v.model}</span>
                                       )}

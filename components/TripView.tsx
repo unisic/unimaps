@@ -15,12 +15,14 @@ import {
   hhmmFromSecs,
   isBusStation,
   isMzk,
+  notStartedEta,
   operatorColor,
   secsFromHHMM,
   tripTimeMatchesStop,
 } from "@/lib/client/format";
 import { findActiveStop, type ActiveStopResult } from "@/lib/client/geo";
-import type { Stop, TripView as TripViewState, Vehicle } from "@/lib/client/types";
+import type { LatLng, Stop, TripView as TripViewState, Vehicle } from "@/lib/client/types";
+import { progressFromVehicle, stopAlongFor } from "@/lib/shared/trip-progress";
 
 interface Props {
   trip: TripViewState;
@@ -93,7 +95,7 @@ function TripView({
     lastLive = {
       gen: trip.gen,
       veh: liveVeh,
-      vti: liveVeh.current_stop_sequence ?? lastLive.vti,
+      vti: liveVeh.geo_seq ?? liveVeh.current_stop_sequence ?? lastLive.vti,
     };
     setLastLiveHeld(lastLive);
   }
@@ -109,9 +111,14 @@ function TripView({
     (currentVeh != null && Number.isFinite(currentVeh.lat) && Number.isFinite(currentVeh.lon)) ||
     (trip.vehicle != null && Number.isFinite(trip.vehicle.lat) && Number.isFinite(trip.vehicle.lon));
   const isLiveWithLoc = trip.isLive && hasLiveCoords;
+  /* MZK bus waiting at the first stop of a course that has not begun: OnTime's delay
+     and per-stop times are a placeholder (now - scheduled start) — show the schedule,
+     "czeka na odjazd" and never a delay (lib/mzk-state.ts) */
+  const notStarted = isLiveWithLoc && currentVeh?.not_started === true;
 
-  /* prefer the live poll's current stop over the snapshot */
-  const liveVti = liveVeh?.current_stop_sequence ?? lastLive.vti;
+  /* prefer the live poll's current stop over the snapshot; geo_seq (GPS, sent only while upstream's index is
+     stale) beats current_stop_sequence — a stale hint puts a bus on the OUTBOUND leg of a loop */
+  const liveVti = liveVeh?.geo_seq ?? liveVeh?.current_stop_sequence ?? lastLive.vti;
 
   /** schedule index → resolved physical stop (for fly-to on tap and coordinate lookup) */
   const stopByIndex = useMemo(() => {
@@ -119,6 +126,19 @@ function TripView({
     for (const r of trip.stops) m.set(r.t.index, r.s);
     return m;
   }, [trip.stops]);
+
+  /** along-route metres of every stop on the drawn road shape — the same projection the server stores,
+   *  so the vehicle's `dist_m` can be read against it. Only when the drawn shape IS the server shape
+   *  the vehicle reports (trip.shapeId === liveVeh.shape, checked below); KB only (MZK's index and
+   *  odometer come straight from the operator). */
+  const stopAlong = useMemo(() => {
+    if (isMzkTrip || !trip.shapeId || !trip.routed) return null;
+    const refs = trip.rawTimes.map((t): LatLng | null => {
+      const s = stopByIndex.get(t.index);
+      return s ? [s.lat, s.lon] : null;
+    });
+    return stopAlongFor(trip.routed, refs);
+  }, [isMzkTrip, trip.shapeId, trip.routed, trip.rawTimes, stopByIndex]);
 
   /* Dynamically determine the active stop index (current stop the bus is at/approaching) */
   const activeStop: ActiveStopResult = (() => {
@@ -128,6 +148,10 @@ function TripView({
     if (isLiveWithLoc && trip.stops.length > 0) {
       const v = liveVeh ?? trip.vehicle;
       if (v && Number.isFinite(v.lat) && Number.isFinite(v.lon)) {
+        // the server tracks the vehicle with continuity (twin stops of an out-and-back, a frozen upstream
+        // index): its along-route distance says WHERE on the route the bus is, whatever upstream's index says
+        const sp = progressFromVehicle(stopAlong, trip.shapeId, liveVeh, liveVti ?? trip.vti);
+        if (sp) return { index: sp.index, isAtStop: sp.at, progress: sp.progress };
         return findActiveStop(
           times.map((t) => {
             const s = stopByIndex.get(t.index);
@@ -162,13 +186,16 @@ function TripView({
   const vti = activeStop.index;
   const isAtStop = activeStop.isAtStop;
   const activeProgress = Math.max(0, Math.min(1, activeStop.progress ?? (isAtStop ? 1 : 0.5)));
-  const headerDelay =
-    currentVeh?.delay ??
-    trip.rawTimes[vti ?? -1]?.estimate?.time_diff ??
-    null;
+  const headerDelay = notStarted
+    ? null
+    : (currentVeh?.delay ?? trip.rawTimes[vti ?? -1]?.estimate?.time_diff ?? null);
   const direction = trip.direction || vehMeta?.headsign;
   const loopStops = useMemo(() => detectLoopStops(trip.rawTimes), [trip.rawTimes]);
-  const eta = loading || failed ? "" : computeEta(trip, now, vti, isAtStop, headerDelay);
+  const eta = loading || failed
+    ? ""
+    : notStarted
+      ? notStartedEta(trip, now)
+      : computeEta(trip, now, vti, isAtStop, headerDelay);
 
   const scrollTargetIdx = useMemo(() => {
     if (vti == null) return -1;
@@ -198,7 +225,12 @@ function TripView({
             {loading ? "Wczytywanie…" : direction ? displayStopName(direction) : "—"}
           </h2>
           <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
-            {isLiveWithLoc ? (
+            {isLiveWithLoc && notStarted ? (
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-late/10 px-2 py-0.5 font-semibold text-late">
+                <span className="h-1.5 w-1.5 rounded-full bg-late" aria-hidden />
+                CZEKA NA ODJAZD
+              </span>
+            ) : isLiveWithLoc ? (
               <span className="inline-flex items-center gap-1.5 rounded-full bg-good/10 px-2 py-0.5 font-semibold text-good">
                 <span className="h-1.5 w-1.5 animate-pulse-dot rounded-full bg-good" aria-hidden />
                 NA ŻYWO
@@ -344,7 +376,7 @@ function TripView({
               const isTransit = !isAtStop && vti != null && vti > 0;
               const isPrevStop = isTransit && idx === vti - 1;
               const isNextStop = isTransit && idx === vti;
-              const diff = t.estimate?.time_diff ?? null;
+              const diff = notStarted ? null : (t.estimate?.time_diff ?? null);
               const effectiveDiff = diff ?? (isLiveWithLoc && !passed ? headerDelay : null);
               const planned = secsFromHHMM(t.departure_time);
               const est = isLiveWithLoc && effectiveDiff != null && planned != null;

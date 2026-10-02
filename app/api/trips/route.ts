@@ -37,7 +37,7 @@ async function handleBatch(req: Request, rawIds: string[]): Promise<Response> {
       const mzkResults = await Promise.all(
         mzkIds.map(async (id) => {
           try {
-            const res = await resolveMzkTrip(id);
+            const res = await resolveMzkTrip(id, { live: false });
             return [
               id,
               res?.trip

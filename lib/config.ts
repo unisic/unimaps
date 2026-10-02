@@ -70,6 +70,15 @@ export const LIVE_STALE_VEHICLE_SEC = envInt("KB_STALE_VEHICLE_SEC", 300);
 export const LIVE_STALE_MOVE_EPS_M = envInt("KB_STALE_MOVE_EPS_M", 15, 0);
 
 /**
+ * GPS correction of the live delay (lib/kb-progress.ts). Upstream's stop index
+ * stalls when a bus drives past stops without dwelling and the delay derived
+ * from it then grows +1 min/min; with this on, a bus whose GPS position is
+ * already beyond upstream's "next" stop gets the schedule deviation at its real
+ * position instead. KB_GPS_DELAY=0 restores the pure upstream value.
+ */
+export const GPS_DELAY = envStr("KB_GPS_DELAY", "1") !== "0";
+
+/**
  * Feed age (secs since the last proven upstream contact) beyond which
  * /api/health reports "degraded" (HTTP 503). Must exceed
  * LIVE_STOP_EMPTY_CACHE_SEC (600): overnight a full scan can legitimately find
@@ -109,6 +118,8 @@ export const OSRM_USER_AGENT = envStr("KB_OSRM_USER_AGENT", "kb-map/2.0 (+https:
 export const SHAPES_MAX_AGE_DAYS = envInt("KB_SHAPES_MAX_AGE_DAYS", 14);
 /** Persisted shape store (outside output/gtfs, which the builder swaps atomically). */
 export const SHAPES_FILE = envStr("KB_SHAPES_FILE", path.join(OUTPUT_DIR, "shapes", "route-shapes.v1.json"));
+/** MZK stop travel directions learned from running courses (lib/mzk-stop-dirs.ts); outside output/gtfs for the same reason. */
+export const MZK_STOP_DIRS_FILE = envStr("KB_MZK_STOP_DIRS_FILE", path.join(OUTPUT_DIR, "mzk-stop-dirs.v1.json"));
 
 export const USER_AGENT = envStr(
   "KB_USER_AGENT",

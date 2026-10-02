@@ -1,6 +1,6 @@
 import * as config from "@/lib/config";
 import { upstreamError } from "@/lib/api-helpers";
-import { getPoller, getShapes, startPoller } from "@/lib/poller-singleton";
+import { getMergedStopsView, getMzkPoller, getPoller, getShapes, startPoller } from "@/lib/poller-singleton";
 import type { HealthResponse } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -12,6 +12,28 @@ function safeShapesHealth(): Record<string, unknown> | undefined {
     return getShapes().health();
   } catch {
     return undefined;
+  }
+}
+
+/** Merged-stop counters; like the shape store, a problem here must never break the healthcheck. */
+function safeStopsHealth(): Pick<HealthResponse, "mzk_stops" | "mzk_stops_loaded_at" | "merged_stops"> {
+  try {
+    const mzk = getMzkPoller();
+    const view = getMergedStopsView();
+    return {
+      mzk_stops: mzk.stops.length,
+      mzk_stops_loaded_at: mzk.stopsLoadedAt,
+      merged_stops: {
+        both: view.summary.both,
+        kb: view.summary.kb,
+        mzk: view.summary.mzk,
+        partial: view.partial,
+        mzk_dir_stops: view.summary.mzkDirStops,
+        built_at: view.summary.builtAt,
+      },
+    };
+  } catch {
+    return {};
   }
 }
 
@@ -46,7 +68,11 @@ export async function GET(): Promise<Response> {
       loop_restarts: h.loopRestarts,
       last_loop_error: h.lastLoopError,
       stops_loaded_at: h.stopsLoadedAt,
+      ...safeStopsHealth(),
       shapes: safeShapesHealth(),
+      stale_index: h.staleIndex,
+      gps_polls: h.gpsPolls,
+      gps_disagree: h.gpsDisagree,
     };
     return Response.json(body, { status: degraded ? 503 : 200 });
   } catch (err) {

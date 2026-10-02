@@ -21,7 +21,7 @@ export async function GET(
     await startPoller();
     if (tripId.startsWith("mzk:")) {
       const { resolveMzkTrip } = await import("@/lib/mzk-trip");
-      const mzkTrip = await resolveMzkTrip(tripId);
+      const mzkTrip = await resolveMzkTrip(tripId, { live: false });
       if (!mzkTrip) {
         return Response.json({}, { headers: { "Cache-Control": "public, max-age=300" } });
       }

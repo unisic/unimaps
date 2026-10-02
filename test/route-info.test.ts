@@ -99,6 +99,16 @@ describe("vehicleExtras", () => {
     const bad = { wireId: () => { throw new Error("x"); } };
     assert.deepEqual(vehicleExtras(v, bad, 1000), {});
   });
+
+  it("GPS-progress extras (delay_src, geo_seq) only while upstream's stop index is stale", () => {
+    assert.equal(vehicleExtras(v, shapes, 1000).geo_seq, undefined);
+    assert.equal(vehicleExtras(v, shapes, 1000).delay_src, undefined);
+    const stale = vehicleExtras({ ...v, delaySrc: "gps", geoLastSeq: 27 }, shapes, 1000);
+    assert.equal(stale.delay_src, "gps");
+    assert.equal(stale.geo_seq, 27);
+    assert.equal(vehicleExtras({ ...v, delaySrc: "unknown" }, shapes, 1000).delay_src, "unknown");
+    assert.equal(vehicleExtras({ ...v, geoLastSeq: -1 }, shapes, 1000).geo_seq, undefined, "before the first stop: no hint");
+  });
 });
 
 describe("kbNextStopIndex (parsePosition parity)", () => {

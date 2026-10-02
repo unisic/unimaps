@@ -44,6 +44,14 @@ export interface Vehicle {
   next_stop_seq?: number;
   /** cruise speed, m/s */
   speed?: number;
+  /** present only while upstream's stop index is stale: `delay` is then the schedule deviation at the GPS
+   *  position ("gps"/"gps-held") or withheld ("unknown") */
+  delay_src?: "gps" | "gps-held" | "unknown";
+  /** GPS-derived index of the last passed stop (present only while upstream's index is stale) — prefer it over
+   *  `current_stop_sequence` as the progress hint */
+  geo_seq?: number;
+  /** MZK bus waiting at the first stop of a course that has not begun — `delay` is null then */
+  not_started?: boolean;
 }
 
 export interface VehiclesResponse {
@@ -74,11 +82,15 @@ export interface Stop {
   kbDesignator?: string;
   mzkDesignator?: string;
   mzkSymbol?: string;
+  /** station hub (D.A.) only: every MZK symbol whose departures the station panel lists, primary (`mzkSymbol`) first */
+  mzkSymbols?: string[];
 }
 
 export interface StopsResponse {
   count: number;
   stops: Stop[];
+  /** present (true) while one operator's stop list is still missing — re-fetch soon */
+  partial?: boolean;
 }
 
 /** Static GTFS line catalog entry (from /api/lines). */
@@ -101,10 +113,25 @@ export interface LinesResponse {
 export interface DepartureRow {
   trip_execution_id?: string;
   trip_id?: number | string;
-  static_time?: string;
-  time?: string;
+  /** KB: visit index on the trip · MZK: orderInCourse (server-added) */
+  trip_index?: number;
+  /** server-built React key, stable across refetches */
+  row_key?: string;
+  /** legacy upstream strings — KB: relative ("8 min"; `null`/absent while the bus stands at the stop) */
+  static_time?: string | null;
+  time?: string | null;
+  /** legacy: KB = MINUTES, MZK = seconds — the canonical logic reads `delay_sec` instead */
   time_diff?: number;
   is_estimated?: boolean;
+  /** MZK: the course has not begun — `time` is the earliest possible time, `time_diff` is 0 */
+  not_started?: boolean;
+  at_stop?: boolean;
+  canceled?: boolean;
+  /** epoch seconds (server-normalised, see lib/shared/departures) */
+  plan_ts?: number | null;
+  eta_ts?: number | null;
+  /** operator's own delay for this stop visit, SECONDS */
+  delay_sec?: number | null;
   direction?: string;
   platform?: string;
   line_name?: string;
@@ -117,6 +144,10 @@ export interface DepartureRow {
 
 export interface DeparturesResponse {
   rows?: DepartureRow[];
+  /** upstream sources that failed ("kb" / "mzk"): the list is incomplete, not empty */
+  warnings?: Array<"kb" | "mzk">;
+  /** server clock (epoch s) when the rows were built — lets the client count down on the server's clock */
+  server_ts?: number;
 }
 
 export interface TimetableDeparture {
@@ -131,6 +162,8 @@ export interface TimetableDeparture {
 export interface TimetableResponse {
   departures?: TimetableDeparture[];
   main_direction?: { name?: string };
+  /** upstream sources that failed ("kb" / "mzk"): the day is incomplete, not empty (and must not be cached) */
+  warnings?: Array<"kb" | "mzk">;
 }
 
 export interface TripTime {
