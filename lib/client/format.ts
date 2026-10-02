@@ -204,7 +204,12 @@ export function normalizeText(s: string): string {
 
 export function formatScan(lastScan: number | null | undefined, scanCount: number | null | undefined): string {
   if (!lastScan) return "—";
-  const t = new Date(lastScan * 1000).toLocaleTimeString("pl-PL");
+  const t = new Date(lastScan * 1000).toLocaleTimeString("pl-PL", {
+    timeZone: AGENCY_TZ,
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
   return scanCount ? `${t} (#${scanCount})` : t;
 }
 

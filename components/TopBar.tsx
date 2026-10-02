@@ -221,29 +221,29 @@ function TopBar({
             const next = operatorFilter === "all" ? "kb" : operatorFilter === "kb" ? "mzk" : "all";
             onOperatorFilter(next);
           }}
-          className={`flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-xs font-bold transition-all active:scale-95 ${
+          className={`flex shrink-0 items-center gap-1 rounded-full px-2 py-1 text-xs font-bold transition-all active:scale-95 border ${
             operatorFilter === "mzk"
-              ? "bg-blue-600 text-white shadow-sm"
+              ? "bg-blue-600 text-white border-blue-500/40 shadow-sm"
               : operatorFilter === "kb"
-                ? "bg-red-600 text-white shadow-sm"
-                : "bg-white/8 text-text hover:bg-white/12"
+                ? "bg-[#a6192e] text-white border-red-500/40 shadow-sm"
+                : "bg-white/6 text-text-mute hover:bg-white/10 hover:text-text border-hairline"
           }`}
-          title="Przełącz przewoźnika: Wszystkie / KB / MZK"
+          title="Filtruj przewoźnika: Wszyscy / KB / MZK"
         >
           {operatorFilter === "mzk" && (
             /* eslint-disable-next-line @next/next/no-img-element */
-            <img src="/mzk-logo.svg" alt="" className="h-3 w-auto filter brightness-0 invert" />
+            <img src="/mzk-logo.svg" alt="" className="h-2.5 w-auto filter brightness-0 invert" />
           )}
           {operatorFilter === "kb" && (
             /* eslint-disable-next-line @next/next/no-img-element */
             <img src="/brand.svg" alt="" className="h-2.5 w-auto filter brightness-0 invert" />
           )}
-          {operatorFilter === "all" ? "Wszyscy" : operatorFilter.toUpperCase()}
+          <span className="text-[11px]">{operatorFilter === "all" ? "Wszyscy" : operatorFilter.toUpperCase()}</span>
         </button>
 
         {/* Online vehicles count badge */}
         <span
-          className="flex shrink-0 items-center gap-1.5 rounded-full bg-white/8 px-2.5 py-1 text-xs font-bold tabular-nums text-text"
+          className="flex shrink-0 items-center gap-1.5 rounded-full bg-white/8 px-2.5 py-1 text-xs font-bold tabular-nums text-text border border-hairline"
           title={offline ? "Brak połączenia" : "Pojazdy online"}
         >
           <span
@@ -262,7 +262,7 @@ function TopBar({
             searchRef?.current?.blur();
             onOpenAnnouncements();
           }}
-          className="relative grid h-11 w-11 shrink-0 place-items-center rounded-full text-text-mute transition-colors hover:bg-white/8 hover:text-text md:h-9 md:w-9"
+          className="relative grid h-10 w-10 shrink-0 place-items-center rounded-full text-text-mute transition-colors hover:bg-white/8 hover:text-text md:h-9 md:w-9"
         >
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
             <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
@@ -275,6 +275,21 @@ function TopBar({
             />
           )}
         </button>
+
+        {/* Brigades & Fleet button */}
+        <a
+          href="/brygady"
+          aria-label="Brygady i tabor"
+          title="Brygady i śledzenie taboru na żywo"
+          className="relative grid h-10 w-10 shrink-0 place-items-center rounded-full text-text-mute transition-colors hover:bg-white/8 hover:text-text md:h-9 md:w-9"
+        >
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <rect x="3" y="4.5" width="18" height="11" rx="2.5" />
+            <path d="M3 10.5h18M8 4.5v6M12 4.5v6M16 4.5v6" />
+            <circle cx="7.5" cy="16.6" r="1.4" fill="currentColor" />
+            <circle cx="16.5" cy="16.6" r="1.4" fill="currentColor" />
+          </svg>
+        </a>
 
         {/* Map settings button */}
         <button
@@ -371,6 +386,22 @@ function TopBar({
             hint="Szacuje pozycję autobusu między aktualizacjami"
             className="mt-2"
           />
+
+          <a
+            href="/brygady"
+            className="mt-2.5 flex w-full items-center justify-between rounded-xl bg-white/4 px-3 py-2.5 transition-colors hover:bg-white/8 text-text font-semibold text-xs"
+          >
+            <span className="flex items-center gap-2">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <rect x="3" y="4.5" width="18" height="11" rx="2.5" />
+                <path d="M3 10.5h18M8 4.5v6M12 4.5v6M16 4.5v6" />
+                <circle cx="7.5" cy="16.6" r="1.4" fill="currentColor" />
+                <circle cx="16.5" cy="16.6" r="1.4" fill="currentColor" />
+              </svg>
+              Karty brygad i tabor na żywo
+            </span>
+            <span className="text-primary font-bold">&rarr;</span>
+          </a>
 
           <p className="mt-4 text-[11px] font-semibold uppercase tracking-wider text-text-faint">
             Kolory pojazdów

@@ -5,6 +5,7 @@ import { bearing, metersBetween } from "./geo";
 import { log } from "./logger";
 import { MzkApi, type MzkRunningVehicle, type MzkStopPoint, type MzkLine } from "./mzk-api";
 import { getFleetDetails, type MzkVehicleStatic } from "./mzk-fleet";
+import { getFleetTracker } from "./fleet-tracker";
 import { mzkRemapDist, mzkStopIndices } from "./mzk-shape";
 import { nextSpeed } from "./route-info";
 import type { ShapeGeometry } from "./shape-store";
@@ -292,6 +293,17 @@ export class MzkPoller {
     this.lastScan = nowSecs;
     this.scanCount++;
     this.lastGoodRefresh = nowSecs;
+
+    try {
+      getFleetTracker().updateFromRunningVehicles(
+        running,
+        this.staticVehicles,
+        this.stopsBySymbol,
+        this.api,
+      );
+    } catch (err) {
+      log.warn("mzk-poller", `FleetTracker update failed: ${err}`);
+    }
   }
 
   /**
