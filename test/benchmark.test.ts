@@ -24,6 +24,8 @@ function validateItinerary(it: ConnectionItinerary): void {
 }
 
 describe("Connection Search Quality & Invariants Benchmark", () => {
+  // pinned weekday (Wed): without it the search used today's service day, so the suite went red on Saturdays/Sundays
+  const DATE = "2026-09-30";
   const corridors: Array<{ from: string; to: string; afterSecs?: number; expectedType?: "direct" | "transfer" }> = [
     { from: "BIELSKO-BIAŁA D.A.", to: "SZCZYRK SKALITE", afterSecs: 12 * 3600, expectedType: "direct" },
     { from: "SZCZYRK SKALITE", to: "BIELSKO-BIAŁA D.A.", afterSecs: 14 * 3600, expectedType: "direct" },
@@ -40,7 +42,7 @@ describe("Connection Search Quality & Invariants Benchmark", () => {
 
   for (const c of corridors) {
     it(`validates corridor: ${c.from} -> ${c.to}`, () => {
-      const res = findConnections({ from: c.from, to: c.to, afterSecs: c.afterSecs, limit: 3 });
+      const res = findConnections({ from: c.from, to: c.to, afterSecs: c.afterSecs, limit: 3, date: DATE });
       assert.ok(res.length > 0, `must find connections for ${c.from} -> ${c.to}`);
       if (c.expectedType) {
         assert.ok(res.some((r) => r.type === c.expectedType), `must contain ${c.expectedType} option`);
@@ -59,6 +61,7 @@ describe("Connection Search Quality & Invariants Benchmark", () => {
         to: "SZCZYRK SKALITE",
         afterSecs: (10 + (i % 6)) * 3600,
         limit: 3,
+        date: DATE,
       });
     }
     const avgMs = (performance.now() - t0) / 20;
