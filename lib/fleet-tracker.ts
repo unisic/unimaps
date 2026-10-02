@@ -8,7 +8,6 @@ import { log } from "./logger";
 import { type MzkApi } from "./mzk-api";
 import { getAllFleetVehicles, getFleetDetails, type MzkVehicleStatic, type VehicleFeatures } from "./mzk-fleet";
 import { AGENCY_TIMEZONE } from "./config";
-import { sendScaniaCourseStartNotification } from "./discord-notify";
 import type { Stop } from "./types";
 
 export interface VehicleCourseStop {
@@ -243,7 +242,6 @@ const HISTORY_DIR = path.resolve(process.cwd(), "output");
 export class FleetTracker {
   private vehicles = new Map<string, FleetVehicleDetail>();
   private lineBrigadeOrder = new Map<string, string[]>(); // line -> array of sideNumbers in sequence
-  private notifiedScaniaCourses = new Set<string>();
   private lastSaveAt = 0;
   private saveTimeout: NodeJS.Timeout | null = null;
   private currentDay = getTodayKey();
@@ -506,28 +504,6 @@ export class FleetTracker {
         status: "in_progress",
         stops: courseStops,
       };
-
-      // Discord notification: Scania CN230UB #167 starts a course
-      if (side === "167" && v.courseLoid) {
-        const loidStr = String(v.courseLoid);
-        if (!this.notifiedScaniaCourses.has(loidStr)) {
-          this.notifiedScaniaCourses.add(loidStr);
-          sendScaniaCourseStartNotification({
-            sideNumber: "167",
-            courseLoid: v.courseLoid,
-            lineName: v.lineName,
-            direction: detail.currentCourse.direction,
-            firstStopName: detail.currentCourse.firstStopName,
-            lastStopName: detail.currentCourse.lastStopName,
-            startTime: detail.currentCourse.startTime,
-            endTime: detail.currentCourse.endTime,
-            stopsCount: detail.currentCourse.stopsCount,
-            brigadeId: detail.brigade.id,
-          }).catch((err) => {
-            log.warn("fleet-tracker", `Failed sending Scania 167 Discord notification: ${err}`);
-          });
-        }
-      }
 
       // Predict next course ("Gdzie może być dalej")
       detail.predictedNextCourse = this.computeNextCoursePrediction(detail, endSecs, lastStopName, lastStopSymbol, stopsBySymbol);
@@ -911,9 +887,7 @@ export class FleetTracker {
         fs.mkdirSync(HISTORY_DIR, { recursive: true });
       }
       const filePath = path.join(HISTORY_DIR, `fleet-history-${this.currentDay}.json`);
-      const payload: Record<string, unknown> = {
-        _notifiedScaniaCourses: Array.from(this.notifiedScaniaCourses),
-      };
+      const payload: Record<string, unknown> = {};
       for (const [side, v] of this.vehicles.entries()) {
         if (v.todayCourses.length > 0 || v.currentCourse) {
           payload[side] = {
@@ -937,10 +911,6 @@ export class FleetTracker {
       if (!fs.existsSync(filePath)) return;
       const raw = fs.readFileSync(filePath, "utf-8");
       const data = JSON.parse(raw) as Record<string, unknown>;
-
-      if (Array.isArray(data._notifiedScaniaCourses)) {
-        this.notifiedScaniaCourses = new Set(data._notifiedScaniaCourses as string[]);
-      }
 
       for (const [side, rawSaved] of Object.entries(data)) {
         if (side.startsWith("_")) continue;

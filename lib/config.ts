@@ -151,12 +151,3 @@ export function todayLocalISO(): string {
   }
 }
 
-/** Discord webhook URL for vehicle 167 (Scania CN230UB) departure notifications. */
-export const DISCORD_WEBHOOK_SCANIA_167 = envStr(
-  "KB_DISCORD_WEBHOOK_SCANIA_167",
-  envStr(
-    "DISCORD_WEBHOOK_SCANIA_167",
-    "https://discord.com/api/webhooks/1552276940336140309/N_jfMqGHxvd2Mm2Pa8Mp8gDF321MES6ExSA5QR8xlIwt257TpkN73BO4TUkj2j6nH-1w",
-  ),
-);
-
