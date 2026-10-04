@@ -1,5 +1,6 @@
 import { badRequest, isValidDate, isValidId, upstreamError } from "@/lib/api-helpers";
 import { todayLocalISO } from "@/lib/config";
+import { gtfsTripMeta } from "@/lib/gtfs-trips";
 import { pyTruthy } from "@/lib/kb-api";
 import { log } from "@/lib/logger";
 import { getApi, getMergedStopsView, getMzkApi, getMzkPoller, startPoller } from "@/lib/poller-singleton";
@@ -78,10 +79,16 @@ export async function GET(
         const data = await getApi().fetchTimetable(kbDesig, date);
         if (pyTruthy(data) && typeof data === "object" && data !== null) {
           const rec = data as { departures?: TimetableDeparture[]; main_direction?: { name?: string } };
-          const deps = (rec.departures || []).map((d) => ({
-            ...d,
-            operator: "KB" as const,
-          }));
+          /* upstream lists bare trip ids; the built GTFS feed names line + headsign, so the client
+             can label the row without one /api/trip fetch per departure (unknown trips keep that path) */
+          const deps = (rec.departures || []).map((d) => {
+            const meta = d.line ? null : gtfsTripMeta(d.trip_id);
+            return {
+              ...d,
+              ...(meta ? { line: meta.line, ...(meta.headsign ? { direction: meta.headsign } : {}) } : {}),
+              operator: "KB" as const,
+            };
+          });
           return { departures: deps, main_direction: rec.main_direction };
         }
       } catch (err) {

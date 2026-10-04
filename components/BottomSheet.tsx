@@ -298,7 +298,7 @@ export default function BottomSheet({
       role="dialog"
       aria-label={ariaLabel}
       data-snap={snap}
-      className={`surface absolute inset-x-0 bottom-0 z-[1001] flex flex-col overflow-hidden rounded-t-[28px] outline-none border-t border-hairline ${
+      className={`surface absolute inset-x-0 bottom-0 z-[1001] flex flex-col overflow-hidden rounded-t-[24px] outline-none ${
         isDragging ? "select-none" : ""
       }`}
       style={{
@@ -322,8 +322,8 @@ export default function BottomSheet({
         onPointerCancel={onPointerCancel}
         style={{ touchAction: "none" }}
       >
-        <div className="flex w-full items-center justify-center py-2.5" aria-hidden>
-          <div className="h-1.5 w-10 rounded-full bg-white/35 transition-colors hover:bg-white/50 active:bg-white/60" />
+        <div className="flex w-full items-center justify-center pb-1.5 pt-2" aria-hidden>
+          <div className="h-1 w-9 rounded-full bg-white/20 transition-colors hover:bg-white/35 active:bg-white/45" />
         </div>
         {header}
       </div>

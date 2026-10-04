@@ -121,8 +121,9 @@ function JourneyLayer({ journey, desktop }: Props) {
               }}
             >
               <Tooltip direction="top" sticky className="kb-tooltip">
-                <span className="font-semibold">{displayStopName(st.stopName)}</span> · {st.arrivalTime || st.departureTime}
-                <div className="text-[10px] text-text-faint">Linia {legItem.leg.line}</div>
+                <span className="font-medium">{displayStopName(st.stopName)}</span>{" "}
+                <span className="tabular-nums text-text-mute">{st.arrivalTime || st.departureTime}</span>
+                <div className="text-[11px] text-text-faint">Linia {legItem.leg.line}</div>
               </Tooltip>
             </CircleMarker>
           );
@@ -149,9 +150,11 @@ function JourneyLayer({ journey, desktop }: Props) {
             zIndexOffset={250}
           >
             <Tooltip direction="top" sticky className="kb-tooltip">
-              <div className="font-semibold text-amber-400">Przesiadka: {displayStopName(transStop.stopName)}</div>
-              <div>Czas na przesiadkę: <strong>{waitMins} min</strong></div>
-              <div className="text-[10px] text-text-mute">
+              <div className="font-medium">Przesiadka: {displayStopName(transStop.stopName)}</div>
+              <div className="text-text-mute">
+                Czas na przesiadkę: <span className="font-medium tabular-nums text-text">{waitMins} min</span>
+              </div>
+              <div className="text-[11px] tabular-nums text-text-faint">
                 Linia {legItem.leg.line} ({transStop.arrivalTime}) → Linia {nextLeg?.line} ({nextLeg?.departureTime})
               </div>
             </Tooltip>
@@ -167,10 +170,10 @@ function JourneyLayer({ journey, desktop }: Props) {
           zIndexOffset={300}
         >
           <Tooltip direction="top" sticky className="kb-tooltip" permanent={false}>
-            <div className="font-semibold text-emerald-400">Początek trasy</div>
-            <div>{displayStopName(startStop.stopName)}</div>
-            <div className="text-[10px] text-text-mute">
-              Odjazd: <strong>{startStop.departureTime}</strong> (Linia {startLeg?.line})
+            <div className="text-[11px] text-text-faint">Początek trasy</div>
+            <div className="font-medium">{displayStopName(startStop.stopName)}</div>
+            <div className="text-[11px] text-text-mute">
+              Odjazd <span className="font-medium tabular-nums text-text">{startStop.departureTime}</span> (Linia {startLeg?.line})
             </div>
           </Tooltip>
         </Marker>
@@ -184,10 +187,12 @@ function JourneyLayer({ journey, desktop }: Props) {
           zIndexOffset={300}
         >
           <Tooltip direction="top" sticky className="kb-tooltip" permanent={false}>
-            <div className="font-semibold text-rose-400">Cel podróży</div>
-            <div>{displayStopName(endStop.stopName)}</div>
-            <div className="text-[10px] text-text-mute">
-              Przyjazd: <strong>{endStop.arrivalTime || endStop.departureTime}</strong> (Linia {lastLeg?.line})
+            <div className="text-[11px] text-text-faint">Cel podróży</div>
+            <div className="font-medium">{displayStopName(endStop.stopName)}</div>
+            <div className="text-[11px] text-text-mute">
+              Przyjazd{" "}
+              <span className="font-medium tabular-nums text-text">{endStop.arrivalTime || endStop.departureTime}</span>{" "}
+              (Linia {lastLeg?.line})
             </div>
           </Tooltip>
         </Marker>

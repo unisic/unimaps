@@ -2,14 +2,17 @@
 
 import { memo, useEffect, useId, useRef, useState } from "react";
 import TopBarSearch, { type TopBarSearchHandle } from "@/components/TopBarSearch";
-import { useAnnouncements } from "@/lib/client/announcements";
 import {
-  BRAND,
-  BRAND_MZK,
-  COLOR_AT_STOP,
-  COLOR_EARLY,
-  COLOR_LATE,
-} from "@/lib/client/format";
+  ArrowRightIcon,
+  CardsIcon,
+  MegaphoneSimpleIcon,
+  MoonIcon,
+  NavigationArrowIcon,
+  SlidersHorizontalIcon,
+  SunIcon,
+  XIcon,
+} from "@/components/icons";
+import { useAnnouncements } from "@/lib/client/announcements";
 import { useSmoothMotion } from "@/lib/client/smoothMotion";
 import type { GeoPos } from "@/components/hooks";
 import type { Stop, Vehicle } from "@/lib/client/types";
@@ -94,13 +97,11 @@ function SwitchRow({
   onToggle,
   label,
   hint,
-  className = "",
 }: {
   checked: boolean;
   onToggle: () => void;
   label: string;
   hint?: string;
-  className?: string;
 }) {
   const hintId = useId();
   return (
@@ -110,24 +111,24 @@ function SwitchRow({
       role="switch"
       aria-checked={checked}
       aria-describedby={hint ? hintId : undefined}
-      className={`flex w-full items-center justify-between gap-3 rounded-xl bg-white/4 px-3 py-2.5 text-left transition-colors hover:bg-white/8 ${className}`}
+      className="flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2.5 text-left transition-colors hover:bg-white/5"
     >
-      <span className="flex flex-col">
+      <span className="flex flex-col gap-0.5">
         <span className="text-text">{label}</span>
         {hint && (
-          <span id={hintId} className="text-[11px] leading-snug text-text-faint">
+          <span id={hintId} className="text-[12px] leading-snug text-text-faint">
             {hint}
           </span>
         )}
       </span>
       <span
-        className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full px-0.5 transition-colors ${
-          checked ? "bg-brand" : "bg-white/15"
+        className={`relative inline-flex h-[22px] w-[38px] shrink-0 items-center rounded-full px-[3px] transition-colors duration-200 ${
+          checked ? "bg-primary" : "bg-white/12"
         }`}
         aria-hidden
       >
         <span
-          className={`h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-200 ease-out ${
+          className={`h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-200 ease-spring ${
             checked ? "translate-x-4" : "translate-x-0"
           }`}
         />
@@ -136,14 +137,63 @@ function SwitchRow({
   );
 }
 
-function LegendDot({ color, label }: { color: string; label: string }) {
+/** Radio group drawn as one pill track; the checked segment lifts onto surface-3. */
+function Segmented<T extends string>({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: T;
+  options: { id: T; label: string; title?: string; lead?: React.ReactNode }[];
+  onChange: (id: T) => void;
+}) {
   return (
-    <span className="inline-flex items-center gap-1.5 text-text-mute">
-      <span className="inline-block h-[10px] w-[10px] rounded-full" style={{ background: color }} />
-      {label}
-    </span>
+    <div className="flex rounded-full bg-white/5 p-1" role="radiogroup" aria-label={label}>
+      {options.map((o) => {
+        const on = value === o.id;
+        return (
+          <button
+            key={o.id}
+            type="button"
+            role="radio"
+            aria-checked={on}
+            title={o.title}
+            onClick={() => onChange(o.id)}
+            className={`tap inline-flex h-8 flex-1 items-center justify-center gap-1.5 rounded-full text-[12.5px] font-medium ${
+              on ? "bg-surface-3 text-text shadow-sm" : "text-text-mute hover:text-text"
+            }`}
+          >
+            {o.lead}
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
   );
 }
+
+function OperatorDot({ op }: { op: "kb" | "mzk" }) {
+  return (
+    <span className={`h-2 w-2 shrink-0 rounded-full ${op === "kb" ? "bg-kb" : "bg-mzk"}`} aria-hidden />
+  );
+}
+
+function MenuLabel({ children }: { children: React.ReactNode }) {
+  return <p className="px-3 pb-1.5 pt-2 text-[12px] font-medium text-text-faint">{children}</p>;
+}
+
+const OPERATOR_OPTIONS: { id: "all" | "kb" | "mzk"; label: string; title?: string; lead?: React.ReactNode }[] = [
+  { id: "all", label: "Wszyscy" },
+  { id: "kb", label: "KB", title: "Komunikacja Beskidzka", lead: <OperatorDot op="kb" /> },
+  { id: "mzk", label: "MZK", title: "MZK Bielsko-Biała", lead: <OperatorDot op="mzk" /> },
+];
+
+const LAYER_LEAD: Record<BaseLayerId, React.ReactNode> = {
+  kb: <SunIcon />,
+  dark: <MoonIcon />,
+};
 
 function TopBar({
   count,
@@ -191,7 +241,7 @@ function TopBar({
       className="absolute left-3 top-[calc(env(safe-area-inset-top,0px)+0.75rem)] z-[1002] w-[min(440px,calc(100vw-24px))] md:left-1/2 md:-translate-x-1/2"
     >
       {/* Search pill with live inline search input */}
-      <div className="surface flex h-12 items-center gap-2 rounded-full pl-3.5 pr-1.5 shadow-lg">
+      <div className="surface flex h-12 items-center gap-1 rounded-full pl-3.5 pr-1.5">
         <TopBarSearch
           stops={stops}
           geoPos={geoPos}
@@ -214,36 +264,24 @@ function TopBar({
           }}
         />
 
-        {/* Operator switcher button */}
-        <button
-          type="button"
-          onClick={() => {
-            const next = operatorFilter === "all" ? "kb" : operatorFilter === "kb" ? "mzk" : "all";
-            onOperatorFilter(next);
-          }}
-          className={`flex shrink-0 items-center gap-1 rounded-full px-2 py-1 text-xs font-bold transition-all active:scale-95 border ${
-            operatorFilter === "mzk"
-              ? "bg-blue-600 text-white border-blue-500/40 shadow-sm"
-              : operatorFilter === "kb"
-                ? "bg-[#a6192e] text-white border-red-500/40 shadow-sm"
-                : "bg-white/6 text-text-mute hover:bg-white/10 hover:text-text border-hairline"
-          }`}
-          title="Filtruj przewoźnika: Wszyscy / KB / MZK"
-        >
-          {operatorFilter === "mzk" && (
-            /* eslint-disable-next-line @next/next/no-img-element */
-            <img src="/mzk-logo.svg" alt="" className="h-2.5 w-auto filter brightness-0 invert" />
-          )}
-          {operatorFilter === "kb" && (
-            /* eslint-disable-next-line @next/next/no-img-element */
-            <img src="/brand.svg" alt="" className="h-2.5 w-auto filter brightness-0 invert" />
-          )}
-          <span className="text-[11px]">{operatorFilter === "all" ? "Wszyscy" : operatorFilter.toUpperCase()}</span>
-        </button>
+        {/* Active operator filter: visible only while it hides part of the fleet */}
+        {operatorFilter !== "all" && (
+          <button
+            type="button"
+            onClick={() => onOperatorFilter("all")}
+            aria-label={`Filtr przewoźnika: ${operatorFilter.toUpperCase()}. Pokaż wszystkich`}
+            title="Pokaż wszystkich przewoźników"
+            className="tap flex h-7 shrink-0 items-center gap-1.5 rounded-full bg-white/8 pl-2.5 pr-2 text-[12px] font-semibold text-text hover:bg-white/12"
+          >
+            <OperatorDot op={operatorFilter} />
+            {operatorFilter.toUpperCase()}
+            <XIcon className="text-[11px] text-text-mute" />
+          </button>
+        )}
 
-        {/* Online vehicles count badge */}
+        {/* Online vehicles count */}
         <span
-          className="flex shrink-0 items-center gap-1.5 rounded-full bg-white/8 px-2.5 py-1 text-xs font-bold tabular-nums text-text border border-hairline"
+          className="flex shrink-0 items-center gap-1.5 px-2 text-[12.5px] font-semibold tabular-nums text-text-mute"
           title={offline ? "Brak połączenia" : "Pojazdy online"}
         >
           <span
@@ -257,161 +295,104 @@ function TopBar({
         <button
           type="button"
           aria-label={unseen ? "Utrudnienia w ruchu (nowe komunikaty)" : "Utrudnienia w ruchu"}
+          title="Utrudnienia w ruchu"
           onClick={() => {
             setMenu(false);
             searchRef?.current?.blur();
             onOpenAnnouncements();
           }}
-          className="relative grid h-10 w-10 shrink-0 place-items-center rounded-full text-text-mute transition-colors hover:bg-white/8 hover:text-text md:h-9 md:w-9"
+          className="tap relative grid h-10 w-10 shrink-0 place-items-center rounded-full text-[19px] text-text-mute hover:bg-white/8 hover:text-text md:h-9 md:w-9 md:text-[18px]"
         >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-            <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
-            <path d="M12 9v4M12 17h.01" />
-          </svg>
+          <MegaphoneSimpleIcon />
           {unseen && (
             <span
-              className="absolute right-2 top-2 h-2 w-2 rounded-full bg-danger md:right-1.5 md:top-1.5"
+              className="absolute right-2 top-2 h-2 w-2 rounded-full bg-primary ring-2 ring-surface animate-pop md:right-1.5 md:top-1.5"
               aria-hidden
             />
           )}
         </button>
-
-        {/* Brigades & Fleet button */}
-        <a
-          href="/brygady"
-          aria-label="Brygady i tabor"
-          title="Brygady i śledzenie taboru na żywo"
-          className="relative grid h-10 w-10 shrink-0 place-items-center rounded-full text-text-mute transition-colors hover:bg-white/8 hover:text-text md:h-9 md:w-9"
-        >
-          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-            <rect x="3" y="4.5" width="18" height="11" rx="2.5" />
-            <path d="M3 10.5h18M8 4.5v6M12 4.5v6M16 4.5v6" />
-            <circle cx="7.5" cy="16.6" r="1.4" fill="currentColor" />
-            <circle cx="16.5" cy="16.6" r="1.4" fill="currentColor" />
-          </svg>
-        </a>
 
         {/* Map settings button */}
         <button
           type="button"
           aria-label="Ustawienia mapy"
           aria-expanded={menu}
+          title="Ustawienia mapy"
           onClick={() => {
             setMenu((v) => !v);
             searchRef?.current?.blur();
           }}
-          className={`grid h-11 w-11 shrink-0 place-items-center rounded-full transition-colors md:h-9 md:w-9 ${
-            menu ? "bg-primary-dim text-primary" : "text-text-mute hover:bg-white/8 hover:text-text"
+          className={`tap grid h-10 w-10 shrink-0 place-items-center rounded-full text-[19px] md:h-9 md:w-9 md:text-[18px] ${
+            menu ? "bg-white/10 text-text" : "text-text-mute hover:bg-white/8 hover:text-text"
           }`}
         >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
-            <path d="M4 8h10M18 8h2M4 16h2M10 16h10" />
-            <circle cx="16" cy="8" r="2" />
-            <circle cx="8" cy="16" r="2" />
-          </svg>
+          <SlidersHorizontalIcon />
         </button>
       </div>
 
       {/* Settings dropdown menu */}
       {menu && (
-        <div className="surface mt-2 rounded-2xl p-4 text-[13px] animate-drop">
-          <p className="text-[11px] font-semibold uppercase tracking-wider text-text-faint">Przewoźnik</p>
-          <div className="mt-2 mb-3 flex flex-wrap gap-1.5" role="radiogroup" aria-label="Wybór przewoźnika">
-            {[
-              { id: "all", label: "Wszyscy", icon: null },
-              { id: "kb", label: "Komunikacja Beskidzka", icon: "/brand.svg" },
-              { id: "mzk", label: "MZK Bielsko-Biała", icon: "/mzk-logo.svg" },
-            ].map((op) => (
-              <button
-                key={op.id}
-                type="button"
-                role="radio"
-                aria-checked={operatorFilter === op.id}
-                onClick={() => onOperatorFilter(op.id as "all" | "kb" | "mzk")}
-                className={`flex-1 basis-[calc(33.333%-4px)] rounded-full px-2.5 py-1.5 text-xs font-semibold transition-all active:scale-95 inline-flex items-center justify-center gap-1 ${
-                  operatorFilter === op.id
-                    ? op.id === "mzk"
-                      ? "bg-blue-600 text-white"
-                      : "bg-brand text-on-brand"
-                    : "bg-white/6 text-text-mute hover:bg-white/10 hover:text-text"
-                }`}
-              >
-                {op.icon && (
-                  /* eslint-disable-next-line @next/next/no-img-element */
-                  <img
-                    src={op.icon}
-                    alt=""
-                    className="h-3 w-auto filter brightness-0 invert"
-                  />
-                )}
-                {op.label}
-              </button>
-            ))}
+        <div className="surface mt-2 rounded-[20px] p-2 text-[13.5px] animate-drop">
+          <MenuLabel>Przewoźnik</MenuLabel>
+          <div className="px-1">
+            <Segmented
+              label="Wybór przewoźnika"
+              value={operatorFilter}
+              options={OPERATOR_OPTIONS}
+              onChange={onOperatorFilter}
+            />
           </div>
 
           {Object.keys(BASE_LAYERS).length > 1 && (
             <>
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-text-faint">Mapa</p>
-              <div className="mt-2 mb-3 flex flex-wrap gap-1.5" role="radiogroup" aria-label="Styl mapy">
-                {(Object.keys(BASE_LAYERS) as BaseLayerId[]).map((id) => (
-                  <button
-                    key={id}
-                    type="button"
-                    role="radio"
-                    aria-checked={baseLayer === id}
-                    onClick={() => onBaseLayer(id)}
-                    className={`flex-1 basis-[calc(33.333%-4px)] rounded-full px-2.5 py-1.5 text-xs font-semibold transition-all active:scale-95 ${
-                      baseLayer === id
-                        ? "bg-brand text-on-brand"
-                        : "bg-white/6 text-text-mute hover:bg-white/10 hover:text-text"
-                    }`}
-                  >
-                    {BASE_LAYERS[id].name}
-                  </button>
-                ))}
+              <MenuLabel>Mapa</MenuLabel>
+              <div className="px-1">
+                <Segmented
+                  label="Styl mapy"
+                  value={baseLayer}
+                  options={(Object.keys(BASE_LAYERS) as BaseLayerId[]).map((id) => ({
+                    id,
+                    label: BASE_LAYERS[id].name,
+                    lead: LAYER_LEAD[id],
+                  }))}
+                  onChange={onBaseLayer}
+                />
               </div>
             </>
           )}
 
-          <SwitchRow
-            checked={stopsVisible}
-            onToggle={onToggleStops}
-            label="Przystanki na mapie"
-            className="mt-3"
-          />
-          <SwitchRow
-            checked={smoothMotion}
-            onToggle={() => setSmoothMotion(!smoothMotion)}
-            label="Płynny ruch pojazdów"
-            hint="Szacuje pozycję autobusu między aktualizacjami"
-            className="mt-2"
-          />
+          <div className="mt-2 border-t border-hairline pt-1">
+            <SwitchRow checked={stopsVisible} onToggle={onToggleStops} label="Przystanki na mapie" />
+            <SwitchRow
+              checked={smoothMotion}
+              onToggle={() => setSmoothMotion(!smoothMotion)}
+              label="Płynny ruch pojazdów"
+              hint="Szacuje pozycję autobusu między aktualizacjami"
+            />
+          </div>
 
           <a
             href="/brygady"
-            className="mt-2.5 flex w-full items-center justify-between rounded-xl bg-white/4 px-3 py-2.5 transition-colors hover:bg-white/8 text-text font-semibold text-xs"
+            className="group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-text transition-colors hover:bg-white/5"
           >
-            <span className="flex items-center gap-2">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                <rect x="3" y="4.5" width="18" height="11" rx="2.5" />
-                <path d="M3 10.5h18M8 4.5v6M12 4.5v6M16 4.5v6" />
-                <circle cx="7.5" cy="16.6" r="1.4" fill="currentColor" />
-                <circle cx="16.5" cy="16.6" r="1.4" fill="currentColor" />
-              </svg>
-              Karty brygad i tabor na żywo
-            </span>
-            <span className="text-primary font-bold">&rarr;</span>
+            <CardsIcon className="text-[17px] text-text-mute" />
+            <span className="flex-1">Karty brygad i tabor na żywo</span>
+            <ArrowRightIcon className="text-[14px] text-text-faint transition-transform duration-200 group-hover:translate-x-0.5" />
           </a>
 
-          <p className="mt-4 text-[11px] font-semibold uppercase tracking-wider text-text-faint">
-            Kolory pojazdów
-          </p>
-          <div className="mt-2 flex flex-wrap gap-x-3.5 gap-y-1.5 text-xs">
-            <LegendDot color={BRAND} label="KB w trasie" />
-            <LegendDot color={BRAND_MZK} label="MZK w trasie" />
-            <LegendDot color={COLOR_AT_STOP} label="na przystanku" />
-            <LegendDot color={COLOR_LATE} label="opóźniony" />
-            <LegendDot color={COLOR_EARLY} label="przed czasem" />
+          <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1.5 border-t border-hairline px-3 pb-1.5 pt-3 text-[12px] text-text-mute">
+            <span className="inline-flex items-center gap-1.5">
+              <OperatorDot op="kb" />
+              KB
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <OperatorDot op="mzk" />
+              MZK
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <NavigationArrowIcon weight="fill" className="rotate-45 text-[11px]" />
+              kierunek jazdy
+            </span>
           </div>
         </div>
       )}

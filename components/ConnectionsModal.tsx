@@ -1,6 +1,22 @@
 "use client";
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  ArrowRightIcon,
+  ArrowsClockwiseIcon,
+  ArrowsDownUpIcon,
+  BusIcon,
+  CalendarBlankIcon,
+  CaretDownIcon,
+  CaretRightIcon,
+  CaretUpIcon,
+  CheckIcon,
+  ClockIcon,
+  LightningIcon,
+  MapTrifoldIcon,
+  PathIcon,
+  ShieldCheckIcon,
+} from "@/components/icons";
 import { CloseIcon, ErrorState, IconButton, LineBadge, StarIcon } from "@/components/ui";
 import { getConnections } from "@/lib/client/api";
 import { useFavorites } from "@/lib/client/favorites";
@@ -29,80 +45,14 @@ export interface ConnectionsModalProps {
   onSelectConnection?: (conn: ConnectionItinerary, selectedLegIdx?: number | null) => void;
 }
 
-function SwapIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <path d="M7 16V4m0 0L3 8m4-4l4 4m6 4v12m0 0l4-4m-4 4l-4-4" />
-    </svg>
-  );
-}
-
-function ClockIcon() {
-  return (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <circle cx="12" cy="12" r="10" />
-      <polyline points="12 6 12 12 16 14" />
-    </svg>
-  );
-}
-
-function CalendarIcon() {
-  return (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
-      <line x1="16" y1="2" x2="16" y2="6" />
-      <line x1="8" y1="2" x2="8" y2="6" />
-      <line x1="3" y1="10" x2="21" y2="10" />
-    </svg>
-  );
-}
-
-function BusIcon() {
-  return (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <rect x="3" y="3" width="18" height="16" rx="2" />
-      <path d="M3 11h18" />
-      <circle cx="7" cy="15" r="1" />
-      <circle cx="17" cy="15" r="1" />
-      <path d="M5 19v2m14-2v2" />
-    </svg>
-  );
-}
-
-function ShieldIcon() {
-  return (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-    </svg>
-  );
-}
-
-function ZapIcon() {
-  return (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
-    </svg>
-  );
-}
-
-function ChevronDown({ open }: { open: boolean }) {
-  return (
-    <svg
-      width="14"
-      height="14"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={`shrink-0 text-text-faint transition-transform duration-200 ${open ? "rotate-180" : ""}`}
-      aria-hidden
-    >
-      <path d="M6 9l6 6 6-6" />
-    </svg>
-  );
-}
+/* Chips: one height, one radius. "On" uses the same accent as a pressed IconButton. */
+const CHIP = "tap inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full text-[12px] font-medium";
+const CHIP_ON = "bg-primary-dim text-primary";
+const CHIP_OFF = "bg-white/6 text-text-mute hover:bg-white/10 hover:text-text";
+const chip = (on: boolean) => `${CHIP} px-3 ${on ? CHIP_ON : CHIP_OFF}`;
+/** The one high-emphasis action of a view: neutral, inverted. */
+const CTA =
+  "tap inline-flex items-center justify-center gap-1.5 rounded-full bg-text px-4 font-medium text-bg hover:bg-white";
 
 /**
  * 24-Hour Time Input Component
@@ -168,7 +118,7 @@ function TimeInput24H({
   };
 
   return (
-    <div className="flex items-center rounded-xl bg-white/8 border border-white/10 px-2 py-0.5 text-text focus-within:border-brand/70 focus-within:ring-1 focus-within:ring-brand/40 transition-colors">
+    <div className="flex h-8 items-center rounded-full bg-white/6 px-3 text-text transition-colors focus-within:bg-white/10 focus-within:ring-1 focus-within:ring-primary/50">
       <input
         ref={hourRef}
         type="text"
@@ -179,11 +129,11 @@ function TimeInput24H({
         onChange={handleHourChange}
         onKeyDown={handleHourKeyDown}
         onBlur={onBlur}
-        className="w-5 text-center text-xs font-bold tabular-nums bg-transparent outline-none focus:outline-none focus-visible:outline-none ring-0 focus:ring-0 placeholder:text-text-faint"
+        className="w-6 bg-transparent text-center text-base font-semibold tabular-nums outline-none ring-0 placeholder:text-text-faint focus:outline-none focus:ring-0 focus-visible:outline-none md:w-5 md:text-[13px]"
         placeholder="00"
         aria-label="Godzina w formacie 24-godzinnym (00-23)"
       />
-      <span className="text-text-faint font-bold select-none px-0.5">:</span>
+      <span className="select-none px-0.5 font-semibold text-text-faint">:</span>
       <input
         ref={minRef}
         type="text"
@@ -194,11 +144,11 @@ function TimeInput24H({
         onChange={handleMinChange}
         onKeyDown={handleMinKeyDown}
         onBlur={onBlur}
-        className="w-5 text-center text-xs font-bold tabular-nums bg-transparent outline-none focus:outline-none focus-visible:outline-none ring-0 focus:ring-0 placeholder:text-text-faint"
+        className="w-6 bg-transparent text-center text-base font-semibold tabular-nums outline-none ring-0 placeholder:text-text-faint focus:outline-none focus:ring-0 focus-visible:outline-none md:w-5 md:text-[13px]"
         placeholder="00"
         aria-label="Minuty w formacie 24-godzinnym (00-59)"
       />
-      <span className="ml-1 select-none text-[9px] font-bold text-text-faint tracking-wider">24H</span>
+      <span className="ml-1.5 select-none text-[11px] text-text-faint">24h</span>
     </div>
   );
 }
@@ -524,26 +474,17 @@ function ConnectionsDialog({
       role="dialog"
       aria-modal="true"
       aria-label="Wyszukiwarka połączeń"
-      className="fixed inset-0 z-[2000] flex items-end justify-center bg-black/60 backdrop-blur-sm animate-fade md:items-center md:p-4"
+      className="fixed inset-0 z-[2000] flex items-end justify-center bg-black/55 animate-fade md:items-center md:p-4"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="surface relative flex max-h-[92dvh] w-full flex-col overflow-hidden rounded-t-3xl border border-white/10 shadow-2xl md:max-h-[88vh] md:max-w-xl md:rounded-3xl animate-drop">
+      <div className="surface relative flex max-h-[92dvh] w-full flex-col overflow-hidden rounded-t-3xl md:max-h-[88vh] md:max-w-xl md:rounded-[20px] animate-drop">
         {/* Header */}
-        <header className="flex items-center justify-between border-b border-hairline px-4 pb-3 pt-3.5">
-          <div className="flex items-center gap-2.5">
-            <span className="grid h-9 w-9 place-items-center rounded-xl bg-brand/15 text-brand" aria-hidden>
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="6" cy="19" r="3" />
-                <path d="M9 19h8.5a4.5 4.5 0 0 0 0-9H7a4 4 0 0 1 0-8h11" />
-                <polyline points="15 5 18 2 21 5" />
-              </svg>
-            </span>
-            <div>
-              <h2 className="text-[15px] font-bold text-text">Wyszukaj połączenie</h2>
-              <p className="text-[11px] text-text-faint">Rozkład jazdy Komunikacji Beskidzkiej</p>
-            </div>
+        <header className="flex items-center justify-between gap-3 border-b border-hairline py-2.5 pl-4 pr-2.5">
+          <div className="min-w-0">
+            <h2 className="text-[15px] font-semibold tracking-tight text-text">Wyszukaj połączenie</h2>
+            <p className="text-[12px] text-text-faint">Rozkład jazdy Komunikacji Beskidzkiej</p>
           </div>
           <IconButton label="Zamknij" onClick={onClose}>
             <CloseIcon />
@@ -551,13 +492,13 @@ function ConnectionsDialog({
         </header>
 
         {/* Inputs & Controls panel */}
-        <div className="border-b border-hairline bg-surface-2 px-4 py-3 space-y-2.5">
+        <div className="space-y-3 border-b border-hairline px-4 py-3">
           {/* FROM / TO inputs */}
           <div className="flex items-center gap-2">
             <div className="min-w-0 flex-1 space-y-2">
               {/* FROM input */}
-              <div className="relative flex h-10 items-center rounded-xl bg-white/6 px-3 transition-colors focus-within:bg-white/10 focus-within:ring-1 focus-within:ring-primary/50">
-                <span className="mr-2.5 h-2 w-2 rounded-full bg-good shrink-0" aria-hidden />
+              <div className="relative flex h-11 items-center rounded-xl bg-white/6 pl-3.5 pr-1.5 transition-colors focus-within:bg-white/10 focus-within:ring-1 focus-within:ring-primary/50">
+                <span className="mr-3 h-2 w-2 shrink-0 rounded-full bg-good" aria-hidden />
                 <input
                   ref={fromInputRef}
                   type="text"
@@ -580,7 +521,7 @@ function ConnectionsDialog({
                       setConnections(null);
                     }
                   }}
-                  className="w-full min-w-0 bg-transparent text-base md:text-[13px] font-medium text-text placeholder:text-text-faint outline-none focus:outline-none focus-visible:outline-none ring-0 focus:ring-0"
+                  className="w-full min-w-0 bg-transparent text-base font-medium text-text outline-none ring-0 placeholder:font-normal placeholder:text-text-faint focus:outline-none focus:ring-0 focus-visible:outline-none md:text-[14px]"
                 />
                 {(fromStop || fromQuery) && (
                   <button
@@ -593,7 +534,7 @@ function ConnectionsDialog({
                       setActiveInput("from");
                       fromInputRef.current?.focus();
                     }}
-                    className="grid h-6 w-6 place-items-center rounded-full text-text-faint hover:text-text"
+                    className="tap grid h-8 w-8 shrink-0 place-items-center rounded-full text-[14px] text-text-faint hover:bg-white/8 hover:text-text"
                   >
                     <CloseIcon />
                   </button>
@@ -601,8 +542,8 @@ function ConnectionsDialog({
               </div>
 
               {/* TO input */}
-              <div className="relative flex h-10 items-center rounded-xl bg-white/6 px-3 transition-colors focus-within:bg-white/10 focus-within:ring-1 focus-within:ring-primary/50">
-                <span className="mr-2.5 h-2 w-2 rounded-full bg-danger shrink-0" aria-hidden />
+              <div className="relative flex h-11 items-center rounded-xl bg-white/6 pl-3.5 pr-1.5 transition-colors focus-within:bg-white/10 focus-within:ring-1 focus-within:ring-primary/50">
+                <span className="mr-3 h-2 w-2 shrink-0 rounded-full bg-primary" aria-hidden />
                 <input
                   ref={toInputRef}
                   type="text"
@@ -625,7 +566,7 @@ function ConnectionsDialog({
                       setConnections(null);
                     }
                   }}
-                  className="w-full min-w-0 bg-transparent text-base md:text-[13px] font-medium text-text placeholder:text-text-faint outline-none focus:outline-none focus-visible:outline-none ring-0 focus:ring-0"
+                  className="w-full min-w-0 bg-transparent text-base font-medium text-text outline-none ring-0 placeholder:font-normal placeholder:text-text-faint focus:outline-none focus:ring-0 focus-visible:outline-none md:text-[14px]"
                 />
                 {(toStop || toQuery) && (
                   <button
@@ -638,7 +579,7 @@ function ConnectionsDialog({
                       setActiveInput("to");
                       toInputRef.current?.focus();
                     }}
-                    className="grid h-6 w-6 place-items-center rounded-full text-text-faint hover:text-text"
+                    className="tap grid h-8 w-8 shrink-0 place-items-center rounded-full text-[14px] text-text-faint hover:bg-white/8 hover:text-text"
                   >
                     <CloseIcon />
                   </button>
@@ -652,48 +593,28 @@ function ConnectionsDialog({
               aria-label="Zamień kierunki"
               title="Zamień kierunki"
               onClick={handleSwap}
-              className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-white/6 text-text-mute transition-all hover:bg-white/10 hover:text-text active:scale-90"
+              className="tap grid h-11 w-11 shrink-0 place-items-center rounded-full bg-white/6 text-[18px] text-text-mute hover:bg-white/10 hover:text-text"
             >
-              <SwapIcon />
+              <ArrowsDownUpIcon />
             </button>
           </div>
 
           {/* Day selection row */}
-          <div className="flex flex-wrap items-center gap-1.5 text-xs">
-            <span className="text-[11px] font-semibold text-text-faint mr-0.5">Dzień:</span>
-            <button
-              type="button"
-              onClick={handlePickToday}
-              className={`rounded-full px-2.5 py-1 font-semibold transition-all ${
-                dateMode === "today"
-                  ? "bg-brand text-on-brand shadow-sm"
-                  : "bg-white/6 text-text-mute hover:bg-white/10 hover:text-text"
-              }`}
-            >
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="w-[52px] shrink-0 text-[12px] text-text-faint">Dzień:</span>
+            <button type="button" onClick={handlePickToday} className={chip(dateMode === "today")}>
               Dziś
             </button>
-            <button
-              type="button"
-              onClick={handlePickTomorrow}
-              className={`rounded-full px-2.5 py-1 font-semibold transition-all ${
-                dateMode === "tomorrow"
-                  ? "bg-brand text-on-brand shadow-sm"
-                  : "bg-white/6 text-text-mute hover:bg-white/10 hover:text-text"
-              }`}
-            >
+            <button type="button" onClick={handlePickTomorrow} className={chip(dateMode === "tomorrow")}>
               Jutro
             </button>
 
             {/* Custom date button & hidden native picker */}
             <label
               onClick={handleOpenDatePicker}
-              className={`relative flex items-center gap-1.5 rounded-full px-2.5 py-1 font-semibold transition-all cursor-pointer select-none ${
-                dateMode === "custom"
-                  ? "bg-brand text-on-brand shadow-sm"
-                  : "bg-white/6 text-text-mute hover:bg-white/10 hover:text-text"
-              }`}
+              className={`${chip(dateMode === "custom")} relative cursor-pointer select-none`}
             >
-              <CalendarIcon />
+              <CalendarBlankIcon className="text-[14px]" weight={dateMode === "custom" ? "fill" : "bold"} />
               <span>{dateMode === "custom" ? formatDayLabel(selectedDate, todayStr) : "Inna data"}</span>
               <input
                 ref={dateInputRef}
@@ -726,20 +647,12 @@ function ConnectionsDialog({
           </div>
 
           {/* 24-Hour Time selection row */}
-          <div className="flex flex-wrap items-center justify-between gap-2 text-xs pt-0.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex flex-wrap items-center gap-1.5">
-              <span className="text-[11px] font-semibold text-text-faint mr-0.5">Odjazd:</span>
+              <span className="w-[52px] shrink-0 text-[12px] text-text-faint">Odjazd:</span>
 
               {dateMode === "today" && (
-                <button
-                  type="button"
-                  onClick={handleSetNow}
-                  className={`rounded-full px-2.5 py-1 font-semibold transition-all ${
-                    timeMode === "now"
-                      ? "bg-brand text-on-brand shadow-sm"
-                      : "bg-white/6 text-text-mute hover:bg-white/10 hover:text-text"
-                  }`}
-                >
+                <button type="button" onClick={handleSetNow} className={chip(timeMode === "now")}>
                   Teraz
                 </button>
               )}
@@ -760,7 +673,7 @@ function ConnectionsDialog({
               <button
                 type="button"
                 onClick={() => handleAddMinutes(15)}
-                className="rounded-full bg-white/6 px-2 py-0.5 text-[11px] font-semibold text-text-mute hover:bg-white/10 hover:text-text transition-colors"
+                className={`${CHIP} ${CHIP_OFF} px-2.5 tabular-nums`}
                 title="Dodaj 15 minut"
               >
                 +15m
@@ -768,7 +681,7 @@ function ConnectionsDialog({
               <button
                 type="button"
                 onClick={() => handleAddMinutes(30)}
-                className="rounded-full bg-white/6 px-2 py-0.5 text-[11px] font-semibold text-text-mute hover:bg-white/10 hover:text-text transition-colors"
+                className={`${CHIP} ${CHIP_OFF} px-2.5 tabular-nums`}
                 title="Dodaj 30 minut"
               >
                 +30m
@@ -776,7 +689,7 @@ function ConnectionsDialog({
               <button
                 type="button"
                 onClick={() => handleAddMinutes(60)}
-                className="rounded-full bg-white/6 px-2 py-0.5 text-[11px] font-semibold text-text-mute hover:bg-white/10 hover:text-text transition-colors"
+                className={`${CHIP} ${CHIP_OFF} px-2.5 tabular-nums`}
                 title="Dodaj 1 godzinę"
               >
                 +1h
@@ -788,16 +701,17 @@ function ConnectionsDialog({
                 type="button"
                 onClick={handleRefresh}
                 disabled={loading}
-                className="rounded-full bg-white/10 px-3 py-1 font-semibold text-text transition-all hover:bg-white/15 active:scale-95 disabled:opacity-50"
+                className={`${CHIP} bg-white/8 px-3 text-text hover:bg-white/12 disabled:opacity-50`}
               >
+                <ArrowsClockwiseIcon className="text-[14px]" />
                 {loading ? "Szukanie…" : "Odśwież"}
               </button>
             )}
           </div>
 
           {/* Filter chips row */}
-          <div className="flex flex-wrap items-center gap-1.5 text-xs pt-1 border-t border-hairline/60">
-            <span className="text-[11px] font-semibold text-text-faint mr-0.5">Filtry:</span>
+          <div className="flex flex-wrap items-center gap-1.5 border-t border-hairline pt-3">
+            <span className="w-[52px] shrink-0 text-[12px] text-text-faint">Filtry:</span>
 
             {/* Direct only filter chip */}
             <button
@@ -806,17 +720,13 @@ function ConnectionsDialog({
                 setDirectOnly((prev) => !prev);
                 setConnections(null);
               }}
-              className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 font-semibold transition-all ${
-                directOnly
-                  ? "bg-good/20 text-good border border-good/40 shadow-sm"
-                  : "bg-white/6 text-text-mute hover:bg-white/10 hover:text-text border border-transparent"
-              }`}
+              className={chip(directOnly)}
               aria-pressed={directOnly}
               title="Pokaż wyłącznie bezpośrednie połączenia bez przesiadek"
             >
-              <BusIcon />
+              <BusIcon className="text-[14px]" weight={directOnly ? "fill" : "bold"} />
               <span>Tylko bezpośrednie</span>
-              {directOnly && <span className="text-good font-bold">✓</span>}
+              {directOnly && <CheckIcon className="animate-pop text-[13px]" />}
             </button>
 
             {/* Min 5 min transfer buffer (when transfers are allowed) */}
@@ -827,17 +737,13 @@ function ConnectionsDialog({
                   setMinTransfer5((prev) => !prev);
                   setConnections(null);
                 }}
-                className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 font-semibold transition-all ${
-                  minTransfer5
-                    ? "bg-primary/20 text-primary border border-primary/40 shadow-sm"
-                    : "bg-white/6 text-text-mute hover:bg-white/10 hover:text-text border border-transparent"
-                }`}
+                className={chip(minTransfer5)}
                 aria-pressed={minTransfer5}
                 title="Filtruj połączenia z bezpiecznym czasem na przesiadkę (min. 5 minut)"
               >
-                <ShieldIcon />
+                <ShieldCheckIcon className="text-[14px]" weight={minTransfer5 ? "fill" : "bold"} />
                 <span>Bezpieczna przesiadka (5 min)</span>
-                {minTransfer5 && <span className="font-bold">✓</span>}
+                {minTransfer5 && <CheckIcon className="animate-pop text-[13px]" />}
               </button>
             )}
 
@@ -848,18 +754,18 @@ function ConnectionsDialog({
                 setSortBy((s) => (s === "departure" ? "duration" : "departure"));
                 setConnections(null);
               }}
-              className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 font-semibold transition-all ${
-                sortBy === "duration"
-                  ? "bg-brand/20 text-brand border border-brand/40 shadow-sm"
-                  : "bg-white/6 text-text-mute hover:bg-white/10 hover:text-text border border-transparent"
-              }`}
+              className={chip(sortBy === "duration")}
               title={
                 sortBy === "duration"
                   ? "Sortowanie: najkrótszy całkowity czas podróży"
                   : "Sortowanie: najwcześniejszy odjazd"
               }
             >
-              {sortBy === "duration" ? <ZapIcon /> : <ClockIcon />}
+              {sortBy === "duration" ? (
+                <LightningIcon className="text-[14px]" weight="fill" />
+              ) : (
+                <ClockIcon className="text-[14px]" />
+              )}
               <span>{sortBy === "duration" ? "Najszybsza trasa" : "Wg odjazdu"}</span>
             </button>
           </div>
@@ -870,32 +776,28 @@ function ConnectionsDialog({
           {/* Autocomplete suggestion list when user is picking stops */}
           {activeInput ? (
             <div>
-              <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-text-faint">
+              <p className="mb-1.5 px-1 text-[12px] font-medium text-text-faint">
                 {activeInput === "from" ? "Wybierz przystanek początkowy" : "Wybierz przystanek docelowy"}
               </p>
               {suggestions.length === 0 ? (
-                <p className="py-6 text-center text-xs text-text-faint">Nie znaleziono pasujących przystanków.</p>
+                <p className="py-8 text-center text-[13px] text-text-faint">Nie znaleziono pasujących przystanków.</p>
               ) : (
-                <ul className="space-y-1">
+                <ul>
                   {suggestions.map((item) => (
                     <li key={item.s.id}>
                       <button
                         type="button"
                         onClick={() => handlePickStop(item.s, activeInput)}
-                        className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left transition-colors hover:bg-white/8 active:bg-white/12"
+                        className="flex min-h-11 w-full items-center justify-between rounded-xl px-3 py-2 text-left transition-colors hover:bg-white/6 active:bg-white/10"
                       >
-                        <div className="flex items-center gap-2.5 min-w-0">
-                          {item.fav ? (
-                            <StarIcon filled />
-                          ) : (
-                            <span className="h-1.5 w-1.5 rounded-full bg-white/30" aria-hidden />
-                          )}
-                          <span className="truncate text-[13px] font-medium text-text">
-                            {displayStopName(item.s.name)}
+                        <span className="flex min-w-0 items-center gap-3">
+                          <span className="grid w-4 shrink-0 place-items-center text-[14px] text-primary" aria-hidden>
+                            {item.fav ? <StarIcon filled /> : <span className="h-1.5 w-1.5 rounded-full bg-white/25" />}
                           </span>
-                        </div>
+                          <span className="truncate text-[14px] text-text">{displayStopName(item.s.name)}</span>
+                        </span>
                         {item.dist != null && (
-                          <span className="ml-2 shrink-0 text-[11px] tabular-nums text-text-faint">
+                          <span className="ml-2 shrink-0 text-[12px] tabular-nums text-text-faint">
                             {formatDistance(item.dist)}
                           </span>
                         )}
@@ -906,15 +808,18 @@ function ConnectionsDialog({
               )}
             </div>
           ) : loading ? (
-            /* Loading skeletons */
-            <div className="space-y-3">
+            /* Loading skeletons, shaped like the result cards */
+            <div aria-hidden className="space-y-2.5">
               {[1, 2, 3].map((i) => (
-                <div key={i} className="rounded-2xl bg-white/4 p-4 space-y-2.5">
+                <div key={i} className="space-y-3 rounded-xl bg-white/4 p-3.5">
                   <div className="flex items-center justify-between">
-                    <div className="skeleton h-4 w-28 rounded-lg" />
-                    <div className="skeleton h-4 w-16 rounded-lg" />
+                    <div className="skeleton h-5 w-32" />
+                    <div className="skeleton h-5 w-20 rounded-full" />
                   </div>
-                  <div className="skeleton h-3 w-40 rounded-lg" />
+                  <div className="flex gap-2">
+                    <div className="skeleton h-7 w-9 rounded-lg" />
+                    <div className="skeleton h-7 w-28" />
+                  </div>
                 </div>
               ))}
             </div>
@@ -922,15 +827,15 @@ function ConnectionsDialog({
             <ErrorState onRetry={handleRefresh} />
           ) : connections ? (
             connections.length === 0 ? (
-              <div className="py-10 text-center space-y-3">
-                <div className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-white/6 text-text-faint">
+              <div className="px-4 py-10 text-center animate-fade">
+                <span className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-white/5 text-[22px] text-text-faint">
                   <BusIcon />
-                </div>
-                <div>
-                  <p className="text-sm font-semibold text-text">
+                </span>
+                <div className="mt-3">
+                  <p className="text-[14px] font-medium text-text">
                     {directOnly ? "Brak bezpośrednich połączeń" : "Brak dostępnych połączeń"}
                   </p>
-                  <p className="mt-1 text-xs text-text-faint max-w-sm mx-auto">
+                  <p className="mx-auto mt-1 max-w-sm text-[13px] text-text-mute">
                     {directOnly
                       ? "W rozkładzie nie ma bezpośredniego autobusu na wybraną godzinę. Spróbuj wyłączyć filtr, aby zobaczyć połączenia z przesiadką."
                       : dateMode === "today"
@@ -938,7 +843,7 @@ function ConnectionsDialog({
                         : "Brak kursów w rozkładzie jazdy na wybrany dzień i godzinę."}
                   </p>
                 </div>
-                <div className="flex justify-center gap-2 pt-2">
+                <div className="flex flex-wrap justify-center gap-2 pt-5">
                   {directOnly && (
                     <button
                       type="button"
@@ -946,7 +851,7 @@ function ConnectionsDialog({
                         setDirectOnly(false);
                         setConnections(null);
                       }}
-                      className="rounded-full bg-brand px-4 py-1.5 text-xs font-semibold text-on-brand transition-all hover:brightness-110 active:scale-95"
+                      className={`${CTA} h-9 text-[13px]`}
                     >
                       Pokaż z przesiadkami
                     </button>
@@ -955,7 +860,7 @@ function ConnectionsDialog({
                     <button
                       type="button"
                       onClick={handlePickTomorrow}
-                      className="rounded-full bg-white/10 px-4 py-1.5 text-xs font-semibold text-text transition-all hover:bg-white/15 active:scale-95"
+                      className="tap inline-flex h-9 items-center rounded-full bg-white/8 px-4 text-[13px] font-medium text-text hover:bg-white/12"
                     >
                       Szukaj na jutro
                     </button>
@@ -963,24 +868,22 @@ function ConnectionsDialog({
                 </div>
               </div>
             ) : (
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <p className="text-[11px] font-semibold uppercase tracking-wider text-text-faint">
+              <div className="space-y-2.5">
+                <div className="flex items-center justify-between px-1">
+                  <p className="text-[12px] font-medium text-text-faint">
                     Znalezione połączenia ({connections.length})
                   </p>
-                  <span className="text-[11px] font-medium text-text-mute">
-                    {effectiveDayLabel}
-                  </span>
+                  <span className="text-[12px] text-text-mute">{effectiveDayLabel}</span>
                 </div>
 
                 {/* Earlier connections button */}
-                <div className="flex justify-center pt-0.5">
+                <div className="flex justify-center">
                   <button
                     type="button"
                     onClick={handleEarlierConnections}
-                    className="flex items-center gap-1.5 rounded-full bg-white/6 px-4 py-1.5 text-xs font-semibold text-text-mute hover:bg-white/10 hover:text-text active:scale-95 transition-all"
+                    className={`${CHIP} ${CHIP_OFF} px-4`}
                   >
-                    <span className="text-[10px]">▲</span>
+                    <CaretUpIcon className="text-[13px]" />
                     <span>Wcześniejsze połączenia</span>
                   </button>
                 </div>
@@ -993,53 +896,44 @@ function ConnectionsDialog({
                   return (
                     <div
                       key={`${conn.departureTime}-${conn.arrivalTime}-${idx}`}
-                      className="rounded-2xl border border-white/6 bg-white/4 p-3.5 transition-colors hover:bg-white/6"
+                      className="rounded-xl bg-white/4 p-3.5"
                     >
                       {/* Summary row */}
                       <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <span className="rounded-md bg-white/10 px-1.5 py-0.5 text-[10px] font-semibold text-text-mute">
-                              {dayBadge}
+                        <div className="min-w-0">
+                          <div className="flex items-baseline gap-1.5">
+                            <span className="text-[19px] font-semibold tracking-tight tabular-nums text-text">
+                              {conn.departureTime}
                             </span>
-                            <div className="flex items-baseline gap-1.5">
-                              <span className="text-[18px] font-bold tabular-nums text-text">
-                                {conn.departureTime}
+                            <ArrowRightIcon className="self-center text-[13px] text-text-faint" />
+                            <span className="text-[19px] font-semibold tracking-tight tabular-nums text-text">
+                              {conn.arrivalTime}
+                            </span>
+                            {conn.arrivesNextDay && (
+                              <span
+                                className="self-center rounded-full bg-late/15 px-1.5 py-0.5 text-[11px] font-medium text-late"
+                                title="Przyjazd następnego dnia"
+                              >
+                                +1 d.
                               </span>
-                              <span className="text-text-faint text-sm">→</span>
-                              <span className="text-[18px] font-bold tabular-nums text-text">
-                                {conn.arrivalTime}
-                              </span>
-                              {conn.arrivesNextDay && (
-                                <span
-                                  className="rounded bg-warning/20 px-1 py-0.2 text-[10px] font-bold text-warning"
-                                  title="Przyjazd następnego dnia"
-                                >
-                                  +1 d.
-                                </span>
-                              )}
-                            </div>
+                            )}
                           </div>
-                          <p className="mt-1 text-xs text-text-mute">
-                            Czas podróży: <span className="font-semibold text-text">{conn.totalDurationMins} min</span>
+                          <p className="mt-0.5 text-[12px] text-text-mute">
+                            {dayBadge} · <span className="tabular-nums">{conn.totalDurationMins} min</span>
                           </p>
                         </div>
-                        <span
-                          className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${
-                            isDirect ? "bg-good/15 text-good" : "bg-warning/15 text-warning"
-                          }`}
-                        >
+                        <span className="shrink-0 rounded-full bg-white/6 px-2.5 py-1 text-[12px] font-medium text-text-mute">
                           {isDirect ? "Bezpośredni" : "1 przesiadka"}
                         </span>
                       </div>
 
                       {/* Line badges summary */}
-                      <div className="mt-3 flex flex-wrap items-center gap-2">
+                      <div className="mt-3 flex flex-wrap items-center gap-x-1.5 gap-y-2">
                         {conn.legs.map((leg, lIdx) => (
-                          <div key={lIdx} className="flex items-center gap-1.5">
-                            {lIdx > 0 && <span className="text-xs text-text-faint">➔</span>}
+                          <div key={lIdx} className="flex min-w-0 items-center gap-1.5">
+                            {lIdx > 0 && <CaretRightIcon className="text-[12px] text-text-faint" />}
                             <LineBadge line={leg.line} />
-                            <span className="truncate text-xs font-medium text-text-mute max-w-[140px]">
+                            <span className="max-w-[140px] truncate text-[13px] text-text-mute">
                               {displayStopName(leg.headsign)}
                             </span>
                           </div>
@@ -1048,45 +942,48 @@ function ConnectionsDialog({
 
                       {/* Transfer info if applicable */}
                       {!isDirect && conn.transferStopName && (
-                        <p className="mt-2 text-[11px] text-text-faint">
-                          Przesiadka: <strong className="text-text-mute">{displayStopName(conn.transferStopName)}</strong>{" "}
+                        <p className="mt-2 text-[12px] text-text-faint">
+                          Przesiadka: <span className="font-medium text-text-mute">{displayStopName(conn.transferStopName)}</span>{" "}
                           (oczekiwanie: {conn.transferWaitMins ?? 0} min)
                         </p>
                       )}
 
                       {/* Collapsible leg details */}
-                      <div className="mt-3 border-t border-hairline pt-2.5">
+                      <div className="mt-3 border-t border-hairline pt-1">
                         <button
                           type="button"
                           onClick={() => setExpandedIdx(isExpanded ? null : idx)}
-                          className="flex w-full items-center justify-between text-xs font-medium text-text-mute hover:text-text"
+                          aria-expanded={isExpanded}
+                          className="flex h-9 w-full items-center justify-between text-[12px] font-medium text-text-mute transition-colors hover:text-text"
                         >
                           <span>{isExpanded ? "Ukryj szczegóły trasy" : "Pokaż szczegóły trasy"}</span>
-                          <ChevronDown open={isExpanded} />
+                          <CaretDownIcon
+                            className={`text-[13px] text-text-faint transition-transform duration-200 ${isExpanded ? "rotate-180" : ""}`}
+                          />
                         </button>
 
                         {isExpanded && (
-                          <div className="mt-3 space-y-3 text-xs animate-fade">
+                          <div className="mt-1 space-y-2 animate-fade">
                             {conn.legs.map((leg, lIdx) => (
-                              <div key={lIdx} className="rounded-xl bg-white/4 p-2.5">
-                                <div className="flex items-center justify-between">
-                                  <div className="flex items-center gap-2">
+                              <div key={lIdx} className="rounded-xl bg-white/4 p-3">
+                                <div className="flex items-center justify-between gap-2">
+                                  <div className="flex min-w-0 items-center gap-2">
                                     <LineBadge line={leg.line} />
-                                    <span className="font-semibold text-text">
+                                    <span className="truncate text-[13px] font-medium text-text">
                                       Kierunek: {displayStopName(leg.headsign)}
                                     </span>
                                   </div>
-                                  <span className="tabular-nums text-text-faint">
+                                  <span className="shrink-0 text-[12px] tabular-nums text-text-faint">
                                     {leg.stopsCount} {przystanekPlural(leg.stopsCount)} · {leg.durationMins} min
                                   </span>
                                 </div>
-                                <div className="mt-2 space-y-1 pl-2 text-[11px] text-text-mute border-l-2 border-primary/40">
+                                <div className="ml-1 mt-2.5 space-y-1 border-l-2 border-white/12 pl-2.5 text-[12px] text-text-mute">
                                   <p>
-                                    <strong className="tabular-nums text-text">{leg.departureTime}</strong>{" "}
+                                    <span className="font-medium tabular-nums text-text">{leg.departureTime}</span>{" "}
                                     {displayStopName(leg.fromStopName)}
                                   </p>
                                   <p>
-                                    <strong className="tabular-nums text-text">{leg.arrivalTime}</strong>{" "}
+                                    <span className="font-medium tabular-nums text-text">{leg.arrivalTime}</span>{" "}
                                     {displayStopName(leg.toStopName)}
                                   </p>
                                 </div>
@@ -1098,10 +995,10 @@ function ConnectionsDialog({
                                       if (onSelectConnection) onSelectConnection(conn, lIdx);
                                       onClose();
                                     }}
-                                    className="text-[11px] font-semibold text-brand hover:underline transition-colors flex items-center gap-1"
+                                    className={`${CHIP} -mr-1.5 px-3 text-text hover:bg-white/8`}
                                   >
                                     <span>Pokaż ten odcinek na mapie</span>
-                                    <span>→</span>
+                                    <ArrowRightIcon className="text-[13px]" />
                                   </button>
                                 </div>
                               </div>
@@ -1111,8 +1008,8 @@ function ConnectionsDialog({
                       </div>
 
                       {/* Action buttons */}
-                      <div className="mt-3 flex items-center justify-between border-t border-hairline pt-2.5">
-                        <span className="text-[11px] text-text-faint">
+                      <div className="mt-1 flex items-center justify-between gap-3 border-t border-hairline pt-3">
+                        <span className="text-[12px] text-text-faint">
                           {conn.legs.length > 1
                             ? `${conn.legs.length} linie · ${conn.transfersCount} ${conn.transfersCount === 1 ? "przesiadka" : "przesiadki"}`
                             : "Bez przesiadek"}
@@ -1124,13 +1021,9 @@ function ConnectionsDialog({
                             else if (fromStop) onSelectStop(fromStop);
                             onClose();
                           }}
-                          className="flex items-center gap-1.5 rounded-full bg-brand px-3.5 py-1.5 text-xs font-semibold text-on-brand transition-all hover:brightness-110 active:scale-95 shadow-sm"
+                          className={`${CTA} h-9 shrink-0 text-[13px]`}
                         >
-                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                            <polygon points="3 6 9 3 15 6 21 3 21 18 15 21 9 18 3 21" />
-                            <line x1="9" y1="3" x2="9" y2="18" />
-                            <line x1="15" y1="6" x2="15" y2="21" />
-                          </svg>
+                          <MapTrifoldIcon className="text-[15px]" />
                           <span>Pokaż całą trasę na mapie</span>
                         </button>
                       </div>
@@ -1139,13 +1032,13 @@ function ConnectionsDialog({
                 })}
 
                 {/* Later connections button */}
-                <div className="flex justify-center pt-1 pb-1">
+                <div className="flex justify-center py-1">
                   <button
                     type="button"
                     onClick={handleLaterConnections}
-                    className="flex items-center gap-1.5 rounded-full bg-white/6 px-4 py-1.5 text-xs font-semibold text-text-mute hover:bg-white/10 hover:text-text active:scale-95 transition-all"
+                    className={`${CHIP} ${CHIP_OFF} px-4`}
                   >
-                    <span className="text-[10px]">▼</span>
+                    <CaretDownIcon className="text-[13px]" />
                     <span>Późniejsze połączenia</span>
                   </button>
                 </div>
@@ -1153,9 +1046,12 @@ function ConnectionsDialog({
             )
           ) : (
             /* Initial state before picking stops */
-            <div className="py-10 text-center">
-              <p className="text-sm font-semibold text-text">Wybierz przystanek początkowy i docelowy</p>
-              <p className="mt-1 text-xs text-text-faint">
+            <div className="px-4 py-10 text-center animate-fade">
+              <span className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-white/5 text-[22px] text-text-faint">
+                <PathIcon />
+              </span>
+              <p className="mt-3 text-[14px] font-medium text-text">Wybierz przystanek początkowy i docelowy</p>
+              <p className="mx-auto mt-1 max-w-sm text-[13px] text-text-mute">
                 Wyszukiwarka znajdzie najszybsze połączenia autobusowe w sieci Komunikacji Beskidzkiej.
               </p>
             </div>

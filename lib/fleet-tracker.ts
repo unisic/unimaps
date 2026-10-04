@@ -1,141 +1,77 @@
 /**
- * Vehicle Fleet History & Brigade Tracker for MZK Bielsko-Biała & Komunikacja Beskidzka.
- * Tracks daily courses, current status, stop-by-stop progress, and predicts upcoming courses ("brygady").
+ * Vehicle fleet tracker ("brygady") for MZK Bielsko-Biała.
+ *
+ * Fed by the MZK poller (~5 s) with OnTime's running vehicles; keeps per vehicle the course
+ * it runs now and the courses it finished/broke off today, plus a 5-minute punctuality
+ * timeline of the running fleet. Everything here was observed live — nothing is
+ * back-filled or invented (no brigade numbers: OnTime does not publish them; see
+ * lib/shared/fleet.ts). Persisted per day to output/fleet-history-<YYYY-MM-DD>.json so a
+ * restart keeps the day.
  */
 import fs from "node:fs";
 import path from "node:path";
 import { log } from "./logger";
 import { type MzkApi } from "./mzk-api";
-import { getAllFleetVehicles, getFleetDetails, type MzkVehicleStatic, type VehicleFeatures } from "./mzk-fleet";
+import { getAllFleetVehicles, getFleetDetails, type MzkVehicleStatic } from "./mzk-fleet";
 import { isMzkNotStarted } from "./mzk-state";
+import { mzkStopIndices } from "./mzk-shape";
 import { AGENCY_TIMEZONE } from "./config";
+import {
+  classifyDelay,
+  compareLineNames,
+  foldText,
+  isOnTime,
+  matchesFleetQuery,
+  median,
+  TIMELINE_SLOT_SECS,
+  type FleetCurrentCourse,
+  type FleetStats,
+  type FleetSummaryItem,
+  type FleetTimelinePoint,
+  type FleetVehicleDetail,
+  type FleetVehicleStats,
+  type PredictedNextCourse,
+  type VehicleCourseRecord,
+  type VehicleCourseStop,
+} from "./shared/fleet";
 import type { Stop } from "./types";
 
-export interface VehicleCourseStop {
-  symbol: string;
-  name: string;
-  scheduledTime: string; // HH:MM
-  plannedTime: string;   // HH:MM
-  status: "passed" | "current" | "upcoming";
-  distanceMeters?: number;
-}
+export type {
+  FleetCurrentCourse,
+  FleetStats,
+  FleetSummaryItem,
+  FleetTimelinePoint,
+  FleetVehicleDetail,
+  PredictedNextCourse,
+  VehicleCourseRecord,
+  VehicleCourseStop,
+};
 
-export interface VehicleCourseRecord {
-  id: string;
-  courseLoid?: number;
+/** What the tracker reads of an OnTime running-vehicle record (MzkRunningVehicle is assignable). */
+export interface FleetRunningInput {
+  vehicleId: string;
   lineName: string;
+  courseLoid: number;
   direction: string;
-  firstStopName: string;
-  lastStopName: string;
-  firstStopSymbol?: string;
-  lastStopSymbol?: string;
-  startTime: string; // HH:MM
-  endTime: string;   // HH:MM
-  startSecs: number;
-  endSecs: number;
+  optionalDirection?: string;
   delaySec: number;
-  stopsCount: number;
-  status: "completed" | "in_progress" | "predicted" | "cancelled";
-  cancelledReason?: string;
-  cancelledAtStopName?: string;
-  completedAt?: number;
-  stops?: VehicleCourseStop[];
-}
-
-export interface PredictedNextCourse {
-  lineName: string;
-  direction: string;
-  departureTime: string; // HH:MM
-  departureSecs: number;
-  fromStopName: string;
-  fromStopSymbol?: string;
-  pauseMinutes: number;
-  confidence: "high" | "medium";
-  probabilityLabel: string;
-  reason: string;
-}
-
-export interface FleetVehicleDetail {
-  sideNumber: string;
-  operator: "MZK" | "KB";
-  model: string;
-  producer: string;
-  year?: string;
-  lengthCategory: "MINI" | "MIDI" | "MAXI" | "MEGA";
-  fuelType: "diesel" | "electric" | "hydrogen" | "hybrid";
-  features: VehicleFeatures;
-  status: "active" | "depot";
-  brigade: {
-    id: string;
-    label: string;
-    mainLine: string;
-  };
-  currentCourse: (VehicleCourseRecord & {
-    /** waiting at the first stop; delaySec is 0 and must not be shown or counted */
-    notStarted?: boolean;
-    currentStopIndex: number;
-    currentStopName: string;
-    nextStopName: string | null;
-    lat: number;
-    lon: number;
-    bearing: number | null;
-    progressPct: number;
-  }) | null;
-  predictedNextCourse: PredictedNextCourse | null;
-  todayCourses: VehicleCourseRecord[];
-  lastSeenAt: number;
-  lastKnownLocation: {
-    lat: number;
-    lon: number;
+  latitude: number;
+  longitude: number;
+  angle?: number;
+  orderInCourse?: number;
+  lastStopOrderNo?: number | null;
+  reachedMeters?: number;
+  onStopPoint?: boolean | string | null;
+  nearestSymbol?: string;
+  nearestSymbolOrderNo?: number;
+  stopPoints?: Array<{
+    symbol: string;
     name: string;
-  } | null;
-  stats: {
-    totalCoursesToday: number;
-    completedCoursesToday: number;
-    cancelledCoursesToday?: number;
-    estimatedKmToday: number;
-    averageDelaySecs: number;
-    punctualityPct: number;
-  };
-}
-
-export interface FleetSummaryItem {
-  sideNumber: string;
-  operator: "MZK" | "KB";
-  model: string;
-  producer: string;
-  year?: string;
-  lengthCategory: "MINI" | "MIDI" | "MAXI" | "MEGA";
-  fuelType: "diesel" | "electric" | "hydrogen" | "hybrid";
-  status: "active" | "depot";
-  brigadeId: string;
-  lineName?: string;
-  direction?: string;
-  currentStopName?: string;
-  nextStopName?: string;
-  /** undefined while the course has not begun (OnTime's delay is a placeholder then) */
-  delaySec?: number;
-  /** the bus waits at the first stop of a course that has not begun */
-  notStarted?: boolean;
-  coursesCountToday: number;
-  cancelledCoursesToday?: number;
-  progressPct?: number;
-  lat?: number;
-  lon?: number;
-  features: VehicleFeatures;
-}
-
-export interface FleetStats {
-  totalFleet: number;
-  activeCount: number;
-  depotCount: number;
-  electricCount: number;
-  hydrogenCount: number;
-  hybridCount: number;
-  megaCount: number;
-  averageDelaySec: number;
-  onTimePercentage: number;
-  activeLines: string[];
+    orderNo: number;
+    distance: number;
+    scheduledDeparture: number;
+    plannedDeparture: number;
+  }>;
 }
 
 function pad2(n: number): string {
@@ -192,6 +128,10 @@ function getTodayKey(): string {
   }
 }
 
+function finiteNonNeg(x: unknown): number | null {
+  return typeof x === "number" && Number.isFinite(x) && x >= 0 ? x : null;
+}
+
 /**
  * Sorts courses descending: from the newest (latest departure/start) to the oldest (earliest departure).
  */
@@ -206,8 +146,12 @@ export function sortCoursesDesc(a: VehicleCourseRecord, b: VehicleCourseRecord):
 }
 
 /**
- * Determines whether a course was normally completed or interrupted/cancelled
- * (e.g. vehicle broke down, GPS lost mid-route, massive standing delay).
+ * Whether a course that left the live feed ran to the end or was broken off.
+ *
+ * OnTime drops a vehicle from the running list when its course ends, often before the last
+ * stop registers, so "vanished before the terminus" alone means nothing. Vanishing mid-route
+ * while 10+ min late (standing still, typically) is the signature of an interrupted course:
+ * breakdown, GPS loss, a course taken off. We cannot tell which, and say so.
  */
 export function determineCourseOutcome(course: {
   currentStopIndex: number;
@@ -228,14 +172,13 @@ export function determineCourseOutcome(course: {
   }
 
   const reachedLastStop = currentStopIndex >= stopsCount - 1;
-  const hasSubstantialDelay = delaySec >= 10 * 60; // 10+ min delay
+  const hasSubstantialDelay = delaySec >= 10 * 60;
 
-  // If the bus didn't reach the terminus AND has substantial delay (e.g. 10 to 50+ min delay standing at a stop mid-route)
   if (!reachedLastStop && hasSubstantialDelay) {
     const delayMins = Math.round(delaySec / 60);
     return {
       status: "cancelled",
-      cancelledReason: `Awaria / kurs odwołany (+${delayMins} min opóźnienia na przystanku ${currentStopName})`,
+      cancelledReason: `Kurs przerwany: pojazd zniknął z systemu na przystanku ${currentStopName} przy opóźnieniu +${delayMins} min (awaria, utrata GPS lub zjazd)`,
       cancelledAtStopName: currentStopName,
     };
   }
@@ -243,178 +186,177 @@ export function determineCourseOutcome(course: {
   return { status: "completed" };
 }
 
-const HISTORY_DIR = path.resolve(process.cwd(), "output");
+/** Planned length of a course: sum of OnTime's per-segment stop distances. */
+function stopsLengthMeters(stops: ReadonlyArray<{ distanceMeters?: number }> | undefined, uptoIndex?: number): number {
+  if (!stops) return 0;
+  const last = uptoIndex === undefined ? stops.length - 1 : Math.min(uptoIndex, stops.length - 1);
+  let sum = 0;
+  for (let i = 0; i <= last; i++) sum += finiteNonNeg(stops[i]?.distanceMeters) ?? 0;
+  return sum;
+}
+
+/** Metres driven on a finished course (records saved before drivenMeters existed fall back to the stop list). */
+export function courseDrivenMeters(c: VehicleCourseRecord): number {
+  if (finiteNonNeg(c.drivenMeters) !== null) return c.drivenMeters!;
+  if (c.status === "completed") return finiteNonNeg(c.lengthMeters) ?? stopsLengthMeters(c.stops);
+  const reached = c.stops?.findIndex((s) => s.status === "current") ?? -1;
+  return reached >= 0 ? stopsLengthMeters(c.stops, reached) : 0;
+}
+
+/** Typical turnaround at a terminus when this vehicle has not shown its own yet. */
+const DEFAULT_LAYOVER_MIN = 8;
+/** A late bus still stands this long at the terminus before it leaves again. */
+const MIN_LAYOVER_SEC = 3 * 60;
+/** Course gaps longer than this are a break/duty change, not a layover. */
+const MAX_LAYOVER_SEC = 45 * 60;
+/** A persisted live course is resumed after a restart only when it was seen this recently. */
+const RESUME_LIVE_MAX_AGE_SEC = 10 * 60;
+const SAVE_DEBOUNCE_MS = 30_000;
+const HISTORY_FORMAT = 2;
+
+const DEFAULT_HISTORY_DIR = path.resolve(process.cwd(), "output");
+
+function emptyStats(): FleetVehicleStats {
+  return {
+    totalCoursesToday: 0,
+    completedCoursesToday: 0,
+    cancelledCoursesToday: 0,
+    kmToday: 0,
+    measuredCourses: 0,
+    averageDelaySecs: 0,
+    punctualityPct: null,
+  };
+}
+
+interface SavedVehicle {
+  todayCourses?: VehicleCourseRecord[];
+  currentCourse?: FleetCurrentCourse | null;
+  lastSeenAt?: number;
+  lastKnownLocation?: FleetVehicleDetail["lastKnownLocation"];
+}
 
 export class FleetTracker {
   private vehicles = new Map<string, FleetVehicleDetail>();
-  private lineBrigadeOrder = new Map<string, string[]>(); // line -> array of sideNumbers in sequence
+  /** side numbers whose features were refreshed from OnTime's getVehicles.json today */
+  private liveFeatures = new Set<string>();
+  private timeline = new Map<number, FleetTimelinePoint>();
+  private updatedAt = 0;
   private lastSaveAt = 0;
   private saveTimeout: NodeJS.Timeout | null = null;
   private currentDay = getTodayKey();
+  private readonly historyDir: string | null;
 
-  constructor() {
+  /** `historyDir: null` keeps everything in memory (tests); default output/ under the cwd. */
+  constructor(opts: { historyDir?: string | null } = {}) {
+    this.historyDir = opts.historyDir === undefined ? DEFAULT_HISTORY_DIR : opts.historyDir;
     this.initFromStaticFleet();
     this.loadHistoryFromDisk();
   }
 
   /**
-   * Pre-populates all official fleet vehicles from the database.
+   * (Re)starts the day: every official fleet vehicle, idle. Vehicles that appeared only live
+   * (not in the static list) are dropped and come back when they run again.
    */
   private initFromStaticFleet(): void {
-    const all = getAllFleetVehicles();
-    for (const f of all) {
-      const detail: FleetVehicleDetail = {
-        sideNumber: f.sideNumber,
-        operator: "MZK",
-        model: f.model,
-        producer: f.producer,
-        year: f.year,
-        lengthCategory: f.lengthCategory,
-        fuelType: f.fuelType,
-        features: f.features,
-        status: "depot",
-        brigade: {
-          id: `B-${f.sideNumber}`,
-          label: `Brygada #${f.sideNumber}`,
-          mainLine: "—",
-        },
-        currentCourse: null,
-        predictedNextCourse: null,
-        todayCourses: [],
-        lastSeenAt: 0,
-        lastKnownLocation: null,
-        stats: {
-          totalCoursesToday: 0,
-          completedCoursesToday: 0,
-          estimatedKmToday: 0,
-          averageDelaySecs: 0,
-          punctualityPct: 100,
-        },
-      };
-      this.vehicles.set(f.sideNumber, detail);
+    this.vehicles.clear();
+    this.liveFeatures.clear();
+    this.timeline.clear();
+    for (const f of getAllFleetVehicles()) {
+      this.vehicles.set(f.sideNumber, this.newVehicle(f));
     }
+  }
+
+  private newVehicle(f: Pick<FleetVehicleDetail, "sideNumber" | "model" | "producer" | "year" | "lengthCategory" | "fuelType" | "features">): FleetVehicleDetail {
+    return {
+      sideNumber: f.sideNumber,
+      operator: "MZK",
+      model: f.model,
+      producer: f.producer,
+      year: f.year,
+      lengthCategory: f.lengthCategory,
+      fuelType: f.fuelType,
+      features: f.features,
+      status: "depot",
+      lines: [],
+      mainLine: null,
+      currentCourse: null,
+      predictedNextCourse: null,
+      todayCourses: [],
+      lastSeenAt: 0,
+      lastKnownLocation: null,
+      stats: emptyStats(),
+    };
+  }
+
+  private rollOver(today: string): void {
+    // the old day's last ~30 s would otherwise be lost (the pending save would land in the new file)
+    if (this.saveTimeout) {
+      clearTimeout(this.saveTimeout);
+      this.saveTimeout = null;
+    }
+    this.saveHistoryToDisk();
+    this.currentDay = today;
+    this.initFromStaticFleet();
+    this.loadHistoryFromDisk();
   }
 
   /**
    * Main update routine called every poller cycle with active running vehicles.
    */
   public updateFromRunningVehicles(
-    running: Array<{
-      vehicleId: string;
-      lineName: string;
-      courseLoid: number;
-      direction: string;
-      optionalDirection?: string;
-      delaySec: number;
-      latitude: number;
-      longitude: number;
-      angle?: number;
-      orderInCourse?: number;
-      lastStopOrderNo?: number | null;
-      reachedMeters?: number;
-      onStopPoint?: boolean | string | null;
-      nearestSymbol?: string;
-      nearestSymbolOrderNo?: number;
-      stopPoints?: Array<{
-        symbol: string;
-        name: string;
-        orderNo: number;
-        distance: number;
-        scheduledDeparture: number;
-        plannedDeparture: number;
-      }>;
-    }>,
+    running: FleetRunningInput[],
     staticVehs?: Map<string, MzkVehicleStatic>,
     stopsBySymbol?: Map<string, Stop>,
     _api?: MzkApi,
   ): void {
     const today = getTodayKey();
-    if (today !== this.currentDay) {
-      this.currentDay = today;
-      this.initFromStaticFleet();
-      this.loadHistoryFromDisk();
-    }
+    if (today !== this.currentDay) this.rollOver(today);
 
     const nowEpoch = Math.floor(Date.now() / 1000);
+    this.updatedAt = nowEpoch;
     const activeSides = new Set<string>();
 
     for (const v of running) {
       if (!v.vehicleId || !v.lineName) continue;
       const side = String(v.vehicleId);
+      // OnTime occasionally lists one bus twice in a snapshot: the first record wins
+      if (activeSides.has(side)) continue;
       activeSides.add(side);
 
+      const staticInfo = staticVehs?.get(side);
       let detail = this.vehicles.get(side);
       if (!detail) {
-        const staticInfo = staticVehs?.get(side);
-        const fleetInfo = getFleetDetails(side, staticInfo);
-        detail = {
-          sideNumber: side,
-          operator: "MZK",
-          model: fleetInfo.model,
-          producer: fleetInfo.producer,
-          year: fleetInfo.year,
-          lengthCategory: fleetInfo.lengthCategory,
-          fuelType: fleetInfo.fuelType,
-          features: fleetInfo.features,
-          status: "active",
-          brigade: {
-            id: `${v.lineName}/1`,
-            label: `Brygada ${v.lineName}/1`,
-            mainLine: v.lineName,
-          },
-          currentCourse: null,
-          predictedNextCourse: null,
-          todayCourses: [],
-          lastSeenAt: nowEpoch,
-          lastKnownLocation: null,
-          stats: {
-            totalCoursesToday: 0,
-            completedCoursesToday: 0,
-            estimatedKmToday: 0,
-            averageDelaySecs: 0,
-            punctualityPct: 100,
-          },
-        };
+        detail = this.newVehicle(getFleetDetails(side, staticInfo));
         this.vehicles.set(side, detail);
+        if (staticInfo) this.liveFeatures.add(side);
+      } else if (staticInfo && !this.liveFeatures.has(side)) {
+        // getVehicles.json knows this bus's real equipment (ticket machine, A/C) — the static list only the model's
+        const info = getFleetDetails(side, staticInfo);
+        detail.features = info.features;
+        detail.fuelType = info.fuelType;
+        this.liveFeatures.add(side);
       }
 
       detail.status = "active";
       detail.lastSeenAt = nowEpoch;
-      detail.lastKnownLocation = {
-        lat: v.latitude,
-        lon: v.longitude,
-        name: `Linia ${v.lineName} → ${v.direction || v.optionalDirection || ""}`,
-      };
 
-      // Assign stable brigade ID
-      this.assignBrigadeNumber(detail, v.lineName);
-
-      // Process course
       const stopPoints = v.stopPoints ?? [];
       const totalStops = stopPoints.length;
 
-      // Accurately resolve stop index within stopPoints
-      let order = 0;
-      if (totalStops > 0) {
-        if (v.onStopPoint && typeof v.onStopPoint === "string") {
-          const matchIdx = stopPoints.findIndex((sp) => sp.symbol === v.onStopPoint);
-          if (matchIdx !== -1) order = matchIdx;
-        } else if (v.nearestSymbol) {
-          const matchIdx = stopPoints.findIndex((sp) => sp.symbol === v.nearestSymbol);
-          if (matchIdx !== -1) order = matchIdx;
-        } else if (v.nearestSymbolOrderNo != null) {
-          const matchIdx = stopPoints.findIndex((sp) => sp.orderNo === v.nearestSymbolOrderNo);
-          if (matchIdx !== -1) order = matchIdx;
-        } else if (v.orderInCourse != null && v.orderInCourse >= 0) {
-          order = Math.min(totalStops - 1, v.orderInCourse);
-        }
-      }
-
-      // course not begun: OnTime's delay / planned times are a placeholder (lib/mzk-state.ts);
-      // the "current" stop is the first one (the nearest-stop heuristic above would point at stop 2)
+      // course not begun: OnTime's delay / planned times are a placeholder (lib/mzk-state.ts)
       const firstCoords = totalStops > 0 ? stopsBySymbol?.get(stopPoints[0].symbol) : undefined;
       const notStarted = isMzkNotStarted(v, firstCoords ? { lat: firstCoords.lat, lon: firstCoords.lon } : null);
-      if (notStarted) order = 0;
+
+      // last stop served + the next one (the same reading the map uses, lib/mzk-shape.ts)
+      let order = 0;
+      let nextIdx: number | null = totalStops > 1 ? 1 : null;
+      if (totalStops > 0 && !notStarted) {
+        const idx = mzkStopIndices(v);
+        order = idx.served ?? (idx.next !== null ? Math.max(0, idx.next - 1) : totalStops - 1);
+        nextIdx = idx.next;
+      }
+      // the same reading as the map's at_stop (lib/mzk-poller.ts)
+      const atStop = notStarted || Boolean(v.onStopPoint);
 
       let firstStopName = "Początek trasy";
       let lastStopName = v.direction || v.optionalDirection || "Koniec trasy";
@@ -422,20 +364,14 @@ export class FleetTracker {
       let lastStopSymbol: string | undefined;
       let startSecs = 0;
       let endSecs = 0;
-
       if (totalStops > 0) {
         firstStopName = stopPoints[0].name;
         firstStopSymbol = stopPoints[0].symbol;
         startSecs = dateToAgencySecs(stopPoints[0].scheduledDeparture);
-
         lastStopName = stopPoints[totalStops - 1].name;
         lastStopSymbol = stopPoints[totalStops - 1].symbol;
         endSecs = dateToAgencySecs(stopPoints[totalStops - 1].scheduledDeparture);
       }
-
-      const progressPct = totalStops > 1 ? Math.min(100, Math.round((order / (totalStops - 1)) * 100)) : 0;
-      const currentStopName = stopPoints[order]?.name ?? "W trasie";
-      const nextStopName = stopPoints[order + 1]?.name ?? null;
 
       const courseStops: VehicleCourseStop[] = stopPoints.map((sp, idx) => ({
         symbol: sp.symbol,
@@ -444,62 +380,39 @@ export class FleetTracker {
         // no estimate yet (not begun) or none sent (null planned) -> the schedule, never "00:00"
         plannedTime: secsToHHMM(dateToAgencySecs(notStarted || !sp.plannedDeparture ? sp.scheduledDeparture : sp.plannedDeparture)),
         status: idx < order ? "passed" : idx === order ? "current" : "upcoming",
-        distanceMeters: sp.distance,
+        distanceMeters: finiteNonNeg(sp.distance) ?? undefined,
       }));
 
-      // If the vehicle was previously marked in todayCourses with this exact courseLoid (e.g. temporary GPS dropout), remove from history so it stays live
+      // distance driven: OnTime's reachedMeters, kept between the last stop served and the next one
+      const lengthMeters = stopsLengthMeters(courseStops);
+      let drivenMeters = 0;
+      if (!notStarted && totalStops > 0) {
+        const lo = stopsLengthMeters(courseStops, order);
+        const hi = nextIdx !== null ? stopsLengthMeters(courseStops, nextIdx) : lengthMeters;
+        const reached = finiteNonNeg(v.reachedMeters);
+        drivenMeters = Math.round(Math.min(hi, Math.max(lo, reached ?? lo)));
+      }
+      const progressPct =
+        lengthMeters > 0
+          ? Math.min(100, Math.round((drivenMeters / lengthMeters) * 100))
+          : totalStops > 1
+            ? Math.min(100, Math.round((order / (totalStops - 1)) * 100))
+            : 0;
+
+      // the bus was archived during a temporary GPS dropout and is back on the same course: it stays live
       const existingLiveIdx = detail.todayCourses.findIndex((c) => c.courseLoid === v.courseLoid);
-      if (existingLiveIdx !== -1) {
-        detail.todayCourses.splice(existingLiveIdx, 1);
-      }
+      if (existingLiveIdx !== -1) detail.todayCourses.splice(existingLiveIdx, 1);
 
-      // Detect course change
       if (detail.currentCourse && detail.currentCourse.courseLoid !== v.courseLoid) {
-        const prev = detail.currentCourse;
-        const exists = detail.todayCourses.some((c) => c.courseLoid === prev.courseLoid);
-        // a course that never began is not history: no "completed" row with every stop passed
-        if (!exists && !prev.notStarted) {
-          const outcome = determineCourseOutcome(prev);
-          detail.todayCourses.push({
-            id: `c-${prev.courseLoid}`,
-            courseLoid: prev.courseLoid,
-            lineName: prev.lineName,
-            direction: prev.direction,
-            firstStopName: prev.firstStopName,
-            lastStopName: prev.lastStopName,
-            firstStopSymbol: prev.firstStopSymbol,
-            lastStopSymbol: prev.lastStopSymbol,
-            startTime: prev.startTime,
-            endTime: prev.endTime,
-            startSecs: prev.startSecs,
-            endSecs: prev.endSecs,
-            delaySec: prev.delaySec,
-            stopsCount: prev.stopsCount,
-            status: outcome.status,
-            cancelledReason: outcome.cancelledReason,
-            cancelledAtStopName: outcome.cancelledAtStopName,
-            completedAt: nowEpoch,
-            stops: outcome.status === "completed"
-              ? prev.stops?.map((s) => ({ ...s, status: "passed" as const }))
-              : prev.stops?.map((s, idx) => ({
-                  ...s,
-                  status: idx < prev.currentStopIndex
-                    ? ("passed" as const)
-                    : idx === prev.currentStopIndex
-                    ? ("current" as const)
-                    : ("upcoming" as const),
-                })),
-          });
-          detail.todayCourses.sort(sortCoursesDesc);
-        }
+        this.archiveCourse(detail, detail.currentCourse, nowEpoch);
       }
 
-      // Update current course
+      const direction = v.direction || v.optionalDirection || lastStopName;
       detail.currentCourse = {
         id: `c-${v.courseLoid}`,
         courseLoid: v.courseLoid,
         lineName: v.lineName,
-        direction: v.direction || v.optionalDirection || lastStopName,
+        direction,
         firstStopName,
         lastStopName,
         firstStopSymbol,
@@ -510,237 +423,217 @@ export class FleetTracker {
         endSecs,
         delaySec: notStarted ? 0 : Math.round(v.delaySec || 0),
         notStarted,
+        atStop,
         stopsCount: totalStops,
         currentStopIndex: order,
-        currentStopName,
-        nextStopName,
+        currentStopName: stopPoints[order]?.name ?? "W trasie",
+        nextStopName: nextIdx !== null ? (stopPoints[nextIdx]?.name ?? null) : null,
         lat: v.latitude,
         lon: v.longitude,
-        bearing: v.angle != null ? v.angle : null,
+        bearing: typeof v.angle === "number" && Number.isFinite(v.angle) ? v.angle : null,
         progressPct,
+        lengthMeters,
+        drivenMeters,
         status: "in_progress",
         stops: courseStops,
       };
+      detail.lastKnownLocation = {
+        lat: v.latitude,
+        lon: v.longitude,
+        name: `Linia ${v.lineName} → ${direction}`,
+      };
 
-      // Predict next course ("Gdzie może być dalej")
-      detail.predictedNextCourse = this.computeNextCoursePrediction(detail, endSecs, lastStopName, lastStopSymbol, stopsBySymbol);
+      this.recalculateStats(detail);
+      detail.predictedNextCourse = this.predictNextCourse(detail);
+    }
 
-
-      // Backfill synthetic realistic earlier courses if needed
-      if (detail.todayCourses.length === 0) {
-        this.backfillSyntheticEarlierCourses(detail);
+    // vehicles that left the running list: the course they ran is history now
+    for (const [side, detail] of this.vehicles) {
+      if (activeSides.has(side) || detail.status !== "active") continue;
+      detail.status = "depot";
+      detail.predictedNextCourse = null;
+      const finished = detail.currentCourse;
+      if (finished) {
+        const archived = this.archiveCourse(detail, finished, nowEpoch);
+        const delayMins = Math.round(finished.delaySec / 60);
+        detail.lastKnownLocation = {
+          lat: finished.lat,
+          lon: finished.lon,
+          name: finished.notStarted
+            ? `Linia ${finished.lineName} → ${finished.lastStopName} (kurs nie został rozpoczęty)`
+            : archived?.status === "cancelled"
+              ? `Utrata sygnału GPS na przystanku ${finished.currentStopName} (linia ${finished.lineName}${delayMins >= 5 ? `, opóźnienie ${delayMins} min` : ""})`
+              : `Ostatni kurs: linia ${finished.lineName} do ${finished.lastStopName}`,
+        };
+        detail.currentCourse = null;
       }
-
       this.recalculateStats(detail);
     }
 
-    // Mark vehicles no longer running as depot (or detect interrupted/cancelled course if GPS vanished mid-route)
-    for (const [side, detail] of this.vehicles.entries()) {
-      if (!activeSides.has(side) && detail.status === "active") {
-        detail.status = "depot";
-        if (detail.currentCourse) {
-          const finished = detail.currentCourse;
-          const exists = detail.todayCourses.some((c) => c.courseLoid === finished.courseLoid);
-          if (!exists && !finished.notStarted) {
-            const outcome = determineCourseOutcome(finished);
-            detail.todayCourses.push({
-              id: `c-${finished.courseLoid}`,
-              courseLoid: finished.courseLoid,
-              lineName: finished.lineName,
-              direction: finished.direction,
-              firstStopName: finished.firstStopName,
-              lastStopName: finished.lastStopName,
-              firstStopSymbol: finished.firstStopSymbol,
-              lastStopSymbol: finished.lastStopSymbol,
-              startTime: finished.startTime,
-              endTime: finished.endTime,
-              startSecs: finished.startSecs,
-              endSecs: finished.endSecs,
-              delaySec: finished.delaySec,
-              stopsCount: finished.stopsCount,
-              status: outcome.status,
-              cancelledReason: outcome.cancelledReason,
-              cancelledAtStopName: outcome.cancelledAtStopName,
-              completedAt: nowEpoch,
-              stops: outcome.status === "completed"
-                ? finished.stops?.map((s) => ({ ...s, status: "passed" as const }))
-                : finished.stops?.map((s, idx) => ({
-                    ...s,
-                    status: idx < finished.currentStopIndex
-                      ? ("passed" as const)
-                      : idx === finished.currentStopIndex
-                      ? ("current" as const)
-                      : ("upcoming" as const),
-                  })),
-            });
-            detail.todayCourses.sort(sortCoursesDesc);
-          }
-
-          const isCancelled = detail.todayCourses.find((c) => c.courseLoid === finished.courseLoid)?.status === "cancelled";
-          const delayMins = Math.round(finished.delaySec / 60);
-          detail.lastKnownLocation = {
-            lat: finished.lat,
-            lon: finished.lon,
-            name: finished.notStarted
-              ? `Linia ${finished.lineName} → ${finished.lastStopName} (kurs nie został rozpoczęty)`
-              : isCancelled
-              ? `Utrata sygnału GPS / awaria (przerwany kurs: linia ${finished.lineName} na przystanku ${finished.currentStopName}${delayMins >= 5 ? `, opóźnienie ${delayMins} min` : ""})`
-              : `Zajezdnia MZK (ostatni kurs: ${finished.lineName} do ${finished.lastStopName})`,
-          };
-          detail.currentCourse = null;
-        }
-        this.recalculateStats(detail);
-      }
-    }
-
-
+    this.sampleTimeline(Date.now());
     this.scheduleSave();
   }
 
-  /**
-   * Assigns a stable brigade identifier (e.g. "50/2") based on rotation order on the line.
-   */
-  private assignBrigadeNumber(veh: FleetVehicleDetail, lineName: string): void {
-    if (!this.lineBrigadeOrder.has(lineName)) {
-      this.lineBrigadeOrder.set(lineName, []);
-    }
-    const list = this.lineBrigadeOrder.get(lineName)!;
-    let idx = list.indexOf(veh.sideNumber);
-    if (idx === -1) {
-      list.push(veh.sideNumber);
-      idx = list.length - 1;
-    }
-    const brigadeNum = idx + 1;
-    veh.brigade = {
-      id: `${lineName}/${brigadeNum}`,
-      label: `Brygada ${lineName}/${brigadeNum}`,
-      mainLine: lineName,
+  /** Moves a course that left the live feed to the day's history (a course that never began is not history). */
+  private archiveCourse(detail: FleetVehicleDetail, prev: FleetCurrentCourse, nowEpoch: number): VehicleCourseRecord | null {
+    if (prev.notStarted) return null;
+    if (detail.todayCourses.some((c) => c.courseLoid === prev.courseLoid)) return null;
+    const outcome = determineCourseOutcome(prev);
+    const completed = outcome.status === "completed";
+    const record: VehicleCourseRecord = {
+      id: prev.id,
+      courseLoid: prev.courseLoid,
+      lineName: prev.lineName,
+      direction: prev.direction,
+      firstStopName: prev.firstStopName,
+      lastStopName: prev.lastStopName,
+      firstStopSymbol: prev.firstStopSymbol,
+      lastStopSymbol: prev.lastStopSymbol,
+      startTime: prev.startTime,
+      endTime: prev.endTime,
+      startSecs: prev.startSecs,
+      endSecs: prev.endSecs,
+      delaySec: prev.delaySec,
+      stopsCount: prev.stopsCount,
+      status: outcome.status,
+      cancelledReason: outcome.cancelledReason,
+      cancelledAtStopName: outcome.cancelledAtStopName,
+      completedAt: nowEpoch,
+      lengthMeters: prev.lengthMeters,
+      drivenMeters: completed ? prev.lengthMeters : prev.drivenMeters,
+      stops: completed
+        ? prev.stops?.map((s) => ({ ...s, status: "passed" as const }))
+        : prev.stops?.map((s, idx) => ({
+            ...s,
+            status:
+              idx < prev.currentStopIndex
+                ? ("passed" as const)
+                : idx === prev.currentStopIndex
+                  ? ("current" as const)
+                  : ("upcoming" as const),
+          })),
     };
+    detail.todayCourses.push(record);
+    detail.todayCourses.sort(sortCoursesDesc);
+    return record;
   }
 
   /**
-   * Computes the predicted next course ("Gdzie może być") when the vehicle finishes current route.
+   * "Where next" once the current course ends — an ESTIMATE, labelled as such: OnTime does not
+   * publish duty rosters. Assumes the usual shuttle (same line back from the terminus) after
+   * the layover this vehicle showed today (or a typical one), never earlier than a short
+   * turnaround after the expected (delayed) arrival. None for a course into the depot.
    */
-  private computeNextCoursePrediction(
-    veh: FleetVehicleDetail,
-    arrivalSecs: number,
-    lastStopName: string,
-    lastStopSymbol?: string,
-    _stopsBySymbol?: Map<string, Stop>,
-  ): PredictedNextCourse | null {
-    if (!veh.currentCourse) return null;
-    const cur = veh.currentCourse;
+  private predictNextCourse(detail: FleetVehicleDetail): PredictedNextCourse | null {
+    const cur = detail.currentCourse;
+    if (!cur || cur.stopsCount < 2 || !cur.endSecs) return null;
+    if (foldText(cur.lastStopName).includes("zajezdnia")) return null;
 
-    // Minimum turnaround pause at terminus: 6 to 12 minutes
-    const pauseMins = 8;
-    const nextDepartureSecs = arrivalSecs + pauseMins * 60;
-    const nextDepartureTime = secsToHHMM(nextDepartureSecs);
+    const chain = detail.todayCourses
+      .filter((c) => c.status === "completed")
+      .sort((a, b) => a.startSecs - b.startSecs);
+    const gaps: number[] = [];
+    for (let i = 0; i < chain.length; i++) {
+      const next = chain[i + 1] ?? cur;
+      const gap = next.startSecs - chain[i].endSecs;
+      if (gap >= 0 && gap <= MAX_LAYOVER_SEC) gaps.push(gap);
+    }
+    const observed = median(gaps);
+    const layoverMin = observed !== null ? Math.min(30, Math.max(3, Math.round(observed / 60))) : DEFAULT_LAYOVER_MIN;
 
-    // Standard turnaround direction: return to the starting terminus of current course
-    const returnDirection = cur.firstStopName;
+    const prev = chain.at(-1);
+    const shuttle =
+      !!prev &&
+      prev.lineName === cur.lineName &&
+      foldText(prev.lastStopName) === foldText(cur.firstStopName) &&
+      foldText(prev.firstStopName) === foldText(cur.lastStopName);
+
+    const expectedArrival = cur.endSecs + Math.max(0, cur.notStarted ? 0 : cur.delaySec);
+    const departureSecs = Math.max(cur.endSecs + layoverMin * 60, expectedArrival + MIN_LAYOVER_SEC);
 
     return {
       lineName: cur.lineName,
-      direction: returnDirection,
-      departureTime: nextDepartureTime,
-      departureSecs: nextDepartureSecs,
-      fromStopName: lastStopName,
-      fromStopSymbol: lastStopSymbol,
-      pauseMinutes: pauseMins,
-      confidence: "high",
-      probabilityLabel: "Planowy powrót brygady",
-      reason: `Planowy obieg brygady ${veh.brigade.id} po ${pauseMins} min przerwy na pętli`,
+      direction: cur.firstStopName,
+      departureTime: secsToHHMM(departureSecs),
+      departureSecs,
+      fromStopName: cur.lastStopName,
+      fromStopSymbol: cur.lastStopSymbol,
+      pauseMinutes: Math.round((departureSecs - expectedArrival) / 60),
+      confidence: shuttle ? "medium" : "low",
+      reason: shuttle
+        ? `Pojazd kursuje dziś wahadłowo na linii ${cur.lineName}, postój na pętli ok. ${layoverMin} min.`
+        : `MZK nie publikuje obiegów brygad. Zakładamy powrót tą samą linią po ok. ${layoverMin} min postoju.`,
     };
   }
 
-  /**
-   * When server starts during the day, generates realistic prior courses for this brigade
-   * so the user immediately gets a rich, complete timeline of the day's duty shift.
-   */
-  private backfillSyntheticEarlierCourses(veh: FleetVehicleDetail): void {
-    if (!veh.currentCourse) return;
-    const cur = veh.currentCourse;
-    const line = cur.lineName;
-    const dirA = cur.firstStopName;
-    const dirB = cur.lastStopName;
-
-    const halfTripDurationSecs = Math.max(1800, cur.endSecs - cur.startSecs);
-
-    let t = cur.startSecs - 12 * 60; // pause before current course
-    let flip = false; // toggle direction backwards
-
-    const generated: VehicleCourseRecord[] = [];
-    const morningStart = 5 * 3600 + 30 * 60; // 05:30 morning shift start
-    let courseIndex = 1;
-
-    while (t > morningStart) {
-      const endCourseSecs = t;
-      const startCourseSecs = Math.max(morningStart, endCourseSecs - halfTripDurationSecs);
-      const from = flip ? dirA : dirB;
-      const to = flip ? dirB : dirA;
-      const delay = (Math.floor(Math.sin(courseIndex * 1.7) * 3)); // -1 to +2 min realistic delay
-
-      generated.unshift({
-        id: `synth-${veh.sideNumber}-${courseIndex}`,
-        lineName: line,
-        direction: to,
-        firstStopName: from,
-        lastStopName: to,
-        startTime: secsToHHMM(startCourseSecs),
-        endTime: secsToHHMM(endCourseSecs),
-        startSecs: startCourseSecs,
-        endSecs: endCourseSecs,
-        delaySec: delay * 60,
-        stopsCount: cur.stopsCount || 22,
-        status: "completed",
-        completedAt: endCourseSecs,
-      });
-
-      t = startCourseSecs - 10 * 60; // 10 min break between trips
-      flip = !flip;
-      courseIndex++;
-    }
-
-    generated.sort(sortCoursesDesc);
-    veh.todayCourses = generated;
-  }
-
-  /**
-   * Recalculates stats (courses count, distance, punctuality) for a vehicle.
-   */
+  /** Per-vehicle day figures, served lines and main line — all from observed courses. */
   private recalculateStats(veh: FleetVehicleDetail): void {
-    const total = veh.todayCourses.length + (veh.currentCourse ? 1 : 0);
-    const completed = veh.todayCourses.filter((c) => c.status === "completed").length;
-    const cancelled = veh.todayCourses.filter((c) => c.status === "cancelled").length;
-
-    let totalDelay = 0;
-    let onTimeCount = 0;
-    let count = 0;
-
+    const cur = veh.currentCourse;
+    const started = cur && !cur.notStarted ? cur : null;
+    let completed = 0;
+    let cancelled = 0;
+    let meters = 0;
+    const measured: number[] = [];
     for (const c of veh.todayCourses) {
-      totalDelay += Math.abs(c.delaySec);
-      if (c.delaySec <= 180 && c.delaySec >= -60) onTimeCount++;
-      count++;
+      meters += courseDrivenMeters(c);
+      if (c.status === "completed") {
+        completed++;
+        measured.push(c.delaySec);
+      } else if (c.status === "cancelled") {
+        cancelled++;
+      }
     }
-    // a course that has not begun has no delay yet — neither late nor punctual
-    if (veh.currentCourse && !veh.currentCourse.notStarted) {
-      totalDelay += Math.abs(veh.currentCourse.delaySec);
-      if (veh.currentCourse.delaySec <= 180 && veh.currentCourse.delaySec >= -60) onTimeCount++;
-      count++;
+    if (started) {
+      meters += started.drivenMeters ?? 0;
+      measured.push(started.delaySec);
     }
 
-    const avgDelay = count > 0 ? Math.round(totalDelay / count) : 0;
-    const punctuality = count > 0 ? Math.round((onTimeCount / count) * 100) : 100;
-    const estimatedKm = Math.round(total * 14.5); // avg course in Bielsko is ~14.5 km
+    // lines in order of first service; the assigned (not yet begun) course counts as served
+    const byStart = [...veh.todayCourses, ...(cur ? [cur] : [])].sort((a, b) => a.startSecs - b.startSecs);
+    const lines: string[] = [];
+    const counts = new Map<string, number>();
+    const latest = new Map<string, number>();
+    for (const c of byStart) {
+      if (!counts.has(c.lineName)) lines.push(c.lineName);
+      counts.set(c.lineName, (counts.get(c.lineName) ?? 0) + 1);
+      latest.set(c.lineName, c.startSecs);
+    }
+    let mainLine: string | null = null;
+    for (const l of lines) {
+      if (
+        mainLine === null ||
+        counts.get(l)! > counts.get(mainLine)! ||
+        (counts.get(l) === counts.get(mainLine) && latest.get(l)! > latest.get(mainLine)!)
+      ) {
+        mainLine = l;
+      }
+    }
+    veh.lines = lines;
+    veh.mainLine = mainLine;
 
+    const onTime = measured.filter(isOnTime).length;
     veh.stats = {
-      totalCoursesToday: total,
+      totalCoursesToday: veh.todayCourses.length + (started ? 1 : 0),
       completedCoursesToday: completed,
       cancelledCoursesToday: cancelled,
-      estimatedKmToday: estimatedKm,
-      averageDelaySecs: avgDelay,
-      punctualityPct: punctuality,
+      kmToday: Math.round(meters / 100) / 10,
+      measuredCourses: measured.length,
+      averageDelaySecs: measured.length > 0 ? Math.round(measured.reduce((a, b) => a + b, 0) / measured.length) : 0,
+      punctualityPct: measured.length > 0 ? Math.round((onTime / measured.length) * 100) : null,
     };
+  }
+
+  /** The running fleet by punctuality class, kept as the last sample of each 5-minute slot. */
+  private sampleTimeline(nowMs: number): void {
+    const secs = dateToAgencySecs(nowMs);
+    const t = secs - (secs % TIMELINE_SLOT_SECS);
+    const point: FleetTimelinePoint = { t, waiting: 0, early: 0, onTime: 0, late: 0, veryLate: 0 };
+    for (const v of this.vehicles.values()) {
+      if (v.status !== "active" || !v.currentCourse) continue;
+      if (v.currentCourse.notStarted) point.waiting++;
+      else point[classifyDelay(v.currentCourse.delaySec)]++;
+    }
+    this.timeline.set(t, point);
   }
 
   /**
@@ -753,68 +646,58 @@ export class FleetTracker {
     query?: string;
   }): FleetSummaryItem[] {
     const list: FleetSummaryItem[] = [];
-    const q = filter?.query?.trim().toLowerCase();
-
     for (const v of this.vehicles.values()) {
-      if (filter?.status && filter.status !== "all" && v.status !== filter.status) {
-        continue;
-      }
+      const item = this.summarize(v);
+      if (filter?.status && filter.status !== "all" && v.status !== filter.status) continue;
       if (filter?.propulsion && filter.propulsion !== "all") {
         if (filter.propulsion === "electric" && !v.features.electric) continue;
         if (filter.propulsion === "hydrogen" && !v.features.hydrogen) continue;
         if (filter.propulsion === "hybrid" && !v.features.hybrid) continue;
         if (filter.propulsion === "mega" && v.lengthCategory !== "MEGA") continue;
       }
-      if (filter?.line && filter.line !== "all") {
-        const curLine = v.currentCourse?.lineName || v.brigade.mainLine;
-        if (curLine !== filter.line) continue;
-      }
-      if (q) {
-        const matchSide = v.sideNumber.includes(q.replace(/^#/, ""));
-        const matchModel = v.model.toLowerCase().includes(q);
-        const matchLine = v.currentCourse?.lineName.toLowerCase() === q;
-        const matchHeadsign = v.currentCourse?.direction.toLowerCase().includes(q);
-        if (!matchSide && !matchModel && !matchLine && !matchHeadsign) continue;
-      }
-
-      list.push({
-        sideNumber: v.sideNumber,
-        operator: v.operator,
-        model: v.model,
-        producer: v.producer,
-        year: v.year,
-        lengthCategory: v.lengthCategory,
-        fuelType: v.fuelType,
-        status: v.status,
-        brigadeId: v.brigade.id,
-        lineName: v.currentCourse?.lineName,
-        direction: v.currentCourse?.direction,
-        currentStopName: v.currentCourse?.currentStopName,
-        nextStopName: v.currentCourse?.nextStopName ?? undefined,
-        delaySec: v.currentCourse?.notStarted ? undefined : v.currentCourse?.delaySec,
-        notStarted: v.currentCourse?.notStarted || undefined,
-        coursesCountToday: v.stats.totalCoursesToday,
-        cancelledCoursesToday: v.stats.cancelledCoursesToday ?? 0,
-        progressPct: v.currentCourse?.progressPct,
-        lat: v.currentCourse?.lat,
-        lon: v.currentCourse?.lon,
-        features: v.features,
-      });
+      if (filter?.line && filter.line !== "all" && item.lineName !== filter.line && !item.lines.includes(filter.line)) continue;
+      if (filter?.query && !matchesFleetQuery(item, filter.query)) continue;
+      list.push(item);
     }
 
-    // Sort: active vehicles first, then by line, then by side number
+    // running first (begun before waiting), then by line, then by side number
+    const rank = (x: FleetSummaryItem) => (x.status !== "active" ? 2 : x.notStarted ? 1 : 0);
     list.sort((a, b) => {
-      if (a.status !== b.status) return a.status === "active" ? -1 : 1;
-      if (a.lineName && b.lineName && a.lineName !== b.lineName) {
-        const na = parseInt(a.lineName, 10);
-        const nb = parseInt(b.lineName, 10);
-        if (Number.isFinite(na) && Number.isFinite(nb)) return na - nb;
-        return a.lineName.localeCompare(b.lineName);
-      }
-      return parseInt(a.sideNumber, 10) - parseInt(b.sideNumber, 10);
+      const r = rank(a) - rank(b);
+      if (r !== 0) return r;
+      if (a.lineName && b.lineName && a.lineName !== b.lineName) return compareLineNames(a.lineName, b.lineName);
+      return Number.parseInt(a.sideNumber, 10) - Number.parseInt(b.sideNumber, 10);
     });
-
     return list;
+  }
+
+  private summarize(v: FleetVehicleDetail): FleetSummaryItem {
+    const cur = v.currentCourse;
+    return {
+      sideNumber: v.sideNumber,
+      model: v.model,
+      producer: v.producer,
+      year: v.year,
+      lengthCategory: v.lengthCategory,
+      fuelType: v.fuelType,
+      status: v.status,
+      lines: v.lines,
+      lineName: cur?.lineName,
+      direction: cur?.direction,
+      startTime: cur?.startTime,
+      firstStopName: cur?.firstStopName,
+      currentStopName: cur?.currentStopName,
+      nextStopName: cur?.nextStopName ?? undefined,
+      atStop: cur ? cur.atStop : undefined,
+      delaySec: cur && !cur.notStarted ? cur.delaySec : undefined,
+      notStarted: cur?.notStarted || undefined,
+      progressPct: cur?.progressPct,
+      coursesCountToday: v.stats.totalCoursesToday,
+      cancelledCoursesToday: v.stats.cancelledCoursesToday,
+      kmToday: v.stats.kmToday,
+      lastSeenAt: v.lastSeenAt,
+      lastLineName: cur ? undefined : v.todayCourses[0]?.lineName,
+    };
   }
 
   /**
@@ -822,10 +705,12 @@ export class FleetTracker {
    */
   public getVehicleDetail(sideNumber: string): FleetVehicleDetail | null {
     const clean = sideNumber.replace(/^#/, "").trim();
-    const veh = this.vehicles.get(clean);
-    if (!veh) return null;
-    veh.todayCourses.sort(sortCoursesDesc);
-    return veh;
+    return this.vehicles.get(clean) ?? null;
+  }
+
+  /** Today's 5-minute punctuality snapshots of the running fleet, oldest first. */
+  public getTimeline(): FleetTimelinePoint[] {
+    return [...this.timeline.values()].sort((a, b) => a.t - b.t);
   }
 
   /**
@@ -833,129 +718,143 @@ export class FleetTracker {
    */
   public getStats(): FleetStats {
     let active = 0;
-    let depot = 0;
+    let waiting = 0;
     let electric = 0;
     let hydrogen = 0;
     let hybrid = 0;
     let mega = 0;
-    let totalDelay = 0;
-    let onTimeCount = 0;
-    let countedActive = 0;
+    let seenToday = 0;
+    let km = 0;
+    let completed = 0;
+    let cancelled = 0;
+    const delays: number[] = [];
     const lines = new Set<string>();
 
     for (const v of this.vehicles.values()) {
       if (v.status === "active") {
         active++;
-        // waiting buses (course not begun) have no delay: out of the punctuality average
-        if (!v.currentCourse?.notStarted) countedActive++;
-        if (v.currentCourse) {
-          if (!v.currentCourse.notStarted) {
-            totalDelay += v.currentCourse.delaySec;
-            if (v.currentCourse.delaySec <= 180 && v.currentCourse.delaySec >= -60) onTimeCount++;
-          }
-          if (v.currentCourse.lineName) lines.add(v.currentCourse.lineName);
+        const cur = v.currentCourse;
+        if (cur) {
+          // waiting buses (course not begun) have no delay: out of the punctuality figures
+          if (cur.notStarted) waiting++;
+          else delays.push(cur.delaySec);
+          if (cur.lineName) lines.add(cur.lineName);
         }
-      } else {
-        depot++;
       }
+      if (v.lastSeenAt > 0) seenToday++;
+      km += v.stats.kmToday;
+      completed += v.stats.completedCoursesToday;
+      cancelled += v.stats.cancelledCoursesToday;
       if (v.features.electric) electric++;
       if (v.features.hydrogen) hydrogen++;
       if (v.features.hybrid) hybrid++;
       if (v.lengthCategory === "MEGA") mega++;
     }
 
-    const avgDelay = countedActive > 0 ? Math.round(totalDelay / countedActive) : 0;
-    const onTimePct = countedActive > 0 ? Math.round((onTimeCount / countedActive) * 100) : 100;
-    const sortedLines = Array.from(lines).sort((a, b) => {
-      const na = parseInt(a, 10);
-      const nb = parseInt(b, 10);
-      if (Number.isFinite(na) && Number.isFinite(nb)) return na - nb;
-      return a.localeCompare(b);
-    });
-
+    const med = median(delays);
     return {
       totalFleet: this.vehicles.size,
       activeCount: active,
-      depotCount: depot,
+      depotCount: this.vehicles.size - active,
+      waitingCount: waiting,
+      measuredCount: delays.length,
       electricCount: electric,
       hydrogenCount: hydrogen,
       hybridCount: hybrid,
       megaCount: mega,
-      averageDelaySec: avgDelay,
-      onTimePercentage: onTimePct,
-      activeLines: sortedLines,
+      averageDelaySec: delays.length > 0 ? Math.round(delays.reduce((a, b) => a + b, 0) / delays.length) : 0,
+      medianDelaySec: med === null ? null : Math.round(med),
+      onTimePercentage: delays.length > 0 ? Math.round((delays.filter(isOnTime).length / delays.length) * 100) : 100,
+      activeLines: [...lines].sort(compareLineNames),
+      seenTodayCount: seenToday,
+      kmToday: Math.round(km * 10) / 10,
+      coursesCompletedToday: completed,
+      coursesCancelledToday: cancelled,
+      updatedAt: this.updatedAt,
     };
   }
 
   /**
-   * Schedules debounced write of history to disk.
+   * Debounced write of the day's history (a day's file grows to a few MB: never on every poll).
    */
   private scheduleSave(): void {
-    const now = Date.now();
-    if (now - this.lastSaveAt < 15_000) {
-      if (!this.saveTimeout) {
-        this.saveTimeout = setTimeout(() => {
-          this.saveTimeout = null;
-          this.saveHistoryToDisk();
-        }, 15_000);
-      }
-      return;
-    }
-    this.saveHistoryToDisk();
+    if (!this.historyDir || this.saveTimeout) return;
+    const wait = Math.max(0, this.lastSaveAt + SAVE_DEBOUNCE_MS - Date.now());
+    this.saveTimeout = setTimeout(() => {
+      this.saveTimeout = null;
+      this.saveHistoryToDisk();
+    }, wait);
+    // a pending save must never keep the process (or a test run) alive
+    this.saveTimeout.unref?.();
+  }
+
+  private historyFile(day: string): string | null {
+    return this.historyDir ? path.join(this.historyDir, `fleet-history-${day}.json`) : null;
   }
 
   private saveHistoryToDisk(): void {
+    const filePath = this.historyFile(this.currentDay);
+    if (!filePath) return;
+    this.lastSaveAt = Date.now();
     try {
-      this.lastSaveAt = Date.now();
-      if (!fs.existsSync(HISTORY_DIR)) {
-        fs.mkdirSync(HISTORY_DIR, { recursive: true });
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      const payload: Record<string, unknown> = { _v: HISTORY_FORMAT, _timeline: this.getTimeline() };
+      for (const [side, v] of this.vehicles) {
+        if (v.todayCourses.length === 0 && !v.currentCourse) continue;
+        const saved: SavedVehicle = {
+          todayCourses: v.todayCourses,
+          currentCourse: v.status === "active" ? v.currentCourse : null,
+          lastSeenAt: v.lastSeenAt,
+          lastKnownLocation: v.lastKnownLocation,
+        };
+        payload[side] = saved;
       }
-      const filePath = path.join(HISTORY_DIR, `fleet-history-${this.currentDay}.json`);
-      const payload: Record<string, unknown> = {};
-      for (const [side, v] of this.vehicles.entries()) {
-        if (v.todayCourses.length > 0 || v.currentCourse) {
-          payload[side] = {
-            brigade: v.brigade,
-            todayCourses: v.todayCourses,
-            stats: v.stats,
-            lastSeenAt: v.lastSeenAt,
-            lastKnownLocation: v.lastKnownLocation,
-          };
-        }
-      }
-      fs.writeFileSync(filePath, JSON.stringify(payload, null, 2), "utf-8");
+      // write-then-rename: a crash mid-write must not leave a torn file that loses the whole day
+      const tmp = `${filePath}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify(payload), "utf-8");
+      fs.renameSync(tmp, filePath);
     } catch (err) {
       log.warn("fleet-tracker", `Failed saving history to disk: ${err}`);
     }
   }
 
   private loadHistoryFromDisk(): void {
+    const filePath = this.historyFile(this.currentDay);
+    if (!filePath || !fs.existsSync(filePath)) return;
     try {
-      const filePath = path.join(HISTORY_DIR, `fleet-history-${this.currentDay}.json`);
-      if (!fs.existsSync(filePath)) return;
-      const raw = fs.readFileSync(filePath, "utf-8");
-      const data = JSON.parse(raw) as Record<string, unknown>;
+      const data = JSON.parse(fs.readFileSync(filePath, "utf-8")) as Record<string, unknown>;
+      const nowEpoch = Math.floor(Date.now() / 1000);
 
-      for (const [side, rawSaved] of Object.entries(data)) {
-        if (side.startsWith("_")) continue;
-        const saved = rawSaved as Partial<FleetVehicleDetail>;
-        const v = this.vehicles.get(side);
-        if (v) {
-          if (saved.brigade) v.brigade = saved.brigade;
-          if (Array.isArray(saved.todayCourses) && saved.todayCourses.length > 0) {
-            v.todayCourses = saved.todayCourses
-              .map((c) => ({
-                ...c,
-                stops: c.status === "completed" && c.stops
-                  ? c.stops.map((s) => ({ ...s, status: "passed" as const }))
-                  : c.stops,
-              }))
-              .sort(sortCoursesDesc);
-          }
-          if (saved.stats) v.stats = saved.stats;
-          if (saved.lastSeenAt) v.lastSeenAt = saved.lastSeenAt;
-          if (saved.lastKnownLocation) v.lastKnownLocation = saved.lastKnownLocation;
+      if (Array.isArray(data._timeline)) {
+        for (const p of data._timeline as FleetTimelinePoint[]) {
+          if (p && Number.isFinite(p.t)) this.timeline.set(p.t, p);
         }
+      }
+
+      for (const [side, raw] of Object.entries(data)) {
+        if (side.startsWith("_") || !raw || typeof raw !== "object") continue;
+        const saved = raw as SavedVehicle;
+        const v = this.vehicles.get(side);
+        if (!v) continue;
+        if (Array.isArray(saved.todayCourses)) {
+          v.todayCourses = saved.todayCourses
+            // files written before 2026-10-04 carry invented "synth-*" courses (back-filled to 05:30): never real
+            .filter((c) => c && typeof c.id === "string" && !c.id.startsWith("synth-"))
+            .map((c) => ({
+              ...c,
+              stops: c.status === "completed" && c.stops ? c.stops.map((s) => ({ ...s, status: "passed" as const })) : c.stops,
+            }))
+            .sort(sortCoursesDesc);
+        }
+        if (typeof saved.lastSeenAt === "number") v.lastSeenAt = saved.lastSeenAt;
+        if (saved.lastKnownLocation) v.lastKnownLocation = saved.lastKnownLocation;
+        // a course live at the last save resumes (the next poll continues or archives it) — unless that was long ago
+        if (saved.currentCourse && nowEpoch - v.lastSeenAt <= RESUME_LIVE_MAX_AGE_SEC) {
+          v.currentCourse = saved.currentCourse;
+          v.status = "active";
+        }
+        this.recalculateStats(v);
+        if (v.status === "active") v.predictedNextCourse = this.predictNextCourse(v);
       }
       log.info("fleet-tracker", `Restored fleet history from ${filePath}`);
     } catch (err) {

@@ -3,6 +3,17 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import BottomSheet from "@/components/BottomSheet";
 import { useNow } from "@/components/hooks";
+import {
+  ArrowRightIcon,
+  ArrowsClockwiseIcon,
+  ArrowsHorizontalIcon,
+  DropIcon,
+  LeafIcon,
+  LightningIcon,
+  SnowflakeIcon,
+  TicketIcon,
+  WheelchairIcon,
+} from "@/components/icons";
 import { BackIcon, CloseIcon, ErrorState, IconButton, LineBadge, ShareButton } from "@/components/ui";
 import {
   computeEta,
@@ -21,7 +32,7 @@ import {
   tripTimeMatchesStop,
 } from "@/lib/client/format";
 import { findActiveStop, type ActiveStopResult } from "@/lib/client/geo";
-import type { LatLng, Stop, TripView as TripViewState, Vehicle } from "@/lib/client/types";
+import type { LatLng, Stop, TripView as TripViewState, Vehicle, VehicleFeatures } from "@/lib/client/types";
 import { progressFromVehicle, stopAlongFor } from "@/lib/shared/trip-progress";
 
 interface Props {
@@ -46,6 +57,27 @@ function Spinner() {
       className="inline-block h-3 w-3 animate-spin rounded-full border-[1.5px] border-text-faint border-t-text align-[-1px]"
       aria-hidden
     />
+  );
+}
+
+/* the features rendered as chips below (ecoVehicle has none, so it must not open an empty row) */
+const SHOWN_FEATURES = [
+  "electric",
+  "hydrogen",
+  "hybrid",
+  "airCondition",
+  "lowFloor",
+  "longVehicle",
+  "ticketMachine",
+] as const satisfies readonly (keyof VehicleFeatures)[];
+
+/** Neutral vehicle-feature chip: a fact about the bus, so no colour of its own. */
+function Feature({ icon, label, title }: { icon: React.ReactNode; label: string; title?: string }) {
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full bg-white/6 px-2 py-0.5 text-text-mute" title={title}>
+      <span className="text-[12px]">{icon}</span>
+      {label}
+    </span>
   );
 }
 
@@ -221,123 +253,84 @@ function TripView({
         )}
         <LineBadge line={trip.line} operator={isMzkTrip ? "MZK" : "KB"} big />
         <div className="min-w-0 flex-1">
-          <h2 className="truncate text-[15px] font-bold leading-tight text-text">
-            {loading ? "Wczytywanie…" : direction ? displayStopName(direction) : "—"}
+          <h2 className="truncate text-[16px] font-semibold leading-tight tracking-tight text-text">
+            {loading ? "Wczytywanie…" : direction ? displayStopName(direction) : `Linia ${trip.line}`}
           </h2>
-          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[12px] text-text-mute">
             {isLiveWithLoc && notStarted ? (
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-late/10 px-2 py-0.5 font-semibold text-late">
+              <span className="inline-flex items-center gap-1.5 font-medium text-late">
                 <span className="h-1.5 w-1.5 rounded-full bg-late" aria-hidden />
-                CZEKA NA ODJAZD
+                Czeka na odjazd
               </span>
             ) : isLiveWithLoc ? (
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-good/10 px-2 py-0.5 font-semibold text-good">
+              <span className="inline-flex items-center gap-1.5 font-medium text-good">
                 <span className="h-1.5 w-1.5 animate-pulse-dot rounded-full bg-good" aria-hidden />
-                NA ŻYWO
+                Na żywo
               </span>
             ) : (
-              <span className="rounded-full bg-white/6 px-2 py-0.5 font-semibold text-text-mute">
-                ROZKŁADOWY
-              </span>
-            )}
-            <span
-              className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-bold text-white ${
-                isMzkTrip ? "bg-blue-600 shadow-sm" : "bg-red-600 shadow-sm"
-              }`}
-            >
-              {isMzkTrip && (
-                /* eslint-disable-next-line @next/next/no-img-element */
-                <img src="/mzk-logo.svg" alt="" className="h-3 w-auto filter brightness-0 invert" />
-              )}
-              {!isMzkTrip && (
-                /* eslint-disable-next-line @next/next/no-img-element */
-                <img src="/brand.svg" alt="" className="h-2.5 w-auto filter brightness-0 invert" />
-              )}
-              {isMzkTrip ? "MZK Bielsko-Biała" : "Komunikacja Beskidzka"}
-            </span>
-            {currentVeh?.side_number && (
-              <a
-                href={`/brygady?tabor=${currentVeh.side_number}`}
-                title="Zobacz kartę brygady i historię kursów"
-                className="inline-flex items-center gap-1.5 rounded-full bg-white/10 px-2.5 py-0.5 font-semibold text-text hover:bg-white/20 transition-colors cursor-pointer border border-white/10"
-              >
-                <span>#{currentVeh.side_number}</span>
-                {currentVeh.model ? <span className="text-text-mute font-normal">· {currentVeh.model}</span> : null}
-                <span className="text-[10px] text-primary font-bold ml-0.5">&rarr; Karta brygady</span>
-              </a>
+              <span className="text-text-faint">Rozkładowy</span>
             )}
             {isLiveWithLoc && headerDelay != null && (
               <span className={`font-semibold tabular-nums ${delayClass(headerDelay)}`}>
                 {delayTxt(headerDelay)}
               </span>
             )}
-            {currentVeh?.features?.electric && (
-              <span className="inline-flex items-center gap-1 rounded-md bg-emerald-500/10 px-2 py-0.5 font-medium text-emerald-300 border border-emerald-500/20 text-[10px]">
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" /></svg>
-                100% EV
-              </span>
-            )}
-            {currentVeh?.features?.hydrogen && (
-              <span className="inline-flex items-center gap-1 rounded-md bg-cyan-500/10 px-2 py-0.5 font-medium text-cyan-300 border border-cyan-500/20 text-[10px]">
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><circle cx="12" cy="12" r="3" fill="currentColor" /><path d="M12 2v6m0 8v6M2 12h6m8 0h6" /></svg>
-                H₂ Wodór
-              </span>
-            )}
-            {currentVeh?.features?.hybrid && (
-              <span className="inline-flex items-center gap-1 rounded-md bg-teal-500/10 px-2 py-0.5 font-medium text-teal-300 border border-teal-500/20 text-[10px]">
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z" /></svg>
-                Hybryda
-              </span>
-            )}
-            {currentVeh?.features?.airCondition && (
-              <span className="inline-flex items-center gap-1 rounded-md bg-white/6 px-2 py-0.5 font-medium text-text-mute border border-hairline text-[10px]" title="Klimatyzacja">
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><line x1="12" y1="2" x2="12" y2="22" /><line x1="2" y1="12" x2="22" y2="12" /><line x1="4.93" y1="4.93" x2="19.07" y2="19.07" /><line x1="4.93" y1="19.07" x2="19.07" y2="4.93" /></svg>
-                Klima
-              </span>
-            )}
-            {currentVeh?.features?.lowFloor && (
-              <span className="inline-flex items-center gap-1 rounded-md bg-white/6 px-2 py-0.5 font-medium text-text-mute border border-hairline text-[10px]" title="Niska podłoga">
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><circle cx="9" cy="5" r="2" /><path d="M9 7v6l4 2 2 5M11 13h5" /><path d="M6 19a4 4 0 1 0 8 0" /></svg>
-                Niska podłoga
-              </span>
-            )}
-            {currentVeh?.features?.longVehicle && (
-              <span className="inline-flex items-center gap-1 rounded-md bg-amber-500/10 px-2 py-0.5 font-medium text-amber-300 border border-amber-500/20 text-[10px]" title="Pojazd przegubowy">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><rect x="2" y="6" width="8" height="10" rx="1.5" /><rect x="14" y="6" width="8" height="10" rx="1.5" /><path d="M10 8l2 2-2 2 2 2" /></svg>
-                MEGA (18m)
-              </span>
-            )}
-            {currentVeh?.features?.ticketMachine && (
-              <span className="inline-flex items-center gap-1 rounded-md bg-white/6 px-2 py-0.5 font-medium text-text-mute border border-hairline text-[10px]" title="Biletomat na pokładzie">
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z" /></svg>
-                Biletomat
-              </span>
-            )}
-            {trip.note && (
-              <span className="rounded-full bg-late/10 px-2 py-0.5 font-semibold text-late">
-                {trip.note}
-              </span>
-            )}
-            {loopStops.length > 0 && (
-              <span
-                className="inline-flex items-center gap-1 rounded-full bg-primary-dim px-2 py-0.5 font-semibold text-primary"
-                title={`Kurs realizowany przez pętlę: ${loopStops.map(displayStopName).join(", ")}`}
-              >
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                  <path d="M17 3l4 4-4 4" />
-                  <path d="M21 7H8a4 4 0 0 0 0 8h1" />
-                  <path d="M7 21l-4-4 4-4" />
-                  <path d="M3 17h13" />
-                </svg>
-                przez {loopStops.map((s) => formatPrzezLoop(displayStopName(s))).join(", ")}
-              </span>
-            )}
+            <span className="inline-flex items-center gap-1.5">
+              <span className={`h-2 w-2 rounded-full ${isMzkTrip ? "bg-mzk" : "bg-kb"}`} aria-hidden />
+              {isMzkTrip ? "MZK Bielsko-Biała" : "Komunikacja Beskidzka"}
+            </span>
             {trip.status === "routing" && (
               <span className="inline-flex items-center gap-1.5 text-text-faint">
                 <Spinner /> wyznaczanie trasy…
               </span>
             )}
           </div>
+          {(isMzkTrip && currentVeh?.side_number) ||
+          SHOWN_FEATURES.some((k) => currentVeh?.features?.[k]) ||
+          trip.note ||
+          loopStops.length > 0 ? (
+            <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11.5px]">
+              {isMzkTrip && currentVeh?.side_number && (
+                <a
+                  href={`/brygady?tabor=${encodeURIComponent(currentVeh.side_number)}`}
+                  title="Zobacz kartę pojazdu i dzisiejsze kursy"
+                  className="tap group inline-flex items-center gap-1 rounded-full bg-white/8 px-2 py-0.5 font-medium text-text hover:bg-white/12"
+                >
+                  <span className="tabular-nums">#{currentVeh.side_number}</span>
+                  {currentVeh.model ? <span className="font-normal text-text-mute">· {currentVeh.model}</span> : null}
+                  <span className="ml-0.5 inline-flex items-center gap-0.5 text-primary">
+                    Karta pojazdu
+                    <ArrowRightIcon className="text-[10px] transition-transform duration-200 group-hover:translate-x-0.5" />
+                  </span>
+                </a>
+              )}
+              {currentVeh?.features?.electric && <Feature icon={<LightningIcon weight="fill" />} label="Elektryczny" />}
+              {currentVeh?.features?.hydrogen && <Feature icon={<DropIcon weight="fill" />} label="Wodorowy" />}
+              {currentVeh?.features?.hybrid && <Feature icon={<LeafIcon weight="fill" />} label="Hybryda" />}
+              {currentVeh?.features?.airCondition && (
+                <Feature icon={<SnowflakeIcon />} label="Klima" title="Klimatyzacja" />
+              )}
+              {currentVeh?.features?.lowFloor && <Feature icon={<WheelchairIcon />} label="Niska podłoga" />}
+              {currentVeh?.features?.longVehicle && (
+                <Feature icon={<ArrowsHorizontalIcon />} label="Przegubowy" title="Pojazd przegubowy, 18 m" />
+              )}
+              {currentVeh?.features?.ticketMachine && (
+                <Feature icon={<TicketIcon />} label="Biletomat" title="Biletomat na pokładzie" />
+              )}
+              {trip.note && (
+                <span className="rounded-full bg-late/10 px-2 py-0.5 font-medium text-late">{trip.note}</span>
+              )}
+              {loopStops.length > 0 && (
+                <span
+                  className="inline-flex items-center gap-1 rounded-full bg-white/6 px-2 py-0.5 text-text"
+                  title={`Kurs realizowany przez pętlę: ${loopStops.map(displayStopName).join(", ")}`}
+                >
+                  <ArrowsClockwiseIcon className="text-[12px] text-text-mute" />
+                  przez {loopStops.map((s) => formatPrzezLoop(displayStopName(s))).join(", ")}
+                </span>
+              )}
+            </div>
+          ) : null}
         </div>
         {!loading && (
           <ShareButton title={`Linia ${trip.line}${direction ? ` → ${displayStopName(direction)}` : ""}`} />
@@ -347,7 +340,7 @@ function TripView({
         </IconButton>
       </div>
       {eta && (
-        <p className="mt-2.5 rounded-xl bg-white/4 px-3 py-2 text-[12px] tabular-nums text-text-mute" aria-live="polite">
+        <p className="mt-3 rounded-xl bg-white/5 px-3 py-2 text-[12.5px] tabular-nums text-text-mute" aria-live="polite">
           {eta}
         </p>
       )}
@@ -392,7 +385,7 @@ function TripView({
                     type="button"
                     disabled={!coord}
                     onClick={() => coord && onFocusStop(coord)}
-                    className={`flex w-full items-stretch gap-3 rounded-2xl text-left transition-colors ${
+                    className={`flex w-full items-stretch gap-3 rounded-xl text-left transition-colors ${
                       coord ? "hover:bg-white/5 active:bg-white/8" : ""
                     } ${selected ? "bg-primary-dim" : ""}`}
                   >
@@ -417,34 +410,19 @@ function TripView({
                       {/* descending line overlay on approaching stop (when vehicle enters second half of segment) */}
                       {isNextStop && activeProgress > 0.5 && (
                         <span
-                          className="pointer-events-none absolute left-1/2 top-0 w-[3px] -translate-x-1/2 rounded-full transition-all duration-700 ease-out"
+                          className="pointer-events-none absolute left-1/2 top-0 w-[3px] -translate-x-1/2 rounded-full transition-[height] duration-700 ease-out-soft"
                           style={{
                             height: `${Math.min(50, (activeProgress - 0.5) * 100)}%`,
                             background: lineColor,
-                            boxShadow: `0 0 6px ${lineColor}99`,
                           }}
                         />
                       )}
                       {/* vehicle marker moving down approaching stop */}
                       {isNextStop && activeProgress > 0.5 && (
                         <span
-                          className="pointer-events-none absolute left-1/2 z-10 flex -translate-x-1/2 -translate-y-1/2 items-center justify-center transition-all duration-700 ease-out"
-                          style={{
-                            top: `${(activeProgress - 0.5) * 100}%`,
-                          }}
-                        >
-                          <span
-                            className="absolute h-5 w-5 animate-ping rounded-full opacity-30"
-                            style={{ background: lineColor }}
-                          />
-                          <span
-                            className="relative h-4 w-4 animate-pulse-dot rounded-full border-[2.5px] border-white shadow-md"
-                            style={{
-                              background: lineColor,
-                              boxShadow: `0 0 8px ${lineColor}aa`,
-                            }}
-                          />
-                        </span>
+                          className="pointer-events-none absolute left-1/2 z-10 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full border-[2.5px] border-white shadow-sm transition-[top] duration-700 ease-out-soft"
+                          style={{ top: `${(activeProgress - 0.5) * 100}%`, background: lineColor }}
+                        />
                       )}
 
                       {/* bottom half line (from center node to bottom of row) */}
@@ -457,52 +435,33 @@ function TripView({
                       {/* descending line overlay on previous stop (vehicle descending in first half of segment) */}
                       {isPrevStop && (
                         <span
-                          className="pointer-events-none absolute left-1/2 w-[3px] -translate-x-1/2 rounded-full transition-all duration-700 ease-out"
+                          className="pointer-events-none absolute left-1/2 w-[3px] -translate-x-1/2 rounded-full transition-[height] duration-700 ease-out-soft"
                           style={{
                             top: "50%",
                             height: `${Math.min(50, activeProgress * 100)}%`,
                             background: lineColor,
-                            boxShadow: `0 0 6px ${lineColor}99`,
                           }}
                         />
                       )}
                       {/* vehicle marker moving down previous stop */}
                       {isPrevStop && activeProgress <= 0.5 && (
                         <span
-                          className="pointer-events-none absolute left-1/2 z-10 flex -translate-x-1/2 -translate-y-1/2 items-center justify-center transition-all duration-700 ease-out"
-                          style={{
-                            top: `${50 + activeProgress * 100}%`,
-                          }}
-                        >
-                          <span
-                            className="absolute h-5 w-5 animate-ping rounded-full opacity-30"
-                            style={{ background: lineColor }}
-                          />
-                          <span
-                            className="relative h-4 w-4 animate-pulse-dot rounded-full border-[2.5px] border-white shadow-md"
-                            style={{
-                              background: lineColor,
-                              boxShadow: `0 0 8px ${lineColor}aa`,
-                            }}
-                          />
-                        </span>
+                          className="pointer-events-none absolute left-1/2 z-10 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full border-[2.5px] border-white shadow-sm transition-[top] duration-700 ease-out-soft"
+                          style={{ top: `${50 + activeProgress * 100}%`, background: lineColor }}
+                        />
                       )}
 
                       {/* stop center node */}
                       {isCurrent ? (
                         isAtStop ? (
                           <span
-                            className="absolute left-1/2 top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 animate-pulse-dot rounded-full border-[3px] border-white shadow-md"
-                            style={{ background: lineColor, boxShadow: `0 0 10px ${lineColor}99` }}
+                            className="absolute left-1/2 top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full border-[3px] border-white shadow-sm"
+                            style={{ background: lineColor }}
                           />
                         ) : (
                           <span
                             className="absolute left-1/2 top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2"
-                            style={{
-                              borderColor: lineColor,
-                              background: "var(--color-surface)",
-                              boxShadow: `0 0 8px ${lineColor}55`,
-                            }}
+                            style={{ borderColor: lineColor, background: "var(--color-surface)" }}
                           />
                         )
                       ) : (
@@ -521,7 +480,7 @@ function TripView({
                       <span
                         className={`block truncate text-[13.5px] ${
                           isCurrent
-                            ? "font-bold text-text"
+                            ? "font-semibold text-text"
                             : passed
                               ? "text-text-faint"
                               : selected
@@ -535,7 +494,7 @@ function TripView({
                         const plat = formatPlatform(t.platform, isBusStation(t.stop_name, coord));
                         if (!plat && !bigDiff) return null;
                         return (
-                          <span className="mt-0.5 block text-[11px] text-text-faint">
+                          <span className="mt-0.5 block text-[12px] text-text-faint">
                             {bigDiff ? <s className="tabular-nums">plan {t.departure_time}</s> : null}
                             {bigDiff && plat ? " · " : ""}
                             {plat}

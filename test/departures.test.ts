@@ -7,6 +7,8 @@ import {
   KB_REL_BIAS_SEC,
   compareBoardItems,
   enrichKbRow,
+  delayMinutes,
+  etaClock,
   etaLabel,
   hhmm,
   isGone,
@@ -17,6 +19,14 @@ import {
   mzkRowKey,
   mzkTiming,
   mzkWireFields,
+  nextEarlierHorizon,
+  nextLaterHorizon,
+  boardExtension,
+  autoLaterHorizon,
+  schedTiming,
+  schedTripKey,
+  schedVehicle,
+  vehicleTripKey,
   parseClockNear,
   parseRelMinutes,
   pickDirection,
@@ -25,6 +35,8 @@ import {
   rowKey,
   sortBoard,
   uniqueKeys,
+  warsawDateISO,
+  warsawDayTs,
   type BoardItem,
   type TimingRow,
 } from "../lib/shared/departures";
@@ -222,7 +234,19 @@ describe("hhmm / etaLabel", () => {
       const label = etaLabel(tm, now);
       if (mins === 0) assert.equal(label, "teraz", `dt=${dt}`);
       else if (mins < 60) assert.equal(label, `${mins} min`, `dt=${dt}`);
-      else assert.match(label, /^\d\d:\d\d$/, `dt=${dt}`);
+      else assert.equal(label, hhmm(now + mins * 60), `dt=${dt}`); // the 59 min → clock switch never skips or repeats a minute
+    }
+  });
+  it("etaClock rounds like the delay label: printed plan + printed delay = printed time", () => {
+    const plan = cest("18:40:00");
+    assert.equal(etaClock({ planTs: plan, etaTs: plan + 150 }), "18:43"); // hhmm alone: 18:42 next to "+3 min"
+    assert.equal(etaClock({ planTs: plan, etaTs: plan - 150 }), "18:37");
+    assert.equal(etaClock({ planTs: plan, etaTs: plan + 29 }), "18:40");
+    assert.equal(etaClock({ planTs: null, etaTs: cest("18:42:30") }), "18:43");
+    assert.equal(etaClock({ planTs: null, etaTs: cest("18:42:29") }), "18:42");
+    assert.equal(etaClock({ planTs: plan, etaTs: null }), "");
+    for (let d = -900; d <= 900; d++) {
+      assert.equal(etaClock({ planTs: plan, etaTs: plan + d }), hhmm(plan + delayMinutes(d) * 60), `d=${d}`);
     }
   });
   it("the printed KB number equals KB's own at fetch time and ticks down per minute", () => {
@@ -631,5 +655,140 @@ describe("REAL far-off KB rows (live capture 2026-10-03 00:09:08, next departure
     const sorted = preSortRows(rows, anchor + 3);
     assert.deepEqual(sorted.map((r) => `${r.line_name}`), ["120", "142", "119", "116"]);
     assert.deepEqual(sorted.map((r) => etaLabel(resolveTiming(r, null), anchor + 3)), ["30 min", "04:05", "04:20", "04:30"]);
+  });
+});
+
+describe("warsawDayTs / warsawDateISO", () => {
+  it("places timetable seconds-of-day on the Warsaw clock (CEST and CET)", () => {
+    assert.equal(warsawDayTs("2026-10-04", 12 * 3600), at("2026-10-04T12:00:00+02:00"));
+    assert.equal(warsawDayTs("2026-12-01", 8 * 3600 + 1800), at("2026-12-01T08:30:00+01:00"));
+  });
+  it("is DST-exact on the switch day (2026-10-25) and rolls >= 86400 into the next day", () => {
+    assert.equal(warsawDayTs("2026-10-25", 3600 + 1800), at("2026-10-25T01:30:00+02:00"));
+    assert.equal(warsawDayTs("2026-10-25", 10 * 3600), at("2026-10-25T10:00:00+01:00"));
+    assert.equal(warsawDayTs("2026-10-04", 86400 + 600), at("2026-10-05T00:10:00+02:00"));
+  });
+  it("rejects a malformed date", () => {
+    assert.equal(warsawDayTs("4.10.2026", 600), null);
+    assert.equal(warsawDayTs("2026-10-04", Number.NaN), null);
+  });
+  it("reads the Warsaw calendar date, not the UTC one", () => {
+    assert.equal(warsawDateISO(at("2026-10-04T23:30:00+02:00")), "2026-10-04");
+    assert.equal(warsawDateISO(at("2026-10-04T22:30:00Z")), "2026-10-05");
+  });
+});
+
+describe("boardExtension", () => {
+  const now = cest("12:00:00");
+  const live: TimingRow[] = [
+    { operator: "MZK", trip_id: "mzk:1:1", plan_ts: cest("12:05:00") },
+    { operator: "MZK", trip_id: "mzk:2:1", plan_ts: cest("13:10:00") },
+    { operator: "KB", trip_id: 100, plan_ts: cest("15:00:00") },
+  ];
+  const s = (trip_id: number | string, operator: "KB" | "MZK", planTs: number) => ({ trip_id, operator, planTs });
+
+  it("splits per operator window, hides what the board lists, keeps tomorrow's run of a live KB trip", () => {
+    const sched = [
+      s("mzk:1:1", "MZK", cest("12:05:00")), // on the board
+      s("mzk:9:1", "MZK", cest("11:30:00")), // departed
+      s("mzk:3:1", "MZK", cest("12:30:00")), // inside the MZK window, not listed: OnTime skips untracked courses
+      s("mzk:4:1", "MZK", cest("13:30:00")),
+      s(101, "KB", cest("14:00:00")), // inside the KB window
+      s(102, "KB", cest("15:30:00")),
+      s(100, "KB", cest("15:00:00")), // on the board
+      s(100, "KB", cest("15:00:00", "2026-10-03")), // the same static trip tomorrow
+    ];
+    const { earlier, gaps, later, liveEnd } = boardExtension(sched, live, now);
+    assert.deepEqual(earlier.map((x) => x.trip_id), ["mzk:9:1"]);
+    assert.deepEqual(gaps.map((x) => x.trip_id), ["mzk:3:1", 101]);
+    assert.deepEqual(later.map((x) => x.trip_id), ["mzk:4:1", 102, 100]);
+    assert.equal(later[2].planTs, cest("15:00:00", "2026-10-03"));
+    assert.equal(liveEnd, cest("15:00:00"));
+  });
+
+  it("matches an MZK course across variants (realtime and timetable may disagree on it)", () => {
+    const { gaps, later } = boardExtension([s("mzk:1:7", "MZK", cest("12:05:00"))], live, now);
+    assert.equal(gaps.length + later.length, 0);
+  });
+
+  it("an operator without live rows extends from now; a late live row never pulls the window into the past", () => {
+    const sched = [s(7, "KB", cest("11:50:00")), s(8, "KB", cest("12:20:00")), s("mzk:5:1", "MZK", cest("11:58:00"))];
+    const { earlier, gaps, later } = boardExtension(sched, [{ operator: "MZK", trip_id: "mzk:6:1", plan_ts: cest("11:40:00") }], now);
+    assert.deepEqual(earlier.map((x) => x.trip_id), [7, "mzk:5:1"]);
+    assert.deepEqual(gaps, []);
+    assert.deepEqual(later.map((x) => x.trip_id), [8]);
+  });
+});
+
+describe("schedTripKey / vehicleTripKey / schedVehicle", () => {
+  it("drops the MZK variant, keeps a KB id", () => {
+    assert.equal(schedTripKey("mzk:5087321:247"), "mzk:5087321");
+    assert.equal(schedTripKey("mzk:5087321"), "mzk:5087321");
+    assert.equal(schedTripKey(35678394), "35678394");
+  });
+  it("keys a vehicle by the timetable trip it serves", () => {
+    assert.equal(vehicleTripKey({ operator: "MZK", trip_id: "5087321" }), "mzk:5087321");
+    assert.equal(vehicleTripKey({ operator: "KB", trip_id: "739893", sched_trip_id: "38672079" }), "38672079");
+    // a KB vehicle's trip_id is a per-day id, never a timetable trip
+    assert.equal(vehicleTripKey({ operator: "KB", trip_id: "739893" }), null);
+  });
+  it("matches today's visit only (the same KB trip tomorrow is not on the road)", () => {
+    const now = cest("12:00:00");
+    const byTrip = new Map([["38672079", "bus"]]);
+    assert.equal(schedVehicle({ trip_id: 38672079, planTs: cest("11:40:00") }, byTrip, now), "bus");
+    assert.equal(schedVehicle({ trip_id: 38672079, planTs: cest("11:40:00", "2026-10-03") }, byTrip, now), null);
+    assert.equal(schedVehicle({ trip_id: 1, planTs: now }, byTrip, now), null);
+  });
+});
+
+describe("schedTiming", () => {
+  const plan = cest("12:10:00");
+  it("plan + the vehicle's current delay", () => {
+    const t = schedTiming(plan, { delay: 180 });
+    assert.equal(t.etaTs, plan + 180);
+    assert.equal(t.delaySec, 180);
+    assert.equal(t.estimated, true);
+    assert.equal(t.source, "vehicle");
+  });
+  it("no vehicle or no delay is the timetable", () => {
+    assert.equal(schedTiming(plan, null).source, "schedule");
+    assert.equal(schedTiming(plan, { delay: null }).estimated, false);
+  });
+  it("a course that has not begun never yields a delay", () => {
+    const t = schedTiming(plan, { delay: 600, not_started: true });
+    assert.equal(t.delaySec, null);
+    assert.equal(t.etaTs, plan);
+    assert.equal(t.source, "waiting");
+  });
+});
+
+describe("autoLaterHorizon", () => {
+  const rows = [100, 200, 300, 400, 500].map((planTs, i) => ({ trip_id: i, planTs }));
+  it("everything up to the floor", () => {
+    assert.equal(autoLaterHorizon(rows, 10, 300, 6), 300);
+  });
+  it("then more until the board holds the minimum", () => {
+    // empty board (MZK courses without a tracked bus): the next 3 departures, whatever the floor
+    assert.equal(autoLaterHorizon(rows, 0, 50, 3), 300);
+    assert.equal(autoLaterHorizon(rows, 4, 250, 6), 200);
+  });
+  it("null when nothing is added", () => {
+    assert.equal(autoLaterHorizon(rows, 6, 50, 6), null);
+    assert.equal(autoLaterHorizon([], 0, 1e12, 6), null);
+  });
+});
+
+describe("nextLaterHorizon / nextEarlierHorizon", () => {
+  const rows = [10, 20, 30, 30, 40].map((planTs, i) => ({ trip_id: i, planTs }));
+  it("reveals `step` more departures per call, a shared minute as a whole", () => {
+    assert.equal(nextLaterHorizon(rows, null, 2), 20);
+    assert.equal(nextLaterHorizon(rows, 20, 1), 30);
+    assert.equal(nextLaterHorizon(rows, 30, 5), 40);
+    assert.equal(nextLaterHorizon(rows, 40, 5), null);
+  });
+  it("walks back from the newest earlier departure", () => {
+    assert.equal(nextEarlierHorizon(rows, null, 2), 30);
+    assert.equal(nextEarlierHorizon(rows, 30, 2), 10);
+    assert.equal(nextEarlierHorizon(rows, 10, 2), null);
   });
 });

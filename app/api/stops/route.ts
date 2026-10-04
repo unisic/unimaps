@@ -1,18 +1,8 @@
-import { upstreamError } from "@/lib/api-helpers";
+import { etagMatches, upstreamError } from "@/lib/api-helpers";
 import { getMergedStopsView, startPoller } from "@/lib/poller-singleton";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-
-/** RFC 9110 weak comparison: any listed tag (W/ prefix ignored) or "*" — a proxy may weaken our strong ETag. */
-function etagMatches(header: string | null, etag: string): boolean {
-  if (!header) return false;
-  const want = etag.replace(/^W\//, "");
-  return header.split(",").some((t) => {
-    const v = t.trim();
-    return v === "*" || v.replace(/^W\//, "") === want;
-  });
-}
 
 /** GET /api/stops — unified stops merged across KB and MZK. */
 export async function GET(req: Request): Promise<Response> {

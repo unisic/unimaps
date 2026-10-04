@@ -5,170 +5,78 @@ import { describe, it } from "node:test";
 
 import manifestFn from "../app/manifest";
 
-describe("Brygady Section PWA & Mobile UX (iOS & Android)", () => {
-  const brigadesAppPath = path.resolve(process.cwd(), "components/BrigadesApp.tsx");
-  const brigadesSource = fs.readFileSync(brigadesAppPath, "utf-8");
+/*
+ * Source-level guards for the /brygady page: things that only show on a real phone (notch, home
+ * indicator, Android back) or to a screen reader, and are easy to lose in a refactor.
+ */
+const read = (p: string) => fs.readFileSync(path.resolve(process.cwd(), p), "utf-8");
+
+describe("Brygady section: PWA & mobile UX", () => {
+  const app = read("components/BrigadesApp.tsx");
+  const sheet = read("components/brygady/VehicleSheet.tsx");
+  const list = read("components/brygady/FleetList.tsx");
+  const charts = read("components/brygady/charts.tsx");
   const manifest = manifestFn();
 
-  describe("PWA Manifest Shortcuts", () => {
-    it("includes a dedicated home-screen shortcut for Brygady i Tabor", () => {
-      const shortcuts = manifest.shortcuts ?? [];
-      const brygadyShortcut = shortcuts.find((s) => s.url === "/brygady");
-      assert.ok(brygadyShortcut, "manifest must define a shortcut with url: /brygady");
-      assert.equal(brygadyShortcut.name, "Brygady i Tabor");
-      assert.equal(brygadyShortcut.short_name, "Brygady");
-      assert.ok(brygadyShortcut.icons && brygadyShortcut.icons.length > 0, "shortcut must provide an icon");
-    });
+  it("has a home-screen shortcut", () => {
+    const shortcut = (manifest.shortcuts ?? []).find((s) => s.url === "/brygady");
+    assert.ok(shortcut, "manifest must define a shortcut with url: /brygady");
+    assert.equal(shortcut.name, "Brygady i Tabor");
+    assert.equal(shortcut.short_name, "Brygady");
+    assert.ok(shortcut.icons && shortcut.icons.length > 0, "shortcut must provide an icon");
   });
 
-  describe("iOS Safe Area Insets (Notch, Dynamic Island & Home Indicator)", () => {
-    it("ensures sticky header includes safe-area-inset-top clearance for iOS status bar & Dynamic Island", () => {
-      assert.ok(
-        brigadesSource.includes("env(safe-area-inset-top"),
-        "Sticky header in BrigadesApp must use env(safe-area-inset-top) to avoid overlapping notch/Dynamic Island",
-      );
-      assert.ok(
-        brigadesSource.includes("pt-[calc(env(safe-area-inset-top,0px)+0.75rem)]"),
-        "Header must have comfortable top clearance (0.75rem + safe-area-inset-top)",
-      );
-    });
-
-    it("ensures page layout and toast alerts respect safe-area-inset-bottom for iOS Home Indicator", () => {
-      assert.ok(
-        brigadesSource.includes("pb-[calc(env(safe-area-inset-bottom,0px)+5rem)]"),
-        "Page container must leave space at bottom for iOS home indicator bar",
-      );
-      assert.ok(
-        brigadesSource.includes("bottom-[calc(env(safe-area-inset-bottom,0px)+1.5rem)]"),
-        "Toast notifications and floating actions must clear the home indicator",
-      );
-    });
-
-    it("ensures vehicle detail modal scroll container has safe-area-inset-bottom padding", () => {
-      assert.ok(
-        brigadesSource.includes("pb-[calc(env(safe-area-inset-bottom,0px)+2rem)]"),
-        "Modal body must have bottom safe area padding so last rows aren't cut off by the gesture bar",
-      );
-    });
+  it("clears the notch and the home indicator", () => {
+    assert.match(app, /sticky top-0[^"]*pt-\[env\(safe-area-inset-top\)\]/, "sticky header below the status bar");
+    assert.match(app, /pb-\[max\([^)]*env\(safe-area-inset-bottom\)\)\]/, "page bottom clears the home indicator");
+    assert.match(app, /fixed bottom-\[max\([^)]*env\(safe-area-inset-bottom\)\)\]/, "floating button clears it too");
+    assert.match(sheet, /pb-\[max\([^)]*env\(safe-area-inset-bottom\)\)\]/, "sheet body: last rows above the gesture bar");
   });
 
-  describe("Mobile Bottom-Sheet Pattern for Detail Modal", () => {
-    it("renders modal as a native bottom sheet on mobile screens (< sm)", () => {
-      assert.ok(
-        brigadesSource.includes("items-end sm:items-center"),
-        "Modal overlay must anchor to bottom on mobile and center on desktop",
-      );
-      assert.ok(
-        brigadesSource.includes("rounded-t-3xl sm:rounded-3xl"),
-        "Modal dialog must use rounded top corners for bottom-sheet aesthetic on mobile",
-      );
-      assert.ok(
-        brigadesSource.includes("max-h-[88dvh] sm:max-h-[90vh]"),
-        "Modal dialog must use dynamic viewport units (dvh) on mobile to respect browser URL bars",
-      );
-    });
-
-    it("includes a visual drag-handle indicator on mobile", () => {
-      assert.ok(
-        brigadesSource.includes("w-12 h-1.5 bg-white/20 rounded-full mx-auto my-2.5 sm:hidden"),
-        "Bottom sheet must have a subtle handle pill indicator on mobile screens",
-      );
-    });
+  it("vehicle card is a modal dialog: bottom sheet on phones, centred on desktop", () => {
+    assert.ok(sheet.includes('role="dialog"') && sheet.includes('aria-modal="true"') && sheet.includes("aria-labelledby"));
+    assert.ok(sheet.includes("items-end") && sheet.includes("md:items-center"));
+    assert.match(sheet, /max-h-\[\d+dvh\]/, "dynamic viewport units respect mobile URL bars");
+    assert.ok(sheet.includes('e.key === "Escape"'), "Escape closes");
+    assert.ok(sheet.includes('e.key !== "Tab"') || sheet.includes('e.key === "Tab"'), "focus is trapped");
+    assert.ok(sheet.includes("overflow = \"hidden\""), "page behind does not scroll");
+    assert.match(app, /inert=\{inert\}/, "page behind the sheet is inert");
   });
 
-  describe("Touch Targets & Clickability (Apple HIG & Material Design)", () => {
-    it("ensures 'Mapa na żywo' navigation button has at least 42px touch target height", () => {
-      assert.ok(
-        brigadesSource.includes("min-h-[42px]"),
-        "'Mapa na żywo' button must have min-h-[42px] for effortless thumb tapping",
-      );
-      assert.ok(
-        brigadesSource.includes("active:scale-95"),
-        "Button must provide instant active press feedback",
-      );
-    });
-
-    it("ensures search input and clear button have >= 44px touch targets", () => {
-      assert.ok(
-        brigadesSource.includes("min-h-[44px]"),
-        "Search input must have min-h-[44px]",
-      );
-      assert.ok(
-        brigadesSource.includes("w-11 flex items-center justify-center"),
-        "Clear search button must provide 44px (w-11) touch target width",
-      );
-    });
-
-    it("ensures status, propulsion, and line filter buttons have generous touch heights", () => {
-      assert.ok(
-        brigadesSource.includes("min-h-[38px]"),
-        "Status segment buttons must have min-h-[38px]",
-      );
-      assert.ok(
-        brigadesSource.includes("min-h-[34px]"),
-        "Propulsion filter buttons must have min-h-[34px]",
-      );
-      assert.ok(
-        brigadesSource.includes("min-h-[32px]"),
-        "Line filter buttons must have min-h-[32px]",
-      );
-    });
-
-    it("ensures modal header action buttons (Share and Close) have 44x44px touch targets", () => {
-      assert.ok(
-        brigadesSource.includes("min-w-[44px] min-h-[44px]"),
-        "Share and close buttons in modal header must have at least 44x44px touch target",
-      );
-    });
+  it("Android back closes the vehicle card, a deep-linked card closes without leaving the page", () => {
+    assert.ok(app.includes("window.history.pushState({ kbTabor: true }"));
+    assert.ok(app.includes("window.history.back()"));
+    assert.match(app, /if \(sheetEntry\(\)\) window\.history\.back\(\);\s*else window\.history\.replaceState/);
+    assert.ok(!/router\.(push|replace|back)/.test(app), "plain History API, never the Next router");
   });
 
-  describe("Mobile Web Share API & Scroll Persistence", () => {
-    it("supports navigator.share with fallback to clipboard", () => {
-      assert.ok(
-        brigadesSource.includes("navigator.share"),
-        "Must invoke native mobile share sheet when navigator.share is supported",
-      );
-      assert.ok(
-        brigadesSource.includes("navigator.clipboard.writeText"),
-        "Must fall back to clipboard copy when native share is unavailable",
-      );
-    });
+  it("shares a vehicle with the native share sheet (clipboard fallback lives in ShareButton)", () => {
+    assert.ok(sheet.includes("<ShareButton"));
+    const ui = read("components/ui.tsx");
+    assert.ok(ui.includes("navigator.share") && ui.includes("navigator.clipboard.writeText"));
+  });
 
-    it("preserves scroll position when opening or closing vehicles using scroll: false", () => {
-      assert.ok(
-        brigadesSource.includes("router.push(`/brygady?${params.toString()}`, { scroll: false })"),
-        "Selecting vehicle must pass { scroll: false } to prevent jumping to top of page",
-      );
-      assert.ok(
-        brigadesSource.includes("router.back()"),
-        "Closing vehicle must respect browser history with router.back()",
-      );
-    });
+  it("keeps controls accessible: real buttons, labelled search, ARIA tabs and disclosures", () => {
+    assert.ok(list.includes('type="search"') && list.includes('className="sr-only"'), "labelled search field");
+    assert.ok(app.includes('role="tablist"') && app.includes('role="tab"') && app.includes("aria-selected"));
+    assert.ok(sheet.includes("aria-expanded={open}") && sheet.includes("aria-controls={panelId}"));
+    assert.ok(sheet.includes('role="progressbar"'));
+    assert.ok(charts.includes("<title") || charts.includes("aria-label"), "charts carry an accessible name");
+    // the sheet backdrop is the one exception: aria-hidden, Escape and the close button cover it
+    assert.ok(!/<div(?![^>]*aria-hidden)[^>]*onClick=/.test(app + sheet + list), "clickable divs: use <button>");
+  });
 
-    it("provides a floating scroll-to-top button when scrolled down", () => {
-      assert.ok(
-        brigadesSource.includes("showScrollTop"),
-        "Component must track scroll position to reveal scroll-to-top button",
-      );
-      assert.ok(
-        brigadesSource.includes("scrollToTop"),
-        "Must provide smooth scroll to top function",
-      );
-      assert.ok(
-        brigadesSource.includes("<ArrowUpIcon />"),
-        "Must render floating button with arrow up icon",
-      );
-    });
-
-    it("provides interactive feedback and affordance for expandable course rows", () => {
-      assert.ok(
-        brigadesSource.includes("active:bg-white/[0.04]"),
-        "Course rows must provide tactile active touch feedback",
-      );
-      assert.ok(
-        brigadesSource.includes("ChevronDownIcon"),
-        "Course rows must display chevron to indicate expandability",
-      );
-    });
+  it("uses no emoji as icons and no em dash in UI copy", () => {
+    for (const [name, src] of [
+      ["BrigadesApp", app],
+      ["VehicleSheet", sheet],
+      ["FleetList", list],
+      ["charts", charts],
+      ["FleetStatsView", read("components/brygady/FleetStatsView.tsx")],
+    ] as const) {
+      assert.ok(!/\p{Extended_Pictographic}/u.test(src), `${name}: emoji found`);
+      const copy = src.replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, "");
+      assert.ok(!copy.includes("—"), `${name}: em dash in UI copy`);
+    }
   });
 });

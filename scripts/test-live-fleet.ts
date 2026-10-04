@@ -36,14 +36,14 @@ async function testAll() {
   const megaSummary = tracker.getFleetSummary({ propulsion: "mega" });
   console.log("Liczba wozów MEGA przegubowych:", megaSummary.length);
 
-  console.log("\n=== 4. Test szczegółów wozu, karty brygady i predykcji ===");
+  console.log("\n=== 4. Test szczegółów wozu, karty drogowej i szacunku następnego kursu ===");
   const side = sample.vehicleId;
   const detail = tracker.getVehicleDetail(side);
   if (!detail) throw new Error("Nie znaleziono szczegółów dla wozu #" + side);
 
   console.log(`Wóz #${side}:`);
   console.log(`  Model: ${detail.model} (${detail.year})`);
-  console.log(`  Brygada: ${detail.brigade.label}`);
+  console.log(`  Linie dziś: ${detail.lines.join(", ") || "brak"} (główna: ${detail.mainLine ?? "brak"})`);
   console.log(`  Status: ${detail.status}`);
   console.log("  Bieżący kurs:", {
     linia: detail.currentCourse?.lineName,
@@ -64,7 +64,7 @@ async function testAll() {
 
   console.log("\n=== 5. Weryfikacja poprawności wszystkich pól ===");
   for (const v of allSummary) {
-    if (!v.sideNumber || !v.model || !v.brigadeId) {
+    if (!v.sideNumber || !v.model || !Array.isArray(v.lines)) {
       throw new Error("Błąd w podsumowaniu wozu: " + JSON.stringify(v));
     }
   }

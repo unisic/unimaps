@@ -145,6 +145,8 @@ export interface VehiclePos {
   geoNextSeq?: number | null;
   /** tracker state carried across polls */
   prog?: KbProgState;
+  /** KB: static timetable trip id this execution serves (learned from departures boards) */
+  schedTripId?: string;
 }
 
 /** Wire shape of one vehicle in GET /api/vehicles (VehiclePos.to_json()). */
@@ -188,6 +190,8 @@ export interface VehicleJson {
   geo_seq?: number;
   /** MZK course not begun (bus waiting for its departure); `delay` is null then. Emitted only when true. */
   not_started?: boolean;
+  /** KB: static timetable trip id (same space as the timetable's / board's `trip_id`); MZK's `trip_id` already is one */
+  sched_trip_id?: string;
 }
 
 /** GET /api/vehicles response. */

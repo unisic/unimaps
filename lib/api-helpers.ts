@@ -2,6 +2,8 @@
  * Small shared helpers for the API routes: input validation for values that get
  * forwarded into upstream URLs, and error responses that don't leak internals.
  */
+import { createHash } from "node:crypto";
+
 import { log } from "./logger";
 
 /** Upstream-safe id: letters/digits and ':' '.' '_' '-' only, so the value can
@@ -42,4 +44,29 @@ export function badRequest(message: string): Response {
 export function upstreamError(tag: string, err: unknown): Response {
   log.error(tag, err instanceof Error ? err.message : String(err));
   return Response.json({ error: "Upstream request failed" }, { status: 502 });
+}
+
+/** RFC 9110 weak comparison: any listed tag (W/ prefix ignored) or "*" — a proxy may weaken our strong ETag. */
+export function etagMatches(header: string | null, etag: string): boolean {
+  if (!header) return false;
+  const want = etag.replace(/^W\//, "");
+  return header.split(",").some((t) => {
+    const v = t.trim();
+    return v === "*" || v.replace(/^W\//, "") === want;
+  });
+}
+
+/**
+ * JSON with a content ETag, for data a page polls although it often has not changed: the browser
+ * keeps the copy (`no-cache` = always revalidate, never reuse unasked) and an unchanged body costs
+ * a 304 without a body. The client has to fetch with `cache: "no-cache"`; `no-store` never revalidates.
+ */
+export function jsonWithEtag(req: Request, data: unknown): Response {
+  const body = JSON.stringify(data);
+  const etag = `"${createHash("sha1").update(body).digest("base64url").slice(0, 22)}"`;
+  const headers = { "Content-Type": "application/json", "Cache-Control": "no-cache", ETag: etag };
+  if (etagMatches(req.headers.get("if-none-match"), etag)) {
+    return new Response(null, { status: 304, headers });
+  }
+  return new Response(body, { headers });
 }

@@ -1,3 +1,4 @@
+import { delayMinutes } from "../shared/departures";
 import type { Stop, TripTime, TripView, Vehicle } from "./types";
 
 /**
@@ -145,7 +146,7 @@ export function delayTxt(td: number | null | undefined): string {
   if (td == null) return "";
   // round the magnitude symmetrically so ±30 s render as mirror images
   // (plain Math.round rounds -0.5 to 0, making a 30 s-early bus read "o czasie")
-  const m = Math.sign(td) * Math.round(Math.abs(td) / 60);
+  const m = delayMinutes(td);
   if (m === 0) return "o czasie";
   return (m > 0 ? "+" : "") + m + " min";
 }

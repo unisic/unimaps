@@ -23,6 +23,9 @@ const rt = GtfsRealtimeBindings.transit_realtime;
  * position outside this box is rejected as garbage.
  */
 const SERVICE_AREA = { minLat: 48.8, maxLat: 50.5, minLon: 18.0, maxLon: 20.5 };
+/* exec -> static trip map: ~1 entry per KB trip execution of the day (a few thousand, ~150 B each) */
+const EXEC_TRIP_TTL_SEC = 3 * 3600;
+const EXEC_TRIP_MAX = 20_000;
 function inServiceArea(lat: number, lon: number): boolean {
   return (
     lat >= SERVICE_AREA.minLat &&
@@ -267,6 +270,10 @@ export class LivePoller {
 
   /** exec_id -> epoch secs at which the 404 was observed. */
   private notFound = new Map<string, number>();
+  /** exec_id -> static timetable trip id it was listed with on a departures board (+ last seen).
+   *  The trip_execution response doesn't carry the static id; the client needs it to tell
+   *  which timetable row a running bus serves. Swept in sweepExpired, hard-capped (FIFO). */
+  private execTrip = new Map<string, { trip: string; seen: number }>();
   /** stop url_id -> epoch secs before which the stop must not be rescanned. */
   private stopRescanAt = new Map<string, number>();
   /** stop url_id -> earliest scheduled departure (secs since midnight). */
@@ -512,6 +519,7 @@ export class LivePoller {
           const eidRaw = rowRaw.trip_execution_id;
           if (!pyTruthy(eidRaw)) continue;
           const eid = String(eidRaw);
+          if (pyTruthy(rowRaw.trip_id)) this.noteExecTrip(eid, String(rowRaw.trip_id), Math.floor(nowTs));
           let depSec = rowDepartureSecs(rowRaw);
           if (depSec === null) depSec = now;
           if (earliest === null || depSec < earliest) earliest = depSec;
@@ -663,6 +671,7 @@ export class LivePoller {
           }
           this.attachProgress(pos, prev, asRecord(resp));
           this.attachRouteInfo(pos, prev, asRecord(resp), "urgent");
+          pos.schedTripId = this.execTrip.get(eid)?.trip;
           this.positions.set(eid, pos);
           this.notFound.delete(eid);
           changed = true;
@@ -703,8 +712,26 @@ export class LivePoller {
   /** Evict expired 404 markers (keyed by unique per-day exec_id) so the
    *  notFound map doesn't accumulate every never-dispatched trip over time. */
   private sweepExpired(): void {
-    const cut = Math.floor(Date.now() / 1000) - this.cache404;
+    const nowTs = Math.floor(Date.now() / 1000);
+    const cut = nowTs - this.cache404;
     for (const [eid, ts] of this.notFound) if (ts <= cut) this.notFound.delete(eid);
+    // a running bus is on its next stops' boards every scan; one unseen for hours has finished
+    const tripCut = nowTs - EXEC_TRIP_TTL_SEC;
+    for (const [eid, e] of this.execTrip) if (e.seen <= tripCut && !this.positions.has(eid)) this.execTrip.delete(eid);
+  }
+
+  private noteExecTrip(eid: string, trip: string, nowTs: number): void {
+    const cur = this.execTrip.get(eid);
+    if (cur) {
+      cur.trip = trip;
+      cur.seen = nowTs;
+      return;
+    }
+    if (this.execTrip.size >= EXEC_TRIP_MAX) {
+      const oldest = this.execTrip.keys().next().value;
+      if (oldest !== undefined) this.execTrip.delete(oldest);
+    }
+    this.execTrip.set(eid, { trip, seen: nowTs });
   }
 
   /** Resolve lat/lon for a trip time entry from the loaded stops (port of _stop_coords). */
@@ -1066,6 +1093,7 @@ export class LivePoller {
     }
     this.attachProgress(pos, prev, resp);
     this.attachRouteInfo(pos, prev, resp, "urgent");
+    pos.schedTripId = this.execTrip.get(eid)?.trip;
     this.positions.set(eid, pos);
     this.notFound.delete(eid);
     this.lastGoodRefresh = nowTs;

@@ -2,6 +2,7 @@
 
 import { memo, useEffect } from "react";
 import BottomSheet from "@/components/BottomSheet";
+import { MegaphoneSimpleIcon } from "@/components/icons";
 import { CloseIcon, EmptyState, ErrorState, IconButton, SkeletonRows } from "@/components/ui";
 import {
   markAnnouncementsSeen,
@@ -30,10 +31,13 @@ function AnnouncementsSheet({ desktop, onClose }: Props) {
 
   const header = (
     <header className="px-4 pb-3 pt-2 md:pt-4">
-      <div className="flex items-start gap-2">
+      <div className="flex items-center gap-3">
+        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-white/6 text-[18px] text-text-mute">
+          <MegaphoneSimpleIcon />
+        </span>
         <div className="min-w-0 flex-1">
-          <h2 className="truncate text-[16px] font-bold leading-tight text-text">Utrudnienia</h2>
-          <p className="mt-1 text-[11px] text-text-faint">Komunikaty przewoźnika</p>
+          <h2 className="truncate text-[17px] font-semibold leading-tight tracking-tight text-text">Utrudnienia</h2>
+          <p className="mt-0.5 text-[12px] text-text-faint">Komunikaty przewoźnika</p>
         </div>
         <IconButton label="Zamknij komunikaty" onClick={onClose}>
           <CloseIcon />
@@ -53,10 +57,10 @@ function AnnouncementsSheet({ desktop, onClose }: Props) {
         ) : status === "ready" && items.length === 0 ? (
           <EmptyState text="Brak komunikatów o utrudnieniach." />
         ) : status === "ready" ? (
-          <ul>
+          <ul className="stagger space-y-2">
             {items.map((a) => (
-              <li key={`${a.id}-${a.rev}`} className="mb-2 rounded-2xl bg-white/4 p-4">
-                <p className="whitespace-pre-line text-[13px] leading-relaxed text-text-mute">
+              <li key={`${a.id}-${a.rev}`} className="rounded-xl bg-white/4 px-4 py-3.5">
+                <p className="max-w-[65ch] whitespace-pre-line text-[13.5px] leading-relaxed text-text">
                   {a.content_markdown}
                 </p>
               </li>

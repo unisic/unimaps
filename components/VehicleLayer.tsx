@@ -31,14 +31,13 @@ function buildVehicleTooltip(v: Vehicle | undefined): HTMLElement {
   const root = document.createElement("span");
   root.className = "flex items-center gap-1.5 flex-wrap";
   if (!v) return root;
-  const badge = document.createElement("span");
-  badge.className = `rounded px-1 text-[10px] font-bold leading-tight text-white ${
-    v.operator === "MZK" ? "bg-blue-600" : "bg-red-600"
-  }`;
-  badge.textContent = v.operator || "KB";
+  const dot = document.createElement("span");
+  dot.className = `h-2 w-2 shrink-0 rounded-full ${v.operator === "MZK" ? "bg-mzk" : "bg-kb"}`;
+  dot.title = v.operator || "KB";
   const line = document.createElement("b");
+  line.className = "font-semibold tabular-nums";
   line.textContent = v.line || "?";
-  root.append(badge, " ", line);
+  root.append(dot, line);
   const rest =
     (v.headsign ? ` → ${displayStopName(v.headsign)}` : "") +
     (v.side_number ? ` · #${v.side_number}` : "") +

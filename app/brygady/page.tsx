@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import BrigadesApp from "@/components/BrigadesApp";
 
 export const metadata: Metadata = {
-  title: "Brygady i Tabor — MZK Bielsko-Biała & KB | KB Mapa",
+  title: "Brygady i tabor MZK Bielsko-Biała | KB Mapa",
   description:
-    "Śledzenie numerów taborowych, rozkładów brygad, przebytych kursów i przewidywanej lokalizacji pojazdów MZK Bielsko-Biała i Komunikacji Beskidzkiej.",
+    "Autobusy MZK Bielsko-Biała na żywo: gdzie jest każdy pojazd, dzisiejsze kursy, przejechane kilometry, opóźnienia i statystyki punktualności floty.",
 };
 
 export default function BrigadesPage() {

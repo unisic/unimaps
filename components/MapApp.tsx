@@ -43,9 +43,12 @@ import StopsLayer from "@/components/StopsLayer";
 import TripLayer from "@/components/TripLayer";
 import JourneyLayer from "@/components/JourneyLayer";
 import VectorBaseLayer, { type BasemapStatus } from "@/components/VectorBaseLayer";
+import { IconContext } from "@/components/icons";
 
 const NOT_STARTED = "Pojazd jeszcze nie wyruszył";
 const LAYER_KEY = "kb:baseLayer";
+/* module-level: a stable context value never re-renders the memo()-ized icon consumers */
+const ICON_DEFAULTS = { size: "1em", weight: "bold", "aria-hidden": true } as const;
 
 type LastRequest =
   | { kind: "live"; execId: string; tripId: string | number | null; stop: Stop | null }
@@ -888,184 +891,186 @@ export default function MapApp() {
   }, [trip, vehicles]);
 
   return (
-    <div className="fixed inset-0 h-full w-full overflow-hidden bg-bg">
-      <MapContainer
-        center={initialUrl.map ? [initialUrl.map.lat, initialUrl.map.lon] : [49.822, 19.046]}
-        zoom={initialUrl.map?.zoom ?? 11}
-        maxZoom={19}
-        zoomControl={false}
-        attributionControl={false}
-        className="absolute inset-0 z-0 h-full w-full"
-      >
-        {/* bottom-left, away from the zoom + locate column in the right corner */}
-        {/* road geometry is routed server-side with OSRM — its usage policy asks for credit */}
-        <AttributionControl
-          position="bottomleft"
-          prefix={'Trasy: <a href="https://project-osrm.org/" target="_blank" rel="noopener noreferrer">OSRM</a>'}
-        />
-        <MapBridge onMap={handleMap} />
-        {basemap.status !== "failed" && tiles.kind === "vector" ? (
-          <VectorBaseLayer
-            key={`${baseLayer}-${basemap.attempt}`}
-            style={tiles.style}
-            filter={tiles.filter}
-            onStatus={handleBasemapStatus}
+    <IconContext.Provider value={ICON_DEFAULTS}>
+      <div className="fixed inset-0 h-full w-full overflow-hidden bg-bg">
+        <MapContainer
+          center={initialUrl.map ? [initialUrl.map.lat, initialUrl.map.lon] : [49.822, 19.046]}
+          zoom={initialUrl.map?.zoom ?? 11}
+          maxZoom={19}
+          zoomControl={false}
+          attributionControl={false}
+          className="absolute inset-0 z-0 h-full w-full"
+        >
+          {/* bottom-left, away from the zoom + locate column in the right corner */}
+          {/* road geometry is routed server-side with OSRM — its usage policy asks for credit */}
+          <AttributionControl
+            position="bottomleft"
+            prefix={'Trasy: <a href="https://project-osrm.org/" target="_blank" rel="noopener noreferrer">OSRM</a>'}
           />
-        ) : (
-          <TileLayer
-            key={`fb-${baseLayer}`}
-            url={RASTER_FALLBACK[baseLayer].url}
-            className={RASTER_FALLBACK[baseLayer].className}
-            maxZoom={19}
-            attribution={RASTER_FALLBACK[baseLayer].attribution}
-          />
-        )}
-        <ZoomControl position="bottomright" />
-        <StopsLayer stops={filteredStops} visible={stopsVisible} onSelect={handleSelectStop} />
-        {liveStop && (
-          <Marker
-            position={[liveStop.lat, liveStop.lon]}
-            icon={stopPingIcon}
-            interactive={false}
-            keyboard={false}
-          />
-        )}
-        <TripLayer trip={trip} desktop={desktop} vehMeta={vehMeta} liveVehicle={liveTripVeh} />
-        <JourneyLayer journey={journey} desktop={desktop} />
-        {/* while a route or journey is drawn, hide the live fleet */}
-        <VehicleLayer
-          vehicles={vehicles}
-          onVehicleClick={handleVehicleClick}
-          hidden={trip != null || journey != null}
-          lineFilter={lineFilter}
-          operatorFilter={operatorFilter}
-        />
-        {geo.pos && (
-          <>
-            {geo.pos.accuracy > 0 && geo.pos.accuracy < 2000 && (
-              <Circle
-                center={[geo.pos.lat, geo.pos.lon]}
-                radius={geo.pos.accuracy}
-                pathOptions={{ color: "#2b83ff", weight: 1, opacity: 0.5, fillColor: "#2b83ff", fillOpacity: 0.1 }}
-                interactive={false}
-              />
-            )}
+          <MapBridge onMap={handleMap} />
+          {basemap.status !== "failed" && tiles.kind === "vector" ? (
+            <VectorBaseLayer
+              key={`${baseLayer}-${basemap.attempt}`}
+              style={tiles.style}
+              filter={tiles.filter}
+              onStatus={handleBasemapStatus}
+            />
+          ) : (
+            <TileLayer
+              key={`fb-${baseLayer}`}
+              url={RASTER_FALLBACK[baseLayer].url}
+              className={RASTER_FALLBACK[baseLayer].className}
+              maxZoom={19}
+              attribution={RASTER_FALLBACK[baseLayer].attribution}
+            />
+          )}
+          <ZoomControl position="bottomright" />
+          <StopsLayer stops={filteredStops} visible={stopsVisible} onSelect={handleSelectStop} />
+          {liveStop && (
             <Marker
-              position={[geo.pos.lat, geo.pos.lon]}
-              icon={userIcon}
+              position={[liveStop.lat, liveStop.lon]}
+              icon={stopPingIcon}
               interactive={false}
               keyboard={false}
-              zIndexOffset={300}
             />
-          </>
-        )}
-      </MapContainer>
-
-      {/* dark veil until the basemap's first paint — liberty's background layer
-          is light, so without this a slow style/tile fetch reads as a white map */}
-      {basemap.status === "loading" && (
-        <div className="pointer-events-none absolute inset-0 z-[500] bg-bg animate-fade" aria-hidden>
-          <div className="skeleton absolute inset-0 rounded-none opacity-20" />
-        </div>
-      )}
-
-      <TopBar
-        count={vehData?.count ?? null}
-        offline={!!vehError}
-        stopsVisible={stopsVisible}
-        onToggleStops={toggleStops}
-        baseLayer={baseLayer}
-        onBaseLayer={setBaseLayer}
-        onOpenAnnouncements={openAnnouncements}
-        stops={stops}
-        geoPos={geo.pos}
-        onLocate={paletteLocate}
-        onPickStop={pickStopFly}
-        onPickVehicle={handleVehicleClick}
-        lineFilter={lineFilter}
-        onToggleLine={toggleLineFilter}
-        onClearLineFilter={clearLineFilter}
-        onClearView={handleClearView}
-        onOpenConnections={openConnModal}
-        searchRef={searchRef}
-        operatorFilter={operatorFilter}
-        onOperatorFilter={setOperatorFilter}
-        onShowToast={showToast}
-      />
-
-      {filterLines && (
-        <LineFilterChip
-          lines={filterLines}
-          visibleCount={
-            lineFilter
-              ? vehicles.filter(
-                  (v) =>
-                    lineFilter.has(v.line) &&
-                    (operatorFilter === "all" || (v.operator ?? "KB").toLowerCase() === operatorFilter),
-                ).length
-              : 0
-          }
-          onClear={clearLineFilter}
-          onOpenPalette={handleFocusSearch}
-        />
-      )}
-
-      <LocateButton status={geo.status} onLocate={handleLocate} />
-      <RouteButton onClick={openConnModal} />
-
-      <ConnectionsModal
-        open={connModalOpen}
-        onClose={closeConnModal}
-        stops={stops}
-        geoPos={geo.pos}
-        initialFrom={connInitialFrom}
-        onSelectStop={pickStopFly}
-        onSelectConnection={handleSelectConnection}
-      />
-
-      {toast && <Toast text={toast} onClose={closeToast} />}
-
-      {/* one sheet at a time: announcements over trip over stop; closing the
-          announcements returns to whichever sheet was underneath */}
-      {annOpen ? (
-        <AnnouncementsSheet desktop={desktop} onClose={closeAnnouncements} />
-      ) : trip ? (
-        <TripPanel
-          key={trip.gen}
-          trip={trip}
-          desktop={desktop}
-          vehMeta={vehMeta}
-          liveVeh={liveTripVeh}
-          onBack={tripFromStop ? closeTrip : null}
-          onClose={handleCloseAll}
-          onFocusStop={handleFocusStop}
-          onRetry={retryTrip}
-          initialSnap="half"
-        />
-      ) : journey ? (
-        <JourneyView
-          key={`journey-${journey.gen}`}
-          journey={journey}
-          desktop={desktop}
-          onClose={closeJourney}
-          onBackToSearch={handleBackToConnections}
-          onSelectLeg={handleSelectJourneyLeg}
-          onFocusStop={handleFocusJourneyStop}
-        />
-      ) : (
-        liveStop && (
-          <StopView
-            key={liveStop.designator}
-            stop={liveStop}
-            desktop={desktop}
+          )}
+          <TripLayer trip={trip} desktop={desktop} vehMeta={vehMeta} liveVehicle={liveTripVeh} />
+          <JourneyLayer journey={journey} desktop={desktop} />
+          {/* while a route or journey is drawn, hide the live fleet */}
+          <VehicleLayer
             vehicles={vehicles}
-            onClose={handleCloseStop}
-            onShowLive={handleShowLive}
-            onShowStatic={handleShowStatic}
-            onPlanRoute={handlePlanRoute}
+            onVehicleClick={handleVehicleClick}
+            hidden={trip != null || journey != null}
+            lineFilter={lineFilter}
+            operatorFilter={operatorFilter}
           />
-        )
-      )}
-    </div>
+          {geo.pos && (
+            <>
+              {geo.pos.accuracy > 0 && geo.pos.accuracy < 2000 && (
+                <Circle
+                  center={[geo.pos.lat, geo.pos.lon]}
+                  radius={geo.pos.accuracy}
+                  pathOptions={{ color: "#2b83ff", weight: 1, opacity: 0.5, fillColor: "#2b83ff", fillOpacity: 0.1 }}
+                  interactive={false}
+                />
+              )}
+              <Marker
+                position={[geo.pos.lat, geo.pos.lon]}
+                icon={userIcon}
+                interactive={false}
+                keyboard={false}
+                zIndexOffset={300}
+              />
+            </>
+          )}
+        </MapContainer>
+
+        {/* dark veil until the basemap's first paint — liberty's background layer
+            is light, so without this a slow style/tile fetch reads as a white map */}
+        {basemap.status === "loading" && (
+          <div className="pointer-events-none absolute inset-0 z-[500] bg-bg animate-fade" aria-hidden>
+            <div className="skeleton absolute inset-0 rounded-none opacity-20" />
+          </div>
+        )}
+
+        <TopBar
+          count={vehData?.count ?? null}
+          offline={!!vehError}
+          stopsVisible={stopsVisible}
+          onToggleStops={toggleStops}
+          baseLayer={baseLayer}
+          onBaseLayer={setBaseLayer}
+          onOpenAnnouncements={openAnnouncements}
+          stops={stops}
+          geoPos={geo.pos}
+          onLocate={paletteLocate}
+          onPickStop={pickStopFly}
+          onPickVehicle={handleVehicleClick}
+          lineFilter={lineFilter}
+          onToggleLine={toggleLineFilter}
+          onClearLineFilter={clearLineFilter}
+          onClearView={handleClearView}
+          onOpenConnections={openConnModal}
+          searchRef={searchRef}
+          operatorFilter={operatorFilter}
+          onOperatorFilter={setOperatorFilter}
+          onShowToast={showToast}
+        />
+
+        {filterLines && (
+          <LineFilterChip
+            lines={filterLines}
+            visibleCount={
+              lineFilter
+                ? vehicles.filter(
+                    (v) =>
+                      lineFilter.has(v.line) &&
+                      (operatorFilter === "all" || (v.operator ?? "KB").toLowerCase() === operatorFilter),
+                  ).length
+                : 0
+            }
+            onClear={clearLineFilter}
+            onOpenPalette={handleFocusSearch}
+          />
+        )}
+
+        <LocateButton status={geo.status} onLocate={handleLocate} />
+        <RouteButton onClick={openConnModal} />
+
+        <ConnectionsModal
+          open={connModalOpen}
+          onClose={closeConnModal}
+          stops={stops}
+          geoPos={geo.pos}
+          initialFrom={connInitialFrom}
+          onSelectStop={pickStopFly}
+          onSelectConnection={handleSelectConnection}
+        />
+
+        {toast && <Toast text={toast} onClose={closeToast} />}
+
+        {/* one sheet at a time: announcements over trip over stop; closing the
+            announcements returns to whichever sheet was underneath */}
+        {annOpen ? (
+          <AnnouncementsSheet desktop={desktop} onClose={closeAnnouncements} />
+        ) : trip ? (
+          <TripPanel
+            key={trip.gen}
+            trip={trip}
+            desktop={desktop}
+            vehMeta={vehMeta}
+            liveVeh={liveTripVeh}
+            onBack={tripFromStop ? closeTrip : null}
+            onClose={handleCloseAll}
+            onFocusStop={handleFocusStop}
+            onRetry={retryTrip}
+            initialSnap="half"
+          />
+        ) : journey ? (
+          <JourneyView
+            key={`journey-${journey.gen}`}
+            journey={journey}
+            desktop={desktop}
+            onClose={closeJourney}
+            onBackToSearch={handleBackToConnections}
+            onSelectLeg={handleSelectJourneyLeg}
+            onFocusStop={handleFocusJourneyStop}
+          />
+        ) : (
+          liveStop && (
+            <StopView
+              key={liveStop.designator}
+              stop={liveStop}
+              desktop={desktop}
+              vehicles={vehicles}
+              onClose={handleCloseStop}
+              onShowLive={handleShowLive}
+              onShowStatic={handleShowStatic}
+              onPlanRoute={handlePlanRoute}
+            />
+          )
+        )}
+      </div>
+    </IconContext.Provider>
   );
 }

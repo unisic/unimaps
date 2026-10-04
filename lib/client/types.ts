@@ -52,6 +52,8 @@ export interface Vehicle {
   geo_seq?: number;
   /** MZK bus waiting at the first stop of a course that has not begun — `delay` is null then */
   not_started?: boolean;
+  /** KB: static timetable trip id this bus serves (MZK: `trip_id` already is the course id) */
+  sched_trip_id?: string;
 }
 
 export interface VehiclesResponse {

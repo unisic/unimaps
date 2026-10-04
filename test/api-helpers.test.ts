@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { isValidId, isValidDate, isValidShapeId } from "../lib/api-helpers";
+import { isValidId, isValidDate, isValidShapeId, jsonWithEtag } from "../lib/api-helpers";
 
 describe("isValidId", () => {
   it("accepts real designator / trip-id shapes", () => {
@@ -64,5 +64,34 @@ describe("isValidShapeId", () => {
     assert.equal(isValidShapeId("kb:0123456789ab~7b21c0"), false);
     assert.equal(isValidShapeId("../etc"), false);
     assert.equal(isValidShapeId(""), false);
+  });
+});
+
+describe("jsonWithEtag", () => {
+  const req = (inm?: string) => new Request("http://x/api/fleet/208", { headers: inm ? { "if-none-match": inm } : {} });
+
+  it("sends the body with a content ETag the browser must revalidate", async () => {
+    const res = jsonWithEtag(req(), { vehicle: { sideNumber: "208" } });
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get("cache-control"), "no-cache");
+    assert.match(res.headers.get("etag") ?? "", /^"[\w-]{22}"$/);
+    assert.deepEqual(await res.json(), { vehicle: { sideNumber: "208" } });
+  });
+
+  it("answers an unchanged body with an empty 304, also for a weakened or listed validator", async () => {
+    const etag = jsonWithEtag(req(), { a: 1 }).headers.get("etag")!;
+    for (const inm of [etag, `W/${etag}`, `"other", ${etag}`]) {
+      const res = jsonWithEtag(req(inm), { a: 1 });
+      assert.equal(res.status, 304, inm);
+      assert.equal(res.headers.get("etag"), etag);
+      assert.equal(await res.text(), "");
+    }
+  });
+
+  it("a changed body gets a new ETag and the full response", () => {
+    const etag = jsonWithEtag(req(), { a: 1 }).headers.get("etag")!;
+    const res = jsonWithEtag(req(etag), { a: 2 });
+    assert.equal(res.status, 200);
+    assert.notEqual(res.headers.get("etag"), etag);
   });
 });

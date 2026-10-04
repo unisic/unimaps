@@ -2,8 +2,9 @@
 
 /** Pill under the TopBar showing the active line filter — which lines are on
  *  and how many vehicles survive the filter. Tapping the body reopens the
- *  palette (to tweak lines), the ✕ clears the filter. */
+ *  palette (to tweak lines), the X clears the filter. */
 import { memo } from "react";
+import { XIcon } from "@/components/icons";
 import { LineBadge } from "@/components/ui";
 import { wozPlural } from "@/lib/client/format";
 
@@ -22,7 +23,7 @@ function LineFilterChip({ lines, visibleCount, onClear, onOpenPalette }: Props) 
           type="button"
           onClick={onOpenPalette}
           aria-label="Zmień filtr linii"
-          className="flex min-w-0 items-center gap-1.5 rounded-full px-1 py-0.5 transition-all hover:bg-white/5 active:scale-[0.98]"
+          className="tap flex min-w-0 items-center gap-1.5 rounded-full px-1 py-0.5 hover:bg-white/5"
         >
           <span className="flex min-w-0 items-center gap-1 overflow-hidden">
             {lines.map((l) => (
@@ -37,11 +38,9 @@ function LineFilterChip({ lines, visibleCount, onClear, onOpenPalette }: Props) 
           type="button"
           onClick={onClear}
           aria-label="Wyczyść filtr linii"
-          className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-text-mute transition-all hover:bg-white/8 hover:text-text active:scale-90"
+          className="tap grid h-8 w-8 shrink-0 place-items-center rounded-full text-[15px] text-text-mute hover:bg-white/8 hover:text-text"
         >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" aria-hidden>
-            <path d="M18 6 6 18M6 6l12 12" />
-          </svg>
+          <XIcon />
         </button>
       </div>
     </div>

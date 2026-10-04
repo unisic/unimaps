@@ -12,6 +12,7 @@
  */
 import * as config from "./config";
 import { buildGtfs, gtfsFeedDate } from "./gtfs-builder";
+import { invalidateGtfsTrips } from "./gtfs-trips";
 import { invalidateLines } from "./lines";
 import { log } from "./logger";
 import { nowSecs } from "./poller";
@@ -46,6 +47,7 @@ async function maybeBuild(st: RefreshState, onBuilt?: () => void): Promise<void>
     await buildGtfs({ date: today, concurrency: config.GTFS_BUILD_CONCURRENCY });
     invalidateStopDirections();
     invalidateLines();
+    invalidateGtfsTrips();
     invalidateRouter();
     log.info("gtfs", `feed rebuilt for ${today}`);
     onBuilt?.();

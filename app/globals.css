@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 @theme {
-  --font-sans: ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
 
   /* ---- surfaces (Material-3-like dark neutrals) ---- */
   --color-bg: #0d1013;
@@ -24,6 +24,12 @@
   --color-primary: #ee7583;
   --color-primary-dim: rgba(238, 117, 131, 0.14);
 
+  /* ---- operators: data colour only (markers, line badges), never chrome.
+     Same hex as BRAND_KB / BRAND_MZK in lib/client/format.ts; Tailwind's
+     red-600 / blue-600 are different oklch values. ---- */
+  --color-kb: #dc2626;
+  --color-mzk: #2563eb;
+
   /* ---- status ---- */
   --color-good: #7ee2a8;
   --color-late: #ffb865;
@@ -35,6 +41,7 @@
   --shadow-sheet: 0 -4px 32px rgba(0, 0, 0, 0.45);
 
   --ease-spring: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
 
   --animate-pulse-dot: pulse-dot 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
   --animate-shimmer: shimmer 1.4s linear infinite;
@@ -47,9 +54,10 @@
   --animate-palette: palette-in 0.12s ease-out;
   --animate-palette-up: palette-up 0.15s ease-out;
 
+  /* opacity only: compositor-friendly, no colour halo */
   @keyframes pulse-dot {
-    0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(126, 226, 168, 0.45); }
-    50% { opacity: 0.7; box-shadow: 0 0 0 5px rgba(126, 226, 168, 0); }
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
   }
   @keyframes shimmer {
     0% { background-position: -200% 0; }
@@ -60,7 +68,7 @@
     to { opacity: 1; transform: translateY(0); }
   }
   @keyframes drop {
-    from { opacity: 0; transform: translateY(-8px) scale(0.98); }
+    from { opacity: 0; transform: translateY(-6px) scale(0.985); }
     to { opacity: 1; transform: translateY(0) scale(1); }
   }
   @keyframes fade {
@@ -92,6 +100,17 @@ html {
 body {
   min-height: 100%;
   -webkit-tap-highlight-color: transparent;
+}
+
+::selection { background: rgba(238, 117, 131, 0.3); }
+
+/* tactile press for controls: named properties only. Uses the individual
+   `scale` property so it composes with Tailwind's `translate` utilities. */
+@utility tap {
+  transition-property: scale, background-color, color, opacity;
+  transition-duration: 160ms;
+  transition-timing-function: var(--ease-spring);
+  &:active { scale: 0.96; }
 }
 
 /* Prevent unwanted iOS callout menus on long press, preserving form inputs */
@@ -134,7 +153,7 @@ body {
 .stagger > *:nth-child(5) { animation-delay: 0.14s; }
 .stagger > *:nth-child(6) { animation-delay: 0.17s; }
 
-/* ---------- vehicle markers (zbiorkom-style pill: arrow + bus + line) ---------- */
+/* ---------- vehicle markers: [heading arrow] + operator logo + line number ---------- */
 
 .veh-marker { background: none; border: 0; }
 
@@ -143,147 +162,110 @@ body {
   animation: pop 0.28s var(--ease-spring) backwards;
 }
 
-/* one horizontal rounded-full lozenge, pinned to the GPS point */
+/* one rounded lozenge pinned to the GPS point; the white ring is a box-shadow
+   so it reads on both base maps without shifting the content box */
 .veh-pill {
   position: absolute; top: 50%; left: 50%;
   transform: translate(-50%, -50%);
-  display: flex; align-items: center; gap: 2px;
-  height: 22px; padding: 0 7px 0 4px;
+  display: flex; align-items: center; gap: 3px;
+  height: 22px; padding: 0 8px 0 5px;
   border-radius: 999px;
   color: #fff;
-  font-weight: 700; font-size: 12px; line-height: 1;
+  font-weight: 650; font-size: 12px; line-height: 1;
   font-variant-numeric: tabular-nums; white-space: nowrap;
-  border: 1.5px solid rgba(255, 255, 255, 0.9);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 3px 8px -1px rgba(0, 0, 0, 0.5);
-  box-sizing: border-box;
-  transition: transform 0.15s var(--ease-spring);
+  letter-spacing: -0.01em;
+  box-shadow: 0 0 0 1.5px #fff, 0 2px 6px -1px rgba(0, 0, 0, 0.45);
+  transition: transform 0.18s var(--ease-spring);
   cursor: pointer;
 }
 .veh-pill.no-heading { padding-left: 7px; }
 
-/* left: heading arrow — ONLY this element rotates (angle set inline) */
+/* heading arrow: ONLY this element rotates (angle set inline by the animator);
+   the glyph's own 45deg base turn lives inside the SVG, never in this transform */
 .veh-arrow {
-  display: block; width: 12px; height: 12px; flex: none;
+  display: block; width: 11px; height: 11px; flex: none;
   transform-origin: 50% 50%;
   transition: transform 0.3s ease-out;
 }
-.veh-arrow svg { display: block; width: 100%; height: 100%; fill: #fff; }
+.veh-arrow svg { display: block; width: 100%; height: 100%; fill: currentColor; }
 
-/* middle: the KB brand bus mark, rendered pure white on the pill color
- * (brightness(0) makes it black keeping alpha, invert(1) flips to white) */
+/* operator logo (KB brand.svg / MZK mzk-logo.svg), rendered pure white on the
+   pill colour: brightness(0) blackens it keeping alpha, invert(1) flips to white */
 .veh-bus {
   display: block; height: 13px; width: auto; flex: none;
   filter: brightness(0) invert(1);
   pointer-events: none;
 }
 
-/* right: line label, always upright */
-.veh-line { display: block; letter-spacing: 0.2px; text-shadow: 0 1px 1px rgba(0, 0, 0, 0.28); }
+.veh-line { display: block; }
 
 .leaflet-marker-icon.veh-marker:hover .veh-pill,
 .leaflet-marker-icon.veh-marker:focus-visible .veh-pill {
-  transform: translate(-50%, -50%) scale(1.1);
+  transform: translate(-50%, -50%) scale(1.08);
 }
 
-/* user GPS location marker — blue pulsing dot */
+/* user GPS location marker: blue dot, one soft expanding halo */
 .user-loc-marker { background: none; border: 0; }
 .user-loc { position: relative; display: block; width: 22px; height: 22px; }
 .user-loc-dot {
-  position: absolute; inset: 6px; border-radius: 999px;
-  background: #2b83ff; border: 2.5px solid #fff;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+  position: absolute; inset: 5.5px; border-radius: 999px;
+  background: #2b83ff;
+  box-shadow: 0 0 0 2.5px #fff, 0 1px 4px rgba(0, 0, 0, 0.45);
 }
 .user-loc-pulse {
   position: absolute; inset: 0; border-radius: 999px;
-  background: rgba(43, 131, 255, 0.35);
-  animation: user-loc-pulse 1.8s cubic-bezier(0.2, 0.6, 0.4, 1) infinite;
+  background: rgba(43, 131, 255, 0.3);
+  animation: user-loc-pulse 2.2s var(--ease-out-soft) infinite;
 }
 @keyframes user-loc-pulse {
-  0% { transform: scale(0.5); opacity: 0.85; }
-  70%, 100% { transform: scale(1.7); opacity: 0; }
+  0% { transform: scale(0.5); opacity: 0.9; }
+  70%, 100% { transform: scale(1.8); opacity: 0; }
 }
 
-/* ---------- bus-stop markers (higher zoom only): sign + direction arrows ---------- */
+/* ---------- bus-stop markers (higher zoom only) ----------
+   Shape carries the kind (circle = stop, rounded square = bus station, like
+   the road sign), colour carries the operator, carets carry the direction. */
 
 .stop-mk-icon { background: none; border: 0; }
 .stop-mk {
   position: relative; width: 34px; height: 34px;
+  color: var(--color-kb);
   cursor: pointer;
   animation: pop 0.22s var(--ease-spring) backwards;
   transition: transform 0.16s var(--ease-spring);
 }
+.stop-mk.is-mzk { color: var(--color-mzk); }
+.stop-mk.is-both { color: #3f4a57; }
 .leaflet-marker-icon.stop-mk-icon:hover .stop-mk,
 .leaflet-marker-icon.stop-mk-icon:focus-visible .stop-mk {
-  transform: scale(1.18);
+  transform: scale(1.15);
 }
+/* leaflet.css sets marker z-index inline per marker; only !important lifts a hovered one */
 .leaflet-marker-icon.stop-mk-icon:hover { z-index: 100 !important; }
 
-/* central sign: dark transit badge with crisp white border and white bus glyph */
 .stop-mk-sign {
   position: absolute; top: 50%; left: 50%;
-  width: 20px; height: 20px; transform: translate(-50%, -50%);
+  width: 18px; height: 18px; transform: translate(-50%, -50%);
   display: grid; place-items: center;
   border-radius: 999px;
-  background: var(--color-surface, #16191d);
-  color: #ffffff;
-  border: 1.5px solid rgba(255, 255, 255, 0.95);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5), 0 3px 8px -1px rgba(0, 0, 0, 0.5);
-  box-sizing: border-box;
+  background: currentColor;
+  box-shadow: 0 0 0 1.5px #fff, 0 1px 4px rgba(0, 0, 0, 0.4);
   z-index: 2;
 }
-.stop-mk-sign svg { width: 12px; height: 12px; display: block; }
+.stop-mk-sign svg { width: 11px; height: 11px; display: block; fill: #fff; }
+.stop-mk.is-both .stop-mk-sign {
+  background: linear-gradient(90deg, var(--color-kb) 50%, var(--color-mzk) 50%);
+}
 
-/* bus station (D.A.) badge: distinctive KB brand red hub without arrows */
 .stop-mk-sign.stop-mk-station {
-  width: 24px; height: 24px;
-  background: linear-gradient(145deg, #c22239, #951426);
-  border: 2px solid #ffffff;
-  color: #ffffff;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5), 0 0 0 2px rgba(166, 25, 46, 0.35);
+  width: 22px; height: 22px;
+  border-radius: 7px;
+  box-shadow: 0 0 0 2px #fff, 0 2px 6px rgba(0, 0, 0, 0.4);
   z-index: 3;
 }
-.stop-mk-sign.stop-mk-station svg { width: 13px; height: 13px; }
+.stop-mk-sign.stop-mk-station svg { width: 14px; height: 14px; }
 
-/* MZK stops: characteristic blue (#2563eb) - high-contrast against KB red */
-.stop-mk.is-mzk .stop-mk-sign {
-  background: #2563eb;
-  border-color: #ffffff;
-  color: #ffffff;
-  box-shadow: 0 1px 3px rgba(37, 99, 235, 0.5), 0 3px 8px -1px rgba(0, 0, 0, 0.5);
-}
-.stop-mk.is-mzk .stop-mk-sign.stop-mk-station {
-  background: linear-gradient(145deg, #3b82f6, #1d4ed8);
-  border: 2px solid #ffffff;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5), 0 0 0 2px rgba(37, 99, 235, 0.35);
-}
-
-/* KB stops: constant brand red (#dc2626) */
-.stop-mk.is-kb .stop-mk-sign {
-  background: #dc2626;
-  border-color: #ffffff;
-  color: #ffffff;
-  box-shadow: 0 1px 3px rgba(220, 38, 38, 0.5), 0 3px 8px -1px rgba(0, 0, 0, 0.5);
-}
-.stop-mk.is-kb .stop-mk-sign.stop-mk-station {
-  background: linear-gradient(145deg, #ef4444, #991b1b);
-  border: 2px solid #ffffff;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5), 0 0 0 2px rgba(220, 38, 38, 0.35);
-}
-
-/* Merged / Shared stops (KB + MZK): dual red/blue badge */
-.stop-mk.is-both .stop-mk-sign {
-  background: linear-gradient(135deg, #dc2626 50%, #2563eb 50%);
-  border-color: #ffffff;
-  color: #ffffff;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5), 0 3px 8px -1px rgba(0, 0, 0, 0.5);
-}
-.stop-mk.is-both .stop-mk-sign.stop-mk-station {
-  background: linear-gradient(135deg, #ef4444 50%, #2563eb 50%);
-  border: 2px solid #ffffff;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5), 0 0 0 2px rgba(37, 99, 235, 0.35);
-}
-
-/* one wrapper per bearing: rotates from center, arrow tip points along road */
+/* one wrapper per bearing, rotating about the icon centre (17px = half of 34) */
 .stop-dir {
   position: absolute; inset: 0;
   transform-origin: 17px 17px;
@@ -291,55 +273,39 @@ body {
   z-index: 1;
 }
 .stop-dir-ptr {
-  position: absolute; top: 0.5px; left: 50%;
+  position: absolute; top: 1.5px; left: 50%;
   transform: translateX(-50%);
-  width: 12px; height: 8px;
+  width: 10px; height: 7px;
   display: flex; justify-content: center; align-items: center;
-  color: #ffffff;
-  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.7));
 }
 .stop-arrow-svg {
-  width: 12px; height: 8px;
-  display: block;
+  width: 10px; height: 7px; display: block; overflow: visible;
+  fill: currentColor;
+  stroke: #fff; stroke-width: 44px; stroke-linejoin: round;
+  paint-order: stroke;
 }
 
-/* selected-stop pulse marker */
+/* selected stop: solid core + one expanding ring in the operator colour */
+.stop-ping-marker { color: var(--color-kb); }
+.stop-ping-marker.is-mzk { color: var(--color-mzk); }
+.stop-ping-marker.is-both { color: #3f4a57; }
 .stop-ping { position: relative; width: 20px; height: 20px; }
 .stop-ping .ring {
   position: absolute; inset: 0; border-radius: 999px;
-  border: 2px solid var(--color-primary);
-  animation: stop-ring 1.8s cubic-bezier(0.2, 0.6, 0.4, 1) infinite;
+  border: 2px solid currentColor;
+  animation: stop-ring 2s var(--ease-out-soft) infinite;
 }
 .stop-ping .core {
-  position: absolute; inset: 5px; border-radius: 999px;
-  background: var(--color-brand);
-  border: 2px solid #fff;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
-}
-.stop-ping-marker.is-mzk .stop-ping .ring {
-  border-color: #2563eb;
-  background: rgba(37, 99, 235, 0.2);
-}
-.stop-ping-marker.is-mzk .stop-ping .core {
-  background: #2563eb;
-}
-.stop-ping-marker.is-kb .stop-ping .ring {
-  border-color: #dc2626;
-  background: rgba(220, 38, 38, 0.2);
-}
-.stop-ping-marker.is-kb .stop-ping .core {
-  background: #dc2626;
-}
-.stop-ping-marker.is-both .stop-ping .ring {
-  border-color: #2563eb;
-  background: rgba(37, 99, 235, 0.15);
+  position: absolute; inset: 4px; border-radius: 999px;
+  background: currentColor;
+  box-shadow: 0 0 0 2px #fff, 0 1px 4px rgba(0, 0, 0, 0.45);
 }
 .stop-ping-marker.is-both .stop-ping .core {
-  background: linear-gradient(135deg, #dc2626 50%, #2563eb 50%);
+  background: linear-gradient(90deg, var(--color-kb) 50%, var(--color-mzk) 50%);
 }
 @keyframes stop-ring {
-  0% { transform: scale(0.6); opacity: 0.9; }
-  75%, 100% { transform: scale(1.7); opacity: 0; }
+  0% { transform: scale(0.7); opacity: 0.9; }
+  75%, 100% { transform: scale(1.9); opacity: 0; }
 }
 
 /* smooth glide between GPS fixes; frozen during zoom/pan/flyTo movement */
@@ -367,10 +333,10 @@ body {
   background: var(--color-surface-2);
   color: var(--color-text);
   border: 1px solid var(--color-hairline);
-  border-radius: 8px;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+  border-radius: 10px;
+  box-shadow: var(--shadow-float);
   font-size: 12px;
-  padding: 4px 9px;
+  padding: 5px 10px;
 }
 .leaflet-tooltip-top.kb-tooltip::before { border-top-color: var(--color-surface-2); }
 .leaflet-tooltip-bottom.kb-tooltip::before { border-bottom-color: var(--color-surface-2); }
@@ -383,7 +349,7 @@ body {
 .leaflet-bar {
   border: 1px solid var(--color-hairline) !important;
   box-shadow: var(--shadow-float) !important;
-  border-radius: 14px !important;
+  border-radius: 22px !important;
   overflow: hidden;
 }
 .leaflet-bar a {
@@ -406,8 +372,10 @@ body {
   .leaflet-control-zoom { display: none; }
   /* slightly bigger vehicle pills — small screens are held further from the
      eye and tapped, not hovered (the pill overflows its icon box harmlessly) */
-  .veh-pill { height: 25px; font-size: 13px; padding: 0 8px 0 5px; }
+  .veh-pill { height: 25px; font-size: 13px; padding: 0 9px 0 6px; }
   .veh-pill.no-heading { padding-left: 8px; }
+  .veh-arrow { width: 12px; height: 12px; }
+  .veh-bus { height: 14px; }
 }
 
 .leaflet-control-attribution {
@@ -467,7 +435,6 @@ body {
   height: 8px;
   border-radius: 999px;
   background: #10b981;
-  box-shadow: 0 0 6px rgba(16, 185, 129, 0.7);
 }
 
 .journey-node-end {
@@ -478,7 +445,6 @@ body {
   height: 8px;
   border-radius: 999px;
   background: var(--color-primary);
-  box-shadow: 0 0 6px rgba(238, 117, 131, 0.7);
 }
 
 .journey-node-pin:hover {
@@ -514,6 +480,7 @@ body {
   height: 12px;
   flex: none;
   color: var(--color-late);
+  fill: currentColor;
 }
 
 .journey-trans-text {
@@ -527,7 +494,13 @@ body {
 
 /* ---------- accessibility / motion ---------- */
 
-:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; border-radius: 8px; }
+/* no border-radius here: outlines follow the element's own radius, and an
+   unlayered radius would square off every rounded-full control on focus.
+   In the base layer so an `outline-none` utility wins: sheets and dialogs take
+   programmatic focus (tabIndex -1) and must not show the ring on open. */
+@layer base {
+  :focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+}
 /* inputs inside styled containers should not have inner browser/focus-visible outlines */
 input:focus, input:focus-visible,
 textarea:focus, textarea:focus-visible,

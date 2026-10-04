@@ -1,6 +1,7 @@
 "use client";
 
 import { memo } from "react";
+import { XIcon } from "@/components/icons";
 
 interface Props {
   text: string;
@@ -11,7 +12,8 @@ interface Props {
 }
 
 /** Small floating notification under the TopBar. Presentational only — the
- *  owner decides persistence (PwaRegister: sticky; MapApp: 6 s auto-clear). */
+ *  owner decides persistence (PwaRegister: sticky; MapApp: 6 s auto-clear).
+ *  PwaRegister mounts it outside MapApp's IconContext, hence the explicit icon props. */
 function Toast({ text, actionLabel, onAction, onClose }: Props) {
   return (
     <div
@@ -24,7 +26,7 @@ function Toast({ text, actionLabel, onAction, onClose }: Props) {
         <button
           type="button"
           onClick={onAction}
-          className="shrink-0 rounded-full bg-brand px-3 py-1.5 text-xs font-semibold text-on-brand transition-transform active:scale-95"
+          className="tap shrink-0 rounded-full bg-text px-3 py-1.5 text-[12px] font-semibold text-bg hover:opacity-90"
         >
           {actionLabel}
         </button>
@@ -33,11 +35,9 @@ function Toast({ text, actionLabel, onAction, onClose }: Props) {
         type="button"
         aria-label="Zamknij powiadomienie"
         onClick={onClose}
-        className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-text-mute transition-colors hover:bg-white/8 hover:text-text"
+        className="tap grid h-7 w-7 shrink-0 place-items-center rounded-full text-[14px] text-text-mute hover:bg-white/8 hover:text-text"
       >
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
-          <path d="M6 6l12 12M18 6 6 18" />
-        </svg>
+        <XIcon weight="bold" aria-hidden />
       </button>
     </div>
   );

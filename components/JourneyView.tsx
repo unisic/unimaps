@@ -2,6 +2,7 @@
 
 import { memo, useState } from "react";
 import BottomSheet from "@/components/BottomSheet";
+import { ArrowLeftIcon, ArrowsLeftRightIcon, CaretDownIcon } from "@/components/icons";
 import { BackIcon, CloseIcon, IconButton, LineBadge } from "@/components/ui";
 import { displayStopName, hslColor, przystanekPlural } from "@/lib/client/format";
 import type { JourneyView as JourneyViewState } from "@/lib/client/types";
@@ -15,24 +16,13 @@ interface Props {
   onFocusStop: (lat: number, lon: number) => void;
 }
 
-function ChevronDown({ open }: { open: boolean }) {
-  return (
-    <svg
-      width="14"
-      height="14"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={`shrink-0 text-text-faint transition-transform duration-200 ${open ? "rotate-180" : ""}`}
-      aria-hidden
-    >
-      <path d="M6 9l6 6 6-6" />
-    </svg>
-  );
-}
+const TAB = "tap inline-flex h-9 shrink-0 items-center gap-2 rounded-full text-[13px] font-medium";
+const tabTone = (on: boolean) =>
+  on ? "bg-primary-dim text-primary" : "bg-white/6 text-text-mute hover:bg-white/10 hover:text-text";
+
+/** Clickable timeline row (boarding / alighting / intermediate stop). */
+const STOP_ROW =
+  "-mx-2 flex w-[calc(100%+1rem)] items-center justify-between gap-3 rounded-lg px-2 py-1 text-left transition-colors hover:bg-white/6";
 
 function JourneyView({
   journey,
@@ -60,25 +50,25 @@ function JourneyView({
 
   const header = (
     <div>
-      <div className="flex items-center justify-between border-b border-hairline px-4 py-3 sm:px-5">
-        <div className="flex items-center gap-2">
+      <div className="flex items-center justify-between gap-2 border-b border-hairline py-2 pl-2 pr-2.5 sm:pl-3">
+        <div className="flex min-w-0 items-center gap-1">
           <IconButton onClick={onBackToSearch} label="Wróć do wyników wyszukiwania">
             <BackIcon />
           </IconButton>
-          <div>
-            <h2 className="text-sm font-bold text-text truncate max-w-[220px] sm:max-w-[320px]">
+          <div className="min-w-0">
+            <h2 className="max-w-[220px] truncate text-[15px] font-semibold tracking-tight text-text sm:max-w-[320px]">
               {displayStopName(fromTitle)} → {displayStopName(toTitle)}
             </h2>
-            <div className="flex items-center gap-2 text-xs text-text-mute">
-              <span className="font-semibold text-text tabular-nums">
+            <div className="flex items-center gap-1.5 text-[12px] text-text-mute">
+              <span className="font-medium tabular-nums text-text">
                 {itinerary.departureTime} – {itinerary.arrivalTime}
               </span>
-              <span>·</span>
+              <span aria-hidden>·</span>
               <span className="tabular-nums">{itinerary.totalDurationMins} min</span>
               {itinerary.dayLabel && (
                 <>
-                  <span>·</span>
-                  <span className="text-brand font-medium">{itinerary.dayLabel}</span>
+                  <span aria-hidden>·</span>
+                  <span>{itinerary.dayLabel}</span>
                 </>
               )}
             </div>
@@ -90,15 +80,12 @@ function JourneyView({
       </div>
 
       {/* Segment Selector Tabs ("Cała trasa" | "1. Linia X" | "2. Linia Y") */}
-      <div className="flex items-center gap-1.5 border-b border-hairline px-4 py-2 bg-white/2 overflow-x-auto no-scrollbar sm:px-5">
+      <div className="flex items-center gap-1.5 overflow-x-auto border-b border-hairline px-4 py-2 [scrollbar-width:none] sm:px-5">
         <button
           type="button"
           onClick={() => onSelectLeg(null)}
-          className={`shrink-0 rounded-full px-3 py-1 text-xs font-semibold transition-all ${
-            selectedLegIdx === null
-              ? "bg-brand text-on-brand shadow-sm"
-              : "bg-white/6 text-text-mute hover:bg-white/10 hover:text-text"
-          }`}
+          aria-pressed={selectedLegIdx === null}
+          className={`${TAB} px-3.5 ${tabTone(selectedLegIdx === null)}`}
         >
           Cała trasa ({legs.length > 1 ? `${legs.length} linie` : "1 linia"})
         </button>
@@ -108,15 +95,11 @@ function JourneyView({
             key={`tab-leg-${lIdx}`}
             type="button"
             onClick={() => onSelectLeg(lIdx)}
-            className={`flex items-center gap-1.5 shrink-0 rounded-full px-3 py-1 text-xs font-semibold transition-all ${
-              selectedLegIdx === lIdx
-                ? "bg-brand text-on-brand shadow-sm"
-                : "bg-white/6 text-text-mute hover:bg-white/10 hover:text-text"
-            }`}
+            aria-pressed={selectedLegIdx === lIdx}
+            className={`${TAB} pl-1 pr-3 ${tabTone(selectedLegIdx === lIdx)}`}
           >
-            <span>{lIdx + 1}.</span>
             <LineBadge line={leg.line} />
-            <span className="text-[11px] opacity-80">{leg.durationMins}m</span>
+            <span className="tabular-nums">{leg.durationMins} min</span>
           </button>
         ))}
       </div>
@@ -133,7 +116,7 @@ function JourneyView({
     >
       {/* Timeline of legs and transfers */}
       <div
-        className="divide-y divide-hairline px-4 py-3 sm:px-5 space-y-4 overflow-y-auto h-full"
+        className="h-full overflow-y-auto px-4 py-3 sm:px-5"
         style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 1.25rem)" }}
       >
         {legs.map((leg, lIdx) => {
@@ -146,73 +129,80 @@ function JourneyView({
           return (
             <div
               key={`leg-card-${lIdx}`}
-              className={`pt-3 first:pt-0 transition-opacity ${isSelected ? "opacity-100" : "opacity-60"}`}
+              className={`transition-opacity duration-200 ${isSelected ? "opacity-100" : "opacity-50"}`}
             >
               {/* Leg header */}
-              <div className="rounded-xl bg-white/4 p-3 border border-white/6">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <span className="flex h-5 w-5 items-center justify-center rounded-full bg-white/10 text-[11px] font-bold text-text-mute">
+              <div className="rounded-xl bg-white/4 p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-white/8 text-[11px] font-semibold tabular-nums text-text-mute">
                       {lIdx + 1}
                     </span>
                     <LineBadge line={leg.line} />
-                    <span className="font-semibold text-xs text-text truncate max-w-[180px] sm:max-w-[260px]">
+                    <span className="max-w-[180px] truncate text-[13px] font-medium text-text sm:max-w-[260px]">
                       {displayStopName(leg.headsign)}
                     </span>
                   </div>
-                  <span className="tabular-nums text-xs text-text-mute font-medium">
+                  <span className="shrink-0 text-[12px] tabular-nums text-text-faint">
                     {leg.durationMins} min · {leg.stopsCount} {przystanekPlural(leg.stopsCount)}
                   </span>
                 </div>
 
                 {/* Departure & Arrival summary points */}
-                <div className="mt-3 space-y-2 border-l-2 pl-3 ml-1.5" style={{ borderColor: color }}>
+                <div className="ml-2 mt-3 space-y-1 border-l-2 pl-3" style={{ borderColor: color }}>
                   {/* Boarding stop */}
-                  <div
-                    className="cursor-pointer hover:underline text-xs"
+                  <button
+                    type="button"
+                    className={STOP_ROW}
                     onClick={() => {
                       const s = stops[0];
                       if (s?.lat && s?.lon) onFocusStop(s.lat, s.lon);
                     }}
                   >
-                    <div className="flex items-center justify-between">
-                      <div className="font-semibold text-text">{displayStopName(leg.fromStopName)}</div>
-                      <strong className="tabular-nums text-text font-bold ml-2">{leg.departureTime}</strong>
-                    </div>
-                    <div className="text-[10px] text-text-faint">Odjazd z przystanku</div>
-                  </div>
+                    <span className="min-w-0">
+                      <span className="block truncate text-[13px] font-medium text-text">
+                        {displayStopName(leg.fromStopName)}
+                      </span>
+                      <span className="block text-[11px] text-text-faint">Odjazd z przystanku</span>
+                    </span>
+                    <span className="shrink-0 text-[14px] font-semibold tabular-nums text-text">{leg.departureTime}</span>
+                  </button>
 
                   {/* Expandable intermediate stops list */}
                   {intermediateStops.length > 0 && (
-                    <div className="py-1">
+                    <div>
                       <button
                         type="button"
                         onClick={() => toggleLegExpand(lIdx)}
-                        className="flex items-center gap-1.5 text-[11px] font-medium text-text-mute hover:text-text transition-colors py-0.5"
+                        aria-expanded={isExpanded}
+                        className="flex h-8 items-center gap-1.5 text-[12px] font-medium text-text-mute transition-colors hover:text-text"
                       >
                         <span>
                           {isExpanded
                             ? "Ukryj przystanki pośrednie"
                             : `Pokaż ${intermediateStops.length} ${przystanekPlural(intermediateStops.length)} pośrednich`}
                         </span>
-                        <ChevronDown open={isExpanded} />
+                        <CaretDownIcon
+                          className={`text-[12px] text-text-faint transition-transform duration-200 ${isExpanded ? "rotate-180" : ""}`}
+                        />
                       </button>
 
                       {isExpanded && (
-                        <div className="mt-2 space-y-1.5 border-l border-white/10 pl-2 ml-1 text-[11px]">
+                        <div className="mb-1 animate-fade">
                           {intermediateStops.map((st, sIdx) => (
-                            <div
+                            <button
+                              type="button"
                               key={`int-stop-${sIdx}`}
                               onClick={() => {
                                 if (st.lat && st.lon) onFocusStop(st.lat, st.lon);
                               }}
-                              className="flex items-center justify-between text-text-mute hover:text-text cursor-pointer transition-colors py-0.5"
+                              className={`${STOP_ROW} text-[12px] text-text-mute hover:text-text`}
                             >
-                              <span className="truncate max-w-[200px]">{displayStopName(st.stopName)}</span>
-                              <span className="tabular-nums text-[10px] text-text-faint ml-2">
+                              <span className="truncate">{displayStopName(st.stopName)}</span>
+                              <span className="shrink-0 tabular-nums text-text-faint">
                                 {st.arrivalTime || st.departureTime}
                               </span>
-                            </div>
+                            </button>
                           ))}
                         </div>
                       )}
@@ -220,36 +210,42 @@ function JourneyView({
                   )}
 
                   {/* Alighting stop */}
-                  <div
-                    className="cursor-pointer hover:underline text-xs"
+                  <button
+                    type="button"
+                    className={STOP_ROW}
                     onClick={() => {
                       const s = stops[stops.length - 1];
                       if (s?.lat && s?.lon) onFocusStop(s.lat, s.lon);
                     }}
                   >
-                    <div className="flex items-center justify-between">
-                      <div className="font-semibold text-text">{displayStopName(leg.toStopName)}</div>
-                      <strong className="tabular-nums text-text font-bold ml-2">{leg.arrivalTime}</strong>
-                    </div>
-                    <div className="text-[10px] text-text-faint">Przyjazd na przystanek</div>
-                  </div>
+                    <span className="min-w-0">
+                      <span className="block truncate text-[13px] font-medium text-text">
+                        {displayStopName(leg.toStopName)}
+                      </span>
+                      <span className="block text-[11px] text-text-faint">Przyjazd na przystanek</span>
+                    </span>
+                    <span className="shrink-0 text-[14px] font-semibold tabular-nums text-text">{leg.arrivalTime}</span>
+                  </button>
                 </div>
               </div>
 
               {/* Transfer block if there is a next leg */}
               {lIdx < legs.length - 1 && (
-                <div className="my-2.5 flex items-center gap-3 rounded-xl border border-amber-500/30 bg-amber-500/8 px-3 py-2 text-xs">
-                  <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-amber-500/20 text-amber-400">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                      <path d="M7 16V4m0 0L3 8m4-4l4 4m6 4v12m0 0l4-4m-4 4l-4-4" />
-                    </svg>
-                  </div>
-                  <div className="flex-1">
-                    <div className="font-semibold text-amber-300">
+                <div className="my-2 flex items-center gap-3 px-1 py-1.5">
+                  {/* late tone = the transfer pin's colour on the map */}
+                  <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-late/12 text-[15px] text-late">
+                    <ArrowsLeftRightIcon />
+                  </span>
+                  <div className="min-w-0 flex-1 text-[12px]">
+                    <div className="font-medium text-text">
                       Przesiadka na przystanku: {displayStopName(leg.toStopName)}
                     </div>
-                    <div className="text-[11px] text-amber-200/80">
-                      Czas na przesiadkę: <strong>{legs[lIdx + 1] ? Math.max(1, Math.round((legs[lIdx + 1].departureSecs - leg.arrivalSecs) / 60)) : itinerary.transferWaitMins ?? 5} min</strong> · kolejny odjazd o {legs[lIdx + 1]?.departureTime}
+                    <div className="text-text-mute">
+                      Czas na przesiadkę:{" "}
+                      <span className="font-medium tabular-nums text-text">
+                        {legs[lIdx + 1] ? Math.max(1, Math.round((legs[lIdx + 1].departureSecs - leg.arrivalSecs) / 60)) : itinerary.transferWaitMins ?? 5} min
+                      </span>{" "}
+                      · kolejny odjazd o <span className="tabular-nums">{legs[lIdx + 1]?.departureTime}</span>
                     </div>
                   </div>
                 </div>
@@ -259,18 +255,19 @@ function JourneyView({
         })}
 
         {/* Footer actions */}
-        <div className="pt-3 flex flex-col sm:flex-row items-center justify-between gap-2 border-t border-hairline">
+        <div className="mt-4 flex flex-col items-center justify-between gap-2 border-t border-hairline pt-4 sm:flex-row">
           <button
             type="button"
             onClick={onBackToSearch}
-            className="w-full sm:w-auto rounded-xl bg-white/8 px-4 py-2 text-xs font-semibold text-text hover:bg-white/12 active:scale-95 transition-all text-center"
+            className="tap inline-flex h-10 w-full items-center justify-center gap-1.5 rounded-full bg-white/8 px-4 text-[13px] font-medium text-text hover:bg-white/12 sm:w-auto"
           >
-            ← Wróć do listy połączeń
+            <ArrowLeftIcon className="text-[14px]" />
+            Wróć do listy połączeń
           </button>
           <button
             type="button"
             onClick={onClose}
-            className="w-full sm:w-auto rounded-xl bg-brand px-4 py-2 text-xs font-semibold text-on-brand hover:brightness-110 active:scale-95 transition-all text-center"
+            className="tap inline-flex h-10 w-full items-center justify-center rounded-full bg-text px-4 text-[13px] font-medium text-bg hover:bg-white sm:w-auto"
           >
             Zamknij widok trasy
           </button>

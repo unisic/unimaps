@@ -95,8 +95,7 @@ export function parseRelMinutes(s: unknown): number | null {
 }
 
 let wallFmt: Intl.DateTimeFormat | null = null;
-/** Warsaw wall clock at `ts` (epoch s): minutes east of UTC and minute-of-day. */
-function warsawWall(ts: number): { off: number; mod: number } {
+function wallParts(ts: number): Record<string, string> {
   wallFmt ??= new Intl.DateTimeFormat("en-GB", {
     timeZone: "Europe/Warsaw",
     hour12: false,
@@ -108,6 +107,12 @@ function warsawWall(ts: number): { off: number; mod: number } {
   });
   const p: Record<string, string> = {};
   for (const x of wallFmt.formatToParts(new Date(ts * 1000))) p[x.type] = x.value;
+  return p;
+}
+
+/** Warsaw wall clock at `ts` (epoch s): minutes east of UTC and minute-of-day. */
+function warsawWall(ts: number): { off: number; mod: number } {
+  const p = wallParts(ts);
   const h = Number(p.hour) % 24;
   const mi = Number(p.minute);
   const wallMs = Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day), h, mi);
@@ -416,6 +421,22 @@ export function hhmm(epochSec: number): string {
   return `${h.padStart(2, "0")}:${m}`;
 }
 
+/** Whole minutes of a delay as the label prints them: half away from zero, so ±30 s read as mirror images. */
+export function delayMinutes(sec: number): number {
+  return Math.sign(sec) * Math.round(Math.abs(sec) / 60);
+}
+
+/**
+ * "HH:MM" of a row's ETA, rounded like the countdown and the delay label (`hhmm` alone truncates:
+ * plan 18:40 + 150 s printed 18:42 next to "+3 min"). Counted from the plan when there is one, so
+ * the printed plan + the printed delay is exactly the printed time.
+ */
+export function etaClock(t: Pick<Timing, "etaTs" | "planTs">): string {
+  if (t.etaTs == null) return "";
+  if (t.planTs == null) return hhmm(Math.round(t.etaTs / 60) * 60);
+  return hhmm(t.planTs + delayMinutes(t.etaTs - t.planTs) * 60);
+}
+
 /**
  * The big text of a row. canceled → "odwołany"; standing at the stop → "odjeżdża"
  * (the official KB wording); timetable-only → the clock time; else the countdown
@@ -426,11 +447,11 @@ export function etaLabel(t: Timing, nowTs: number, fallback = ""): string {
   if (t.canceled) return "odwołany";
   if (t.atStop) return "odjeżdża";
   if (t.etaTs == null) return fallback;
-  if (t.source === "schedule") return hhmm(t.etaTs);
+  if (t.source === "schedule") return etaClock(t);
   const mins = minutesUntil(t, nowTs); // THE minute the order is ranked by — one definition, no drift
   if (mins <= 0) return "teraz";
   if (mins < 60) return `${mins} min`;
-  return hhmm(t.etaTs);
+  return etaClock(t);
 }
 
 /* ------------------------------------------------------------------ ordering */
@@ -512,4 +533,157 @@ export function uniqueKeys(rows: readonly TimingRow[]): string[] {
 export function preSortRows<R extends TimingRow>(rows: readonly R[], nowTs: number): R[] {
   const items = rows.map((row) => ({ row, timing: resolveTiming(row, null) }));
   return items.sort((a, b) => compareBoardItems(a, b, nowTs)).map((it) => it.row);
+}
+
+/* -------------------------------------------- timetable around the board */
+
+/**
+ * Epoch second of the wall-clock time `secsOfDay` on `dateISO` ("YYYY-MM-DD") in
+ * Europe/Warsaw: the timetable's seconds-of-day placed on the absolute time line
+ * the board uses. ≥ 86400 rolls into the next day. null for a malformed date.
+ */
+export function warsawDayTs(dateISO: string, secsOfDay: number): number | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateISO);
+  if (!m || !Number.isFinite(secsOfDay)) return null;
+  // the wall clock read as if it were UTC, then shifted by the Warsaw offset in force at that instant
+  const naive = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])) / 1000 + secsOfDay;
+  const first = naive - warsawWall(naive).off * 60;
+  return naive - warsawWall(first).off * 60;
+}
+
+/** "YYYY-MM-DD" of an epoch instant on the agency's wall clock (Europe/Warsaw). */
+export function warsawDateISO(epochSec: number): string {
+  const p = wallParts(epochSec);
+  return `${p.year}-${p.month}-${p.day}`;
+}
+
+/** A timetable departure placed on the absolute time line. */
+export interface SchedDeparture {
+  trip_id: number | string;
+  operator?: Operator;
+  planTs: number;
+}
+
+/** A static KB trip id repeats every day: a live row hides the timetable visit of the SAME day only. */
+const SAME_VISIT_SEC = 12 * 3600;
+
+/**
+ * Trip identity shared by timetable rows, board rows and live vehicles: an MZK
+ * course without its variant ("mzk:<course>"; the variant is not always known on
+ * both sides), a KB static trip id as is.
+ */
+export function schedTripKey(tripId: number | string): string {
+  const s = String(tripId);
+  if (!s.startsWith("mzk:")) return s;
+  const end = s.indexOf(":", 4);
+  return end < 0 ? s : s.slice(0, end);
+}
+
+/** The timetable trip a live vehicle serves, as a `schedTripKey`; null = unknown (KB bus not yet seen on any board). */
+export function vehicleTripKey(v: { operator?: Operator; trip_id?: string; sched_trip_id?: string }): string | null {
+  if (v.operator === "MZK") return v.trip_id ? `mzk:${v.trip_id}` : null;
+  return v.sched_trip_id || null;
+}
+
+/** The running bus of a timetable departure: its trip's visit nearest to now (the same id tomorrow is ~24 h away). */
+export function schedVehicle<V>(s: SchedDeparture, byTrip: ReadonlyMap<string, V>, nowTs: number): V | null {
+  if (Math.abs(s.planTs - nowTs) >= SAME_VISIT_SEC) return null;
+  return byTrip.get(schedTripKey(s.trip_id)) ?? null;
+}
+
+/**
+ * Timing of a timetable departure the board does not list but whose bus is on
+ * the road: the plan + the vehicle's CURRENT delay (both operators). A course
+ * that has not begun keeps its plan without a delay; no usable delay is the
+ * timetable again.
+ */
+export function schedTiming(planTs: number, veh: VehDelay | null | undefined): Timing {
+  const base = { planTs, atStop: false, canceled: false };
+  if (veh?.not_started) return { ...base, etaTs: planTs, delaySec: null, estimated: false, source: "waiting" };
+  const d = veh ? finite(veh.delay) : null;
+  if (d == null) return { ...base, etaTs: planTs, delaySec: null, estimated: false, source: "schedule" };
+  return { ...base, etaTs: planTs + d, delaySec: d, estimated: true, source: "vehicle" };
+}
+
+/**
+ * The timetable departures the live board does not show, all ascending by plan:
+ * - `earlier`: planned before `nowTs` and gone from the board;
+ * - `gaps`: planned inside THAT operator's live window (each upstream cuts its
+ *   board differently: MZK ~70 min, KB ~3 h) but missing from it. OnTime lists
+ *   only courses with a tracked vehicle, so an MZK board has holes the timetable
+ *   fills (KB boards list every planned course; measured 0 holes);
+ * - `later`: planned at or after the end of that operator's live window, or from
+ *   `nowTs` for an operator with no live row at all.
+ * `liveEnd` is the last live row's time (null without live rows).
+ */
+export function boardExtension<S extends SchedDeparture>(
+  sched: readonly S[],
+  live: readonly TimingRow[],
+  nowTs: number,
+): { earlier: S[]; gaps: S[]; later: S[]; liveEnd: number | null } {
+  const liveAt = new Map<string, number[]>();
+  const windowEnd = new Map<string, number>();
+  let liveEnd: number | null = null;
+  for (const r of live) {
+    const t = finite(r.plan_ts) ?? finite(r.eta_ts) ?? nowTs;
+    if (r.trip_id != null) {
+      const k = schedTripKey(r.trip_id);
+      const list = liveAt.get(k);
+      if (list) list.push(t);
+      else liveAt.set(k, [t]);
+    }
+    const op = r.operator ?? "";
+    windowEnd.set(op, Math.max(windowEnd.get(op) ?? t, t));
+    liveEnd = Math.max(liveEnd ?? t, t);
+  }
+  const earlier: S[] = [];
+  const gaps: S[] = [];
+  const later: S[] = [];
+  for (const s of sched) {
+    const seen = liveAt.get(schedTripKey(s.trip_id));
+    if (seen?.some((t) => Math.abs(t - s.planTs) < SAME_VISIT_SEC)) continue;
+    if (s.planTs < nowTs) earlier.push(s);
+    else if (s.planTs >= Math.max(nowTs, windowEnd.get(s.operator ?? "") ?? nowTs)) later.push(s);
+    else gaps.push(s);
+  }
+  const byPlan = (a: S, b: S) => a.planTs - b.planTs;
+  return { earlier: earlier.sort(byPlan), gaps: gaps.sort(byPlan), later: later.sort(byPlan), liveEnd };
+}
+
+/** The board shows timetable departures by itself up to an hour ahead (or to its last live row)... */
+export const AUTO_AHEAD_SEC = 3600;
+/** ...and further until it holds this many upcoming departures. */
+export const AUTO_MIN_ROWS = 6;
+
+/**
+ * End (inclusive) of the `later` departures (ascending) the board shows without a
+ * tap: everything planned up to `floorTs`, then more until `shown` (rows already
+ * on the board) + the added ones reach `minRows`. null = none to add.
+ */
+export function autoLaterHorizon(
+  later: readonly SchedDeparture[],
+  shown: number,
+  floorTs: number,
+  minRows = AUTO_MIN_ROWS,
+): number | null {
+  let at: number | null = null;
+  let n = shown;
+  for (const s of later) {
+    if (s.planTs > floorTs && n >= minRows) break;
+    at = s.planTs;
+    n += 1;
+  }
+  return at;
+}
+
+/** Horizon that reveals the next `step` of `later` (ascending) beyond `until`; null when none is left. */
+export function nextLaterHorizon(later: readonly SchedDeparture[], until: number | null, step: number): number | null {
+  const rest = until == null ? later : later.filter((s) => s.planTs > until);
+  return rest.length ? rest[Math.min(step, rest.length) - 1].planTs : null;
+}
+
+/** Horizon that reveals the `step` departures of `earlier` (ascending) just before `from`; null when none is left. */
+export function nextEarlierHorizon(earlier: readonly SchedDeparture[], from: number | null, step: number): number | null {
+  const rest = from == null ? earlier : earlier.filter((s) => s.planTs < from);
+  return rest.length ? rest[Math.max(0, rest.length - step)].planTs : null;
 }

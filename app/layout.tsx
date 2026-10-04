@@ -1,9 +1,10 @@
 import type { Metadata, Viewport } from "next";
+import { GeistSans } from "geist/font/sans";
 import PwaRegister from "@/components/PwaRegister";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Komunikacja Beskidzka — mapa pojazdów na żywo",
+  title: "Komunikacja Beskidzka: mapa pojazdów na żywo",
   applicationName: "KB Mapa",
   description:
     "Wszystkie autobusy Komunikacji Beskidzkiej na jednej mapie: pozycje na żywo, opóźnienia, rozkłady przystanków i trasy linii.",
@@ -47,7 +48,7 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="pl" className="min-h-full">
+    <html lang="pl" className={`${GeistSans.variable} min-h-full`}>
       <head>
         <link rel="preconnect" href="https://tiles.openfreemap.org" crossOrigin="" />
         <link rel="dns-prefetch" href="https://tiles.openfreemap.org" />
