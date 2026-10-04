@@ -368,6 +368,8 @@ body {
 .leaflet-bar a.leaflet-disabled { background: var(--color-surface) !important; color: var(--color-text-faint) !important; }
 /* align the zoom column with the LocateButton (right-3 = 12px) */
 .leaflet-bottom.leaflet-right .leaflet-control-zoom { margin: 0 12px 12px 0; }
+/* viewport-fit=cover: the map runs under the home indicator / gesture bar, its controls must not */
+.leaflet-container .leaflet-bottom { bottom: env(safe-area-inset-bottom, 0px); }
 @media (max-width: 767px) {
   .leaflet-control-zoom { display: none; }
   /* slightly bigger vehicle pills — small screens are held further from the

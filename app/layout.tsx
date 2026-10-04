@@ -13,7 +13,9 @@ export const metadata: Metadata = {
   },
   appleWebApp: {
     capable: true,
-    statusBarStyle: "black-translucent",
+    // not black-translucent: iOS 26 standalone then sizes the web view one status bar
+    // short and leaves a dead strip at the bottom (WebKit bug 301108)
+    statusBarStyle: "black",
     title: "KB Mapa",
   },
   icons: {
