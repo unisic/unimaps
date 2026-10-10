@@ -97,11 +97,13 @@ function SwitchRow({
   onToggle,
   label,
   hint,
+  badge,
 }: {
   checked: boolean;
   onToggle: () => void;
   label: string;
   hint?: string;
+  badge?: string;
 }) {
   const hintId = useId();
   return (
@@ -114,7 +116,14 @@ function SwitchRow({
       className="flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2.5 text-left transition-colors hover:bg-white/5"
     >
       <span className="flex flex-col gap-0.5">
-        <span className="text-text">{label}</span>
+        <span className="flex items-center gap-2 text-text">
+          {label}
+          {badge && (
+            <span className="shrink-0 rounded-full bg-white/6 px-1.5 py-px text-[10.5px] font-medium text-text-mute">
+              {badge}
+            </span>
+          )}
+        </span>
         {hint && (
           <span id={hintId} className="text-[12px] leading-snug text-text-faint">
             {hint}
@@ -367,6 +376,7 @@ function TopBar({
               checked={smoothMotion}
               onToggle={() => setSmoothMotion(!smoothMotion)}
               label="Płynny ruch pojazdów"
+              badge="wczesna wersja"
               hint="Szacuje pozycję autobusu między aktualizacjami"
             />
           </div>

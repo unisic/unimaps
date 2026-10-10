@@ -11,15 +11,11 @@ import { resolveSmoothMotion } from "../lib/client/smoothMotion";
 import { encodePolyline } from "../lib/shared/polyline";
 
 describe("resolveSmoothMotion", () => {
-  it("an explicit choice wins; otherwise follow the OS reduced-motion setting", () => {
-    assert.equal(resolveSmoothMotion("1", true), true);
-    assert.equal(resolveSmoothMotion("1", false), true);
-    assert.equal(resolveSmoothMotion("0", false), false);
-    assert.equal(resolveSmoothMotion("0", true), false);
-    assert.equal(resolveSmoothMotion(null, false), true);
-    assert.equal(resolveSmoothMotion(null, true), false);
-    assert.equal(resolveSmoothMotion("garbage", false), true);
-    assert.equal(resolveSmoothMotion("garbage", true), false);
+  it("an early feature: on only after an explicit opt-in", () => {
+    assert.equal(resolveSmoothMotion("1"), true);
+    assert.equal(resolveSmoothMotion("0"), false);
+    assert.equal(resolveSmoothMotion(null), false);
+    assert.equal(resolveSmoothMotion("garbage"), false);
   });
 });
 
