@@ -432,7 +432,7 @@ function TripView({
                       />
                       {isLiveWithLoc && Math.round(railPos) === idx && (
                         <span
-                          className="absolute left-1/2 z-10 flex h-6 w-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full text-[13px] text-white transition-[top] duration-700 ease-out-soft"
+                          className="absolute left-1/2 z-10 flex h-6 w-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full text-[14px] text-white transition-[top] duration-700 ease-out-soft"
                           style={{
                             top: `${50 + (railPos - idx) * 100}%`,
                             background: lineColor,
