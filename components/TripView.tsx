@@ -7,6 +7,7 @@ import {
   ArrowRightIcon,
   ArrowsClockwiseIcon,
   ArrowsHorizontalIcon,
+  BusIcon,
   DropIcon,
   LeafIcon,
   LightningIcon,
@@ -80,6 +81,11 @@ function Feature({ icon, label, title }: { icon: React.ReactNode; label: string;
     </span>
   );
 }
+
+/** % of a half-row rail the vehicle has covered; `x` = stop units travelled into that half */
+const railFill = (x: number) => Math.max(0, Math.min(100, x * 200));
+/** the travelled rail: opaque (it covers the line-coloured rail underneath) */
+const RAIL_DONE = "color-mix(in srgb, #fff 16%, var(--color-surface))";
 
 function TimelineSkeleton() {
   return (
@@ -208,7 +214,7 @@ function TripView({
         const prevSched = secsFromHHMM(times[i - 1].departure_time);
         const progress =
           prevSched != null ? Math.min(1, Math.max(0, (now - prevSched) / (sched - prevSched))) : 0;
-        return { index: i - 1, isAtStop: false, progress };
+        return { index: i, isAtStop: false, progress };
       }
     }
     // All scheduled times in the past -> course completed
@@ -218,6 +224,8 @@ function TripView({
   const vti = activeStop.index;
   const isAtStop = activeStop.isAtStop;
   const activeProgress = Math.max(0, Math.min(1, activeStop.progress ?? (isAtStop ? 1 : 0.5)));
+  /* the vehicle on the rail in stop units: k = at stop k, k + p = between stops k and k + 1 */
+  const railPos = Math.min(trip.rawTimes.length - 1, Math.max(-0.5, isAtStop ? vti : vti - 1 + activeProgress));
   const headerDelay = notStarted
     ? null
     : (currentVeh?.delay ?? trip.rawTimes[vti ?? -1]?.estimate?.time_diff ?? null);
@@ -364,11 +372,8 @@ function TripView({
         ) : (
           <ol className="px-4 pt-1" style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 1.25rem)" }}>
             {trip.rawTimes.map((t, idx) => {
-              const isCurrent = vti != null && idx === vti;
-              const passed = vti != null && idx < vti;
-              const isTransit = !isAtStop && vti != null && vti > 0;
-              const isPrevStop = isTransit && idx === vti - 1;
-              const isNextStop = isTransit && idx === vti;
+              const isCurrent = idx === vti;
+              const passed = idx < vti;
               const diff = notStarted ? null : (t.estimate?.time_diff ?? null);
               const effectiveDiff = diff ?? (isLiveWithLoc && !passed ? headerDelay : null);
               const planned = secsFromHHMM(t.departure_time);
@@ -398,80 +403,44 @@ function TripView({
                       {shown}
                     </span>
 
-                    {/* timeline node */}
-                    <span className="relative w-5 shrink-0 self-stretch" aria-hidden>
-                      {/* top half line (from top of row to center node) */}
+                    {/* rail: the travelled part muted, the rest in the line colour; the live bus rides on it */}
+                    <span className="relative w-6 shrink-0 self-stretch" aria-hidden>
                       {!first && (
-                        <span
-                          className="absolute left-1/2 top-0 h-1/2 w-[3px] -translate-x-1/2"
-                          style={{ background: idx <= vti ? "rgba(255,255,255,0.18)" : lineColor }}
-                        />
+                        <span className="absolute left-1/2 top-0 h-1/2 w-1.5 -translate-x-1/2" style={{ background: lineColor }}>
+                          <span
+                            className="absolute inset-x-0 top-0 transition-[height] duration-700 ease-out-soft"
+                            style={{ height: `${railFill(railPos - idx + 0.5)}%`, background: RAIL_DONE }}
+                          />
+                        </span>
                       )}
-                      {/* descending line overlay on approaching stop (when vehicle enters second half of segment) */}
-                      {isNextStop && activeProgress > 0.5 && (
-                        <span
-                          className="pointer-events-none absolute left-1/2 top-0 w-[3px] -translate-x-1/2 rounded-full transition-[height] duration-700 ease-out-soft"
-                          style={{
-                            height: `${Math.min(50, (activeProgress - 0.5) * 100)}%`,
-                            background: lineColor,
-                          }}
-                        />
-                      )}
-                      {/* vehicle marker moving down approaching stop */}
-                      {isNextStop && activeProgress > 0.5 && (
-                        <span
-                          className="pointer-events-none absolute left-1/2 z-10 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full border-[2.5px] border-white shadow-sm transition-[top] duration-700 ease-out-soft"
-                          style={{ top: `${(activeProgress - 0.5) * 100}%`, background: lineColor }}
-                        />
-                      )}
-
-                      {/* bottom half line (from center node to bottom of row) */}
                       {!last && (
-                        <span
-                          className="absolute bottom-0 left-1/2 h-1/2 w-[3px] -translate-x-1/2"
-                          style={{ background: idx < vti ? "rgba(255,255,255,0.18)" : lineColor }}
-                        />
+                        <span className="absolute bottom-0 left-1/2 h-1/2 w-1.5 -translate-x-1/2" style={{ background: lineColor }}>
+                          <span
+                            className="absolute inset-x-0 top-0 transition-[height] duration-700 ease-out-soft"
+                            style={{ height: `${railFill(railPos - idx)}%`, background: RAIL_DONE }}
+                          />
+                        </span>
                       )}
-                      {/* descending line overlay on previous stop (vehicle descending in first half of segment) */}
-                      {isPrevStop && (
+                      <span
+                        className={`absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full ${
+                          first || last ? "h-2.5 w-2.5" : "h-1.5 w-1.5"
+                        }`}
+                        style={{
+                          background: "var(--color-surface)",
+                          boxShadow: `0 0 0 ${first || last ? 3 : 2}px ${passed ? RAIL_DONE : lineColor}`,
+                        }}
+                      />
+                      {isLiveWithLoc && Math.round(railPos) === idx && (
                         <span
-                          className="pointer-events-none absolute left-1/2 w-[3px] -translate-x-1/2 rounded-full transition-[height] duration-700 ease-out-soft"
+                          className="absolute left-1/2 z-10 flex h-6 w-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full text-[13px] text-white transition-[top] duration-700 ease-out-soft"
                           style={{
-                            top: "50%",
-                            height: `${Math.min(50, activeProgress * 100)}%`,
+                            top: `${50 + (railPos - idx) * 100}%`,
                             background: lineColor,
+                            boxShadow: "0 0 0 3px var(--color-surface)",
                           }}
-                        />
-                      )}
-                      {/* vehicle marker moving down previous stop */}
-                      {isPrevStop && activeProgress <= 0.5 && (
-                        <span
-                          className="pointer-events-none absolute left-1/2 z-10 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full border-[2.5px] border-white shadow-sm transition-[top] duration-700 ease-out-soft"
-                          style={{ top: `${50 + activeProgress * 100}%`, background: lineColor }}
-                        />
-                      )}
-
-                      {/* stop center node */}
-                      {isCurrent ? (
-                        isAtStop ? (
-                          <span
-                            className="absolute left-1/2 top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full border-[3px] border-white shadow-sm"
-                            style={{ background: lineColor }}
-                          />
-                        ) : (
-                          <span
-                            className="absolute left-1/2 top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2"
-                            style={{ borderColor: lineColor, background: "var(--color-surface)" }}
-                          />
-                        )
-                      ) : (
-                        <span
-                          className="absolute left-1/2 top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2"
-                          style={{
-                            borderColor: passed ? "rgba(255,255,255,0.25)" : lineColor,
-                            background: passed ? "transparent" : "var(--color-surface)",
-                          }}
-                        />
+                        >
+                          <BusIcon weight="fill" />
+                        </span>
                       )}
                     </span>
 
