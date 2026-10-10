@@ -96,7 +96,8 @@ describe("PWA Specification and Assets Verification", () => {
       assert.ok(layoutSrc.includes('applicationName: "KB Mapa"'), "must define applicationName");
       assert.ok(layoutSrc.includes("telephone: false"), "must disable telephone formatDetection on iOS");
       assert.ok(layoutSrc.includes("capable: true"), "must set appleWebApp capable: true");
-      assert.ok(layoutSrc.includes('statusBarStyle: "black-translucent"'), "must set statusBarStyle: black-translucent");
+      // opaque on purpose: black-translucent makes iOS 26 standalone leave a dead strip at the bottom (WebKit bug 301108)
+      assert.ok(layoutSrc.includes('statusBarStyle: "black"'), "must set statusBarStyle: black");
       assert.ok(layoutSrc.includes('title: "KB Mapa"'), "must set appleWebApp title");
       assert.ok(layoutSrc.includes('"mobile-web-app-capable": "yes"'), "must set mobile-web-app-capable");
       assert.ok(layoutSrc.includes('viewportFit: "cover"'), "must set viewportFit: cover for notch/island");
