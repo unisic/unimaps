@@ -77,7 +77,7 @@ function StopsLayer({ stops, visible, onSelect }: Props) {
           const label = document.createElement("span");
           const opBadge = s.operator === "BOTH" ? " · KB + MZK" : s.operator === "MZK" ? " · MZK" : " · KB";
           label.textContent = `${displayStopName(s.name)}${s.symbol ? ` (${s.symbol})` : ""}${opBadge}`;
-          m.bindTooltip(label, { direction: "top", offset: [0, -14], className: "kb-tooltip" });
+          m.bindTooltip(label, { direction: "top", offset: [0, -14], opacity: 1, className: "kb-tooltip" });
           m.on("click", () => onSelectRef.current(s));
           m.addTo(group);
           shown.set(s.id, m);

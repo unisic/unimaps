@@ -4,7 +4,7 @@ import { memo, useEffect, useRef } from "react";
 import { useMap } from "react-leaflet";
 import L from "leaflet";
 import { vehiclesClock } from "@/lib/client/api";
-import { delayTxt, displayStopName, vehColor } from "@/lib/client/format";
+import { delayClass, delayTxt, displayStopName, vehColor } from "@/lib/client/format";
 import { makeVehicleIcon } from "@/lib/client/leafletIcons";
 import type { Vehicle } from "@/lib/client/types";
 import { acquireVehicleAnimator, releaseVehicleAnimator, type VehicleAnimator } from "@/lib/client/vehicleAnimator";
@@ -26,24 +26,45 @@ interface MarkerView {
   iconKey: string;
 }
 
-/** Tooltip DOM (textContent only — upstream strings are never parsed as HTML). */
+/** Tooltip DOM (textContent only — upstream strings are never parsed as HTML), laid out like TripView's header. */
 function buildVehicleTooltip(v: Vehicle | undefined): HTMLElement {
-  const root = document.createElement("span");
-  root.className = "flex items-center gap-1.5 flex-wrap";
+  const root = document.createElement("div");
+  root.className = "flex items-center gap-2.5";
   if (!v) return root;
-  const dot = document.createElement("span");
-  dot.className = `h-2 w-2 shrink-0 rounded-full ${v.operator === "MZK" ? "bg-mzk" : "bg-kb"}`;
-  dot.title = v.operator || "KB";
-  const line = document.createElement("b");
-  line.className = "font-semibold tabular-nums";
-  line.textContent = v.line || "?";
-  root.append(dot, line);
-  const rest =
-    (v.headsign ? ` → ${displayStopName(v.headsign)}` : "") +
-    (v.side_number ? ` · #${v.side_number}` : "") +
-    (v.model ? ` (${v.model})` : "") +
-    (v.not_started ? " · czeka na odjazd" : v.delay != null ? ` · ${delayTxt(v.delay)}` : "");
-  if (rest) root.append(rest);
+  const span = (className: string, text: string) => {
+    const el = document.createElement("span");
+    el.className = className;
+    el.textContent = text;
+    return el;
+  };
+  const badge = span(
+    "flex h-7 min-w-9 shrink-0 items-center justify-center rounded-lg px-1.5 text-[12px] font-semibold tabular-nums tracking-tight text-white",
+    v.line || "?",
+  );
+  badge.style.background = vehColor(v);
+  const body = document.createElement("div");
+  body.className = "w-max min-w-0 max-w-[260px]";
+  body.append(
+    span(
+      "line-clamp-2 whitespace-normal text-[13px] font-semibold leading-tight tracking-tight text-text",
+      v.headsign ? displayStopName(v.headsign) : `Linia ${v.line || "?"}`,
+    ),
+  );
+  const meta: HTMLElement[] = [];
+  if (v.not_started) meta.push(span("shrink-0 font-medium text-late", "czeka na odjazd"));
+  else if (v.delay != null) meta.push(span(`shrink-0 font-semibold tabular-nums ${delayClass(v.delay)}`, delayTxt(v.delay)));
+  if (v.side_number) meta.push(span("shrink-0 tabular-nums", `#${v.side_number}`));
+  if (v.model) meta.push(span("truncate", v.model));
+  if (meta.length) {
+    const row = document.createElement("div");
+    row.className = "mt-1 flex items-center gap-1.5 text-[12px] leading-tight text-text-mute";
+    meta.forEach((el, i) => {
+      if (i) row.append(span("shrink-0 text-text-faint", "·"));
+      row.append(el);
+    });
+    body.append(row);
+  }
+  root.append(badge, body);
   return root;
 }
 
@@ -142,7 +163,8 @@ function VehicleLayer({
         marker.bindTooltip(() => buildVehicleTooltip(anim.latest(id) ?? undefined), {
           direction: "top",
           offset: [0, -16],
-          className: "kb-tooltip",
+          opacity: 1, // Leaflet's default 0.9 lets the markers underneath show through the card
+          className: "kb-tooltip veh-tooltip",
         });
         marker.on("click", () => {
           const cur = anim.latest(id);
