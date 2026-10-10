@@ -24,12 +24,15 @@ const mz = (symbol: string, name: string, lat: number, lon: number): Stop => ({
 const KB_STOPS = [
   kb(10302, "19146:39714", "BIELSKO-BIAŁA PIASTOWSKA LUBERTOWICZA", 49.827047, 19.036152),
   kb(10000, "184900", "BIELSKO-BIAŁA D.A.", 49.830227, 19.042746, { isStation: true, showPlatforms: true }),
+  kb(23000, "19185", "CZECHOWICE-DZIEDZICE D.A.", 49.914492, 19.006531, { isStation: true }),
 ];
 const MZK_STOPS = [
   mz("265", "Piastowska Lubertowicza", 49.827047, 19.036152),
   mz("343", "Warszawska Dworzec", 49.8309, 19.0435),
   mz("341", "Warszawska Dworzec", 49.8315, 19.0432),
   mz("264", "Piastowska Dworzec", 49.8289, 19.0428),
+  mz("2366", "Czechowice-Dz. Dworzec", 49.914582, 19.006531), // 10 m
+  mz("2367", "Czechowice-Dz. Dworzec", 49.914375, 19.006531), // 13 m
 ];
 
 interface Fake {
@@ -155,14 +158,21 @@ describe("GET /api/stop/[designator]/departures", () => {
   });
 
   it("station hub: fans out to every MZK symbol and keeps a course that calls at two of them only once", async () => {
-    fake.mzkRows["343"] = [mzkDep(10, "31", 54000)];
-    fake.mzkRows["341"] = [mzkDep(11, "8", 54060), mzkDep(12, "11", 54120)];
-    fake.mzkRows["264"] = [mzkDep(12, "11", 54180), mzkDep(13, "1", 54240)]; // course 12 calls at 341 AND 264
-    const { rows } = await departures("184900");
-    assert.deepEqual(fake.mzkCalls.sort(), ["264", "341", "343"]);
+    fake.mzkRows["2366"] = [mzkDep(11, "50", 54060), mzkDep(12, "50", 54120)];
+    fake.mzkRows["2367"] = [mzkDep(12, "50", 54180), mzkDep(13, "50", 54240)]; // course 12 calls at both
+    const { rows } = await departures("19185");
+    assert.deepEqual(fake.mzkCalls.sort(), ["2366", "2367"]);
     const mzkRows = rows.filter((r) => r.operator === "MZK");
-    assert.equal(mzkRows.length, 4);
-    assert.equal(new Set(mzkRows.map((r) => r.trip_execution_id)).size, 4);
+    assert.equal(mzkRows.length, 3);
+    assert.equal(new Set(mzkRows.map((r) => r.trip_execution_id)).size, 3);
+  });
+
+  it("Bielsko-Biała D.A. is a KB station: its board never asks MZK", async () => {
+    fake.mzkRows["343"] = [mzkDep(10, "31", 54000)];
+    fake.kbRows["184900"] = [{ trip_execution_id: "kb1", line_name: "120", static_time: "15:03", time: "15:03" }];
+    const { rows } = await departures("184900");
+    assert.deepEqual(fake.mzkCalls, []);
+    assert.deepEqual(rows.map((r) => r.operator), ["KB"]);
   });
 
   it("a failed MZK fetch is reported as a warning instead of looking like 'no MZK departures'", async () => {
@@ -188,8 +198,8 @@ describe("GET /api/stops conditional requests", () => {
   });
 });
 
-describe("departures: a hub's extra symbols are stops of their own", () => {
-  it("opening the MZK-only entry of an extra symbol queries just that symbol", async () => {
+describe("departures: MZK stops outside a hub are stops of their own", () => {
+  it("opening the MZK-only entry of a street stop at D.A. queries just that symbol", async () => {
     fake.mzkRows["341"] = [mzkDep(11, "8", 54060)];
     const { rows } = await departures("mzk:341");
     assert.deepEqual(fake.mzkCalls, ["341"]);
@@ -241,7 +251,7 @@ describe("GET /api/health (stop-list counters)", () => {
     assert.equal(res.status, 200);
     const h = (await res.json()) as { mzk_stops: number; merged_stops: { both: number; kb: number; mzk: number; partial: boolean } };
     assert.equal(h.mzk_stops, MZK_STOPS.length);
-    assert.equal(h.merged_stops.both, 2); // Piastowska Lubertowicza + the D.A. hub
+    assert.equal(h.merged_stops.both, 2); // Piastowska Lubertowicza + the Czechowice-Dz. D.A. hub (Bielsko D.A. is KB-only)
     assert.equal(h.merged_stops.partial, false);
     state.mzkPoller.stops = [];
     const early = (await (await getHealth()).json()) as { status: string; merged_stops: { partial: boolean } };

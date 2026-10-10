@@ -318,43 +318,50 @@ describe("mergeStops: arrows of a merged stop", () => {
 
 describe("mergeStops: bus station hub (fan-out, no absorption)", () => {
   const da = kb("DA", "BIELSKO-BIAŁA D.A.", L0, O0, { isStation: true, showPlatforms: true });
+  // the MZK street stops around Bielsko-Biała D.A. (a KB-only station): the bare "DWORZEC" matches them all
   const hub = [
     mzk("343", "Warszawska Dworzec", L0 + dLat(60), O0 + dLon(60)), // 85 m
     mzk("341", "Warszawska Dworzec", L0 - dLat(100), O0 + dLon(110)), // 149 m
     mzk("264", "Piastowska Dworzec", L0 - dLat(140), O0 - dLon(40)), // 146 m
   ];
   const railway = mzk("2", "3 Maja Dworzec", L0 + dLat(300), O0 + dLon(250)); // 390 m — a different station
+  const cz = kb("CZ", "CZECHOWICE-DZIEDZICE D.A.", L0, O0, { isStation: true });
+  const poles = [
+    mzk("2366", "Czechowice-Dz. Dworzec", L0 + dLat(10), O0), // 10 m, line 50 one way
+    mzk("2367", "Czechowice-Dz. Dworzec", L0 - dLat(13), O0), // 13 m, line 50 the other way
+  ];
 
-  it("lists every same-name MZK stop within 200 m (primary first); the extras stay MZK-only entries of their own", () => {
+  it("never takes in a same-name MZK stop beyond MERGE_HUB_M: Bielsko-Biała D.A. stays KB-only", () => {
     const out = mergeStops([da], [...hub, railway]);
+    assert.deepEqual(pairing(out), {});
+    assert.equal(out.find((s) => s.id === "DA")?.operator, "KB");
+    for (const sym of ["343", "341", "264", "2"]) assert.equal(getMergedStop(`mzk:${sym}`)?.id, `mzk:${sym}`);
+  });
+
+  it("lists every same-name MZK stop on its premises (primary first); the extras stay MZK-only entries of their own", () => {
+    const out = mergeStops([cz], poles);
     const s = out.find((x) => x.operator === "BOTH")!;
-    assert.equal(s.kbId, "DA");
-    assert.equal(s.mzkSymbol, "343"); // nearest = primary
-    assert.equal(s.mzkSymbols![0], "343");
-    assert.deepEqual([...s.mzkSymbols!].sort(), ["264", "341", "343"]);
-    assert.equal(s.symbol, undefined); // no single "(343)" label for a hub
+    assert.equal(s.kbId, "CZ");
+    assert.equal(s.mzkSymbol, "2366"); // nearest = primary
+    assert.deepEqual(s.mzkSymbols, ["2366", "2367"]);
+    assert.equal(s.symbol, undefined); // no single "(2366)" label for a hub
     assert.equal("aka" in s, false);
-    // extras keep their own stop (own position, own designator) — MZK trip timelines are drawn there
-    for (const sym of ["341", "264"]) {
-      const own = out.find((x) => x.id === `mzk:${sym}`)!;
-      assert.equal(own.operator, "MZK");
-      assert.equal(own.lat, hub.find((h) => h.symbol === sym)!.lat);
-    }
-    assert.equal(out.find((x) => x.id === "mzk:343"), undefined); // the primary is merged into the station
-    assert.equal(out.find((x) => x.id === "mzk:2")?.operator, "MZK"); // railway station stays separate
-    assert.equal(out.length, 4);
+    // the extra keeps its own stop (own position, own designator) — MZK trip timelines are drawn there
+    const own = out.find((x) => x.id === "mzk:2367")!;
+    assert.equal(own.operator, "MZK");
+    assert.equal(own.lat, poles[1].lat);
+    assert.equal(out.find((x) => x.id === "mzk:2366"), undefined); // the primary is merged into the station
+    assert.equal(out.length, 2);
   });
 
   it("is order independent; the registry resolves the primary symbol to the hub and extras to their own stop", () => {
-    const a = mergeStops([da], [...hub, railway]);
-    const b = mergeStops([da], [railway, ...[...hub].reverse()]);
+    const a = mergeStops([cz], poles);
+    const b = mergeStops([cz], [...poles].reverse());
     assert.deepEqual(pairing(a), pairing(b));
-    assert.equal(getMergedStop("343")?.id, "DA");
-    assert.equal(getMergedStop("mzk:343")?.id, "DA");
-    for (const sym of ["341", "264"]) {
-      assert.equal(getMergedStop(sym)?.id, `mzk:${sym}`, `${sym} must NOT resolve to the hub`);
-      assert.equal(getMergedStop(`mzk:${sym}`)?.id, `mzk:${sym}`);
-    }
+    assert.equal(getMergedStop("2366")?.id, "CZ");
+    assert.equal(getMergedStop("mzk:2366")?.id, "CZ");
+    assert.equal(getMergedStop("2367")?.id, "mzk:2367", "2367 must NOT resolve to the hub");
+    assert.equal(getMergedStop("mzk:2367")?.id, "mzk:2367");
   });
 
   it("a normal (non-station) stop never fans out to several MZK stops", () => {
@@ -430,7 +437,7 @@ describe("mergeStops on captured 2026-10-02 data (regression)", () => {
     "10342": ["63"], // Cieszyńska Os. Wojska Polskiego (63 sits on the KB stop, 0 m)
     "10881": ["220"], // Mazańcowicka Katowicka
     "10302": ["265"], // Piastowska Lubertowicza (the reported stop)
-    "10000": ["264", "341", "342", "343", "469"], // D.A. hub
+    // 10000 Bielsko-Biała D.A. is KB-only: its MZK "Dworzec" street stops are 89-183 m away
     "10021": ["2"], // 3 Maja Dworzec (railway station)
     "29021": ["2374"], "29022": ["2376"], // Czechowice Górnicza Węglowa (direction-consistent)
     "10291": ["64"], // Cieszyńska Lotnisko

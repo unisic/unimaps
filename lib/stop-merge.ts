@@ -66,8 +66,9 @@ export const MERGE_NEAR_M = 35;
 export const MERGE_NAME_M = 120;
 /** A pair whose travel directions are opposite only merges when it is practically one pole. */
 export const MERGE_SAME_POLE_M = 12;
-/** A bus station (D.A.) also lists the departures of every same-name MZK stop this close (fan-out only). */
-export const MERGE_HUB_M = 200;
+/** A bus station (D.A.) pairs and fans out only to MZK stops on its premises: its cleaned name is the
+ *  bare "DWORZEC", which matches every "<street> Dworzec" around it (Bielsko-Biała D.A. is KB-only). */
+export const MERGE_HUB_M = MERGE_NEAR_M;
 /** Max MZK symbols a station hub fans out to (primary included). */
 export const MERGE_MAX_MZK = 6;
 
