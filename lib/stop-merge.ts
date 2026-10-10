@@ -27,8 +27,8 @@ export function stopDistanceMeters(lat1: number, lon1: number, lat2: number, lon
 }
 
 /**
- * Alias → merged stop: every id / designator / MZK symbol (bare and "mzk:"-prefixed) of every stop. A station
- * hub's EXTRA symbols (`mzkSymbols`) are deliberately not indexed: those MZK stops stay entries of their own.
+ * Alias → merged stop: every id / designator / MZK symbol (bare and "mzk:"-prefixed) of every stop, a station
+ * hub's EXTRA symbols (`mzkSymbols`) included: those MZK stops are folded into the hub (one marker per station).
  */
 export function indexMergedStops(stops: readonly FormattedStop[]): Map<string, FormattedStop> {
   const index = new Map<string, FormattedStop>();
@@ -36,7 +36,7 @@ export function indexMergedStops(stops: readonly FormattedStop[]): Map<string, F
     for (const key of [s.designator, s.id, s.kbDesignator, s.mzkDesignator, s.kbId, s.mzkId]) {
       if (key) index.set(key, s);
     }
-    for (const sym of new Set([s.mzkSymbol, s.symbol])) {
+    for (const sym of new Set([s.mzkSymbol, s.symbol, ...(s.mzkSymbols ?? [])])) {
       if (!sym) continue;
       index.set(sym, s);
       index.set(`mzk:${sym}`, s);
@@ -236,7 +236,7 @@ export interface MergeOptions {
  *    the order of either list (the old greedy loop paired stops by the order the upstream listed them);
  *  - a bus station (KB `isStation`) additionally FANS OUT to every other unmatched same-name MZK stop
  *    within MERGE_HUB_M (the station's several MZK stops): `mzkSymbols` = [primary, ...extras]. The extras
- *    stay MZK-only entries of their own (their exact position matters for MZK trip timelines).
+ *    are folded into the hub (no entry of their own; within MERGE_HUB_M the hub's position stands in for theirs).
  */
 export function mergeStops(
   kbStops: FormattedStop[],
@@ -318,13 +318,14 @@ export function mergeStops(
     merged.push(stop);
   }
 
-  // unmatched KB, then unmatched MZK (original order within each group; hub extras stay in the MZK group)
+  // unmatched KB, then unmatched MZK (original order within each group; hub extras are folded into their hub)
+  const folded = new Set([...extrasOf.values()].flat());
   kbStops.forEach((k, i) => {
     if (primaryOf.has(i)) return;
     merged.push({ ...k, operator: "KB", operators: ["KB"], kbId: k.id, kbDesignator: k.designator });
   });
   mzkStops.forEach((m, i) => {
-    if (primary.has(i)) return;
+    if (primary.has(i) || folded.has(i)) return;
     merged.push({
       ...m,
       operator: "MZK",

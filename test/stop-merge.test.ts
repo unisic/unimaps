@@ -338,7 +338,7 @@ describe("mergeStops: bus station hub (fan-out, no absorption)", () => {
     for (const sym of ["343", "341", "264", "2"]) assert.equal(getMergedStop(`mzk:${sym}`)?.id, `mzk:${sym}`);
   });
 
-  it("lists every same-name MZK stop on its premises (primary first); the extras stay MZK-only entries of their own", () => {
+  it("lists every same-name MZK stop on its premises (primary first) and folds the extras into the station", () => {
     const out = mergeStops([cz], poles);
     const s = out.find((x) => x.operator === "BOTH")!;
     assert.equal(s.kbId, "CZ");
@@ -346,22 +346,17 @@ describe("mergeStops: bus station hub (fan-out, no absorption)", () => {
     assert.deepEqual(s.mzkSymbols, ["2366", "2367"]);
     assert.equal(s.symbol, undefined); // no single "(2366)" label for a hub
     assert.equal("aka" in s, false);
-    // the extra keeps its own stop (own position, own designator) — MZK trip timelines are drawn there
-    const own = out.find((x) => x.id === "mzk:2367")!;
-    assert.equal(own.operator, "MZK");
-    assert.equal(own.lat, poles[1].lat);
-    assert.equal(out.find((x) => x.id === "mzk:2366"), undefined); // the primary is merged into the station
-    assert.equal(out.length, 2);
+    // one marker per station: neither MZK stop keeps an entry of its own
+    assert.equal(out.find((x) => x.id === "mzk:2366"), undefined);
+    assert.equal(out.find((x) => x.id === "mzk:2367"), undefined);
+    assert.equal(out.length, 1);
   });
 
-  it("is order independent; the registry resolves the primary symbol to the hub and extras to their own stop", () => {
+  it("is order independent; the registry resolves every symbol of the hub to the hub", () => {
     const a = mergeStops([cz], poles);
     const b = mergeStops([cz], [...poles].reverse());
     assert.deepEqual(pairing(a), pairing(b));
-    assert.equal(getMergedStop("2366")?.id, "CZ");
-    assert.equal(getMergedStop("mzk:2366")?.id, "CZ");
-    assert.equal(getMergedStop("2367")?.id, "mzk:2367", "2367 must NOT resolve to the hub");
-    assert.equal(getMergedStop("mzk:2367")?.id, "mzk:2367");
+    for (const key of ["2366", "mzk:2366", "2367", "mzk:2367"]) assert.equal(getMergedStop(key)?.id, "CZ", key);
   });
 
   it("a normal (non-station) stop never fans out to several MZK stops", () => {

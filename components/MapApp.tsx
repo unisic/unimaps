@@ -182,9 +182,10 @@ export default function MapApp() {
         byDesig.set(`mzk:${s.symbol}`, s);
         byDesig.set(String(s.symbol), s);
       }
-      if (s.mzkSymbol) {
-        byDesig.set(`mzk:${s.mzkSymbol}`, s);
-        byDesig.set(String(s.mzkSymbol), s);
+      // a station hub's extra MZK symbols have no stop of their own: an MZK trip calling there resolves to the hub
+      for (const sym of s.mzkSymbol ? [s.mzkSymbol, ...(s.mzkSymbols ?? [])] : []) {
+        byDesig.set(`mzk:${sym}`, s);
+        byDesig.set(String(sym), s);
       }
     }
     return { byId, byDesig };

@@ -167,6 +167,11 @@ describe("GET /api/stop/[designator]/departures", () => {
     assert.equal(new Set(mzkRows.map((r) => r.trip_execution_id)).size, 3);
   });
 
+  it("a hub's extra MZK symbol has no stop of its own: mzk:2367 opens the station board", async () => {
+    await departures("mzk:2367");
+    assert.deepEqual(fake.mzkCalls.sort(), ["2366", "2367"]);
+  });
+
   it("Bielsko-Biała D.A. is a KB station: its board never asks MZK", async () => {
     fake.mzkRows["343"] = [mzkDep(10, "31", 54000)];
     fake.kbRows["184900"] = [{ trip_execution_id: "kb1", line_name: "120", static_time: "15:03", time: "15:03" }];
