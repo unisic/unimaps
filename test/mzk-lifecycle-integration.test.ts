@@ -3,6 +3,7 @@
  * getRunningVehicles.json, test/fixtures/mzk-running-vehicles.json): a bus waiting at the first
  * stop must not publish OnTime's placeholder delay anywhere.
  */
+import "./support/tmp-output"; // first: KB_OUTPUT_DIR (fleet history) -> a throw-away dir
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -12,8 +13,8 @@ import { after, before, describe, it } from "node:test";
 import type { FleetTracker as FleetTrackerType } from "../lib/fleet-tracker";
 import type { MzkApi, MzkRunningVehicle } from "../lib/mzk-api";
 
-// The fleet tracker restores/saves output/fleet-history-<day>.json relative to process.cwd() when its
-// module loads: load everything from a temp cwd so this test never reads or clobbers the real brygady history.
+// The fleet tracker restores/saves fleet-history-<day>.json under OUTPUT_DIR (tmp-output above) and the lib
+// modules load from a temp cwd, so this test never reads or clobbers the real brygady history.
 const realCwd = process.cwd();
 let tmpCwd = "";
 let FleetTracker: typeof import("../lib/fleet-tracker").FleetTracker;

@@ -3,8 +3,9 @@
  * (test/fixtures/mzk-running-vehicles.json, captured 2026-10-02 22:54:42): the real GET handlers of
  * /api/stop/[designator]/departures, /api/trip_execution and /api/trip/[tripId] run against a faked
  * poller singleton (no network, no Next server). Fleet-tracker persistence is redirected to a temp dir
- * (its HISTORY_DIR is resolved from process.cwd() at module load) so the real output/ is never touched.
+ * (support/tmp-output sets KB_OUTPUT_DIR) so the real output/ is never touched.
  */
+import "./support/tmp-output"; // first: KB_OUTPUT_DIR (fleet history) -> a throw-away dir
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -70,7 +71,7 @@ function rtRow(v: MzkRunningVehicle, idx: number) {
 
 before(async () => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "kb-not-started-"));
-  process.chdir(tmp); // BEFORE the lib modules load (fleet-tracker HISTORY_DIR)
+  process.chdir(tmp); // BEFORE the lib modules load
   Date.now = () => NOW;
   const running = [V.not_started_late, V.not_started_early, V.just_departed, V.running];
   const rtBySymbol = new Map<string, ReturnType<typeof rtRow>[]>();

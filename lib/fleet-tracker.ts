@@ -15,7 +15,7 @@ import { type MzkApi } from "./mzk-api";
 import { getAllFleetVehicles, getFleetDetails, type MzkVehicleStatic } from "./mzk-fleet";
 import { isMzkNotStarted } from "./mzk-state";
 import { mzkStopIndices } from "./mzk-shape";
-import { AGENCY_TIMEZONE } from "./config";
+import { AGENCY_TIMEZONE, OUTPUT_DIR } from "./config";
 import {
   classifyDelay,
   compareLineNames,
@@ -214,7 +214,7 @@ const RESUME_LIVE_MAX_AGE_SEC = 10 * 60;
 const SAVE_DEBOUNCE_MS = 30_000;
 const HISTORY_FORMAT = 2;
 
-const DEFAULT_HISTORY_DIR = path.resolve(process.cwd(), "output");
+const DEFAULT_HISTORY_DIR = OUTPUT_DIR;
 
 function emptyStats(): FleetVehicleStats {
   return {
@@ -246,7 +246,7 @@ export class FleetTracker {
   private currentDay = getTodayKey();
   private readonly historyDir: string | null;
 
-  /** `historyDir: null` keeps everything in memory (tests); default output/ under the cwd. */
+  /** `historyDir: null` keeps everything in memory (tests); default OUTPUT_DIR (`KB_OUTPUT_DIR`, else output/ under the cwd). */
   constructor(opts: { historyDir?: string | null } = {}) {
     this.historyDir = opts.historyDir === undefined ? DEFAULT_HISTORY_DIR : opts.historyDir;
     this.initFromStaticFleet();
