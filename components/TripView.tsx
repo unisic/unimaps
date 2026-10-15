@@ -8,6 +8,9 @@ import {
   ArrowsClockwiseIcon,
   ArrowsHorizontalIcon,
   BusIcon,
+  CardsIcon,
+  CrosshairIcon,
+  DotsThreeVerticalIcon,
   DropIcon,
   LeafIcon,
   LightningIcon,
@@ -18,7 +21,9 @@ import {
 import { BackIcon, CloseIcon, ErrorState, IconButton, LineBadge, ShareButton } from "@/components/ui";
 import {
   computeEta,
+  countdown,
   delayClass,
+  delayStatus,
   delayTxt,
   detectLoopStops,
   displayStopName,
@@ -48,7 +53,11 @@ interface Props {
   onBack: (() => void) | null;
   onClose: () => void;
   onFocusStop: (s: Stop) => void;
+  /** fly the map to the vehicle (`id` = its fleet track, whose drawn position wins over the raw fix) */
+  onLocate: (v: { id: string | null; lat: number; lon: number }) => void;
   onRetry: () => void;
+  /** open the MZK vehicle card over the map (closing it returns to this trip) */
+  onOpenVehicleCard: (side: string) => void;
   initialSnap?: "peek" | "half" | "full";
 }
 
@@ -61,7 +70,8 @@ function Spinner() {
   );
 }
 
-/* the features rendered as chips below (ecoVehicle has none, so it must not open an empty row) */
+/** Neutral vehicle-feature chip: a fact about the bus, so no colour of its own. */
+/* the features rendered as chips in the menu (ecoVehicle has none, so it must not open an empty row) */
 const SHOWN_FEATURES = [
   "electric",
   "hydrogen",
@@ -72,7 +82,6 @@ const SHOWN_FEATURES = [
   "ticketMachine",
 ] as const satisfies readonly (keyof VehicleFeatures)[];
 
-/** Neutral vehicle-feature chip: a fact about the bus, so no colour of its own. */
 function Feature({ icon, label, title }: { icon: React.ReactNode; label: string; title?: string }) {
   return (
     <span className="inline-flex items-center gap-1 rounded-full bg-white/6 px-2 py-0.5 text-text-mute" title={title}>
@@ -86,6 +95,8 @@ function Feature({ icon, label, title }: { icon: React.ReactNode; label: string;
 const railFill = (x: number) => Math.max(0, Math.min(100, x * 200));
 /** the travelled rail: opaque (it covers the line-coloured rail underneath) */
 const RAIL_DONE = "color-mix(in srgb, #fff 16%, var(--color-surface))";
+/** seconds-of-day difference folded into ±12 h (a post-midnight time against a pre-midnight one) */
+const wrapDay = (d: number) => (d > 43200 ? d - 86400 : d < -43200 ? d + 86400 : d);
 
 function TimelineSkeleton() {
   return (
@@ -109,10 +120,16 @@ function TripView({
   onBack,
   onClose,
   onFocusStop,
+  onLocate,
   onRetry,
+  onOpenVehicleCard,
   initialSnap = "half",
 }: Props) {
   const now = useNow();
+  /* the ⋮ menu's anchor (viewport px) while it is open */
+  const [menuAt, setMenuAt] = useState<{ top: number; right: number } | null>(null);
+  const menuBtnRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const currentRef = useRef<HTMLLIElement>(null);
   /* last-known live fix — when the vehicle drops off the 5 s feed mid-view
@@ -246,25 +263,65 @@ function TripView({
     return vti;
   }, [trip.rawTimes, trip.stop, vti]);
 
+  /* centre the row inside the list only: scrollIntoView also scrolls every ancestor, including the
+     overflow-hidden app root while the sheet is still sliding in */
   useEffect(() => {
-    if (!scrollRef.current || !currentRef.current) return;
-    currentRef.current.scrollIntoView({ block: "center", behavior: "smooth" });
+    const box = scrollRef.current;
+    const row = currentRef.current;
+    if (!box || !row) return;
+    const b = box.getBoundingClientRect();
+    const r = row.getBoundingClientRect();
+    box.scrollTo({ top: box.scrollTop + r.top - b.top - (box.clientHeight - r.height) / 2, behavior: "smooth" });
   }, [scrollTargetIdx]);
+
+  /* close the menu on a tap outside it, on resize, and on Escape before the sheet's own Escape closes the trip */
+  useEffect(() => {
+    if (!menuAt) return;
+    const onDown = (e: PointerEvent) => {
+      const t = e.target as Node;
+      if (!menuRef.current?.contains(t) && !menuBtnRef.current?.contains(t)) setMenuAt(null);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      setMenuAt(null);
+      menuBtnRef.current?.focus();
+    };
+    const onResize = () => setMenuAt(null);
+    document.addEventListener("pointerdown", onDown);
+    window.addEventListener("keydown", onKey, true);
+    window.addEventListener("resize", onResize);
+    return () => {
+      document.removeEventListener("pointerdown", onDown);
+      window.removeEventListener("keydown", onKey, true);
+      window.removeEventListener("resize", onResize);
+    };
+  }, [menuAt]);
+
+  const toggleMenu = () => {
+    const r = menuBtnRef.current?.getBoundingClientRect();
+    setMenuAt((open) => (open || !r ? null : { top: r.bottom + 6, right: Math.max(12, window.innerWidth - r.right) }));
+  };
+
+  const feats = currentVeh?.features;
+  const locateFix =
+    currentVeh && Number.isFinite(currentVeh.lat) && Number.isFinite(currentVeh.lon) ? currentVeh : trip.vehicle;
+  const hasDetails = !loading && !failed;
 
   const header = (
     <header className="px-4 pb-3 pt-2 md:pt-4">
-      <div className="flex items-start gap-2.5">
+      <div className="flex items-center gap-2">
         {onBack && (
           <IconButton label="Wróć do przystanku" onClick={onBack}>
             <BackIcon />
           </IconButton>
         )}
         <LineBadge line={trip.line} operator={isMzkTrip ? "MZK" : "KB"} big />
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1 pl-0.5">
           <h2 className="truncate text-[16px] font-semibold leading-tight tracking-tight text-text">
             {loading ? "Wczytywanie…" : direction ? displayStopName(direction) : `Linia ${trip.line}`}
           </h2>
-          <div className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[12px] text-text-mute">
+          <div className="mt-1 flex items-center gap-x-2 text-[12px] text-text-mute">
             {isLiveWithLoc && notStarted ? (
               <span className="inline-flex items-center gap-1.5 font-medium text-late">
                 <span className="h-1.5 w-1.5 rounded-full bg-late" aria-hidden />
@@ -283,72 +340,108 @@ function TripView({
                 {delayTxt(headerDelay)}
               </span>
             )}
-            <span className="inline-flex items-center gap-1.5">
-              <span className={`h-2 w-2 rounded-full ${isMzkTrip ? "bg-mzk" : "bg-kb"}`} aria-hidden />
-              {isMzkTrip ? "MZK Bielsko-Biała" : "Komunikacja Beskidzka"}
-            </span>
-            {trip.status === "routing" && (
-              <span className="inline-flex items-center gap-1.5 text-text-faint">
-                <Spinner /> wyznaczanie trasy…
-              </span>
-            )}
+            {trip.status === "routing" && <Spinner />}
           </div>
-          {(isMzkTrip && currentVeh?.side_number) ||
-          SHOWN_FEATURES.some((k) => currentVeh?.features?.[k]) ||
-          trip.note ||
-          loopStops.length > 0 ? (
-            <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11.5px]">
-              {isMzkTrip && currentVeh?.side_number && (
-                <a
-                  href={`/brygady?tabor=${encodeURIComponent(currentVeh.side_number)}`}
-                  title="Zobacz kartę pojazdu i dzisiejsze kursy"
-                  className="tap group inline-flex items-center gap-1 rounded-full bg-white/8 px-2 py-0.5 font-medium text-text hover:bg-white/12"
-                >
-                  <span className="tabular-nums">#{currentVeh.side_number}</span>
-                  {currentVeh.model ? <span className="font-normal text-text-mute">· {currentVeh.model}</span> : null}
-                  <span className="ml-0.5 inline-flex items-center gap-0.5 text-primary">
-                    Karta pojazdu
-                    <ArrowRightIcon className="text-[10px] transition-transform duration-200 group-hover:translate-x-0.5" />
-                  </span>
-                </a>
-              )}
-              {currentVeh?.features?.electric && <Feature icon={<LightningIcon weight="fill" />} label="Elektryczny" />}
-              {currentVeh?.features?.hydrogen && <Feature icon={<DropIcon weight="fill" />} label="Wodorowy" />}
-              {currentVeh?.features?.hybrid && <Feature icon={<LeafIcon weight="fill" />} label="Hybryda" />}
-              {currentVeh?.features?.airCondition && (
-                <Feature icon={<SnowflakeIcon />} label="Klima" title="Klimatyzacja" />
-              )}
-              {currentVeh?.features?.lowFloor && <Feature icon={<WheelchairIcon />} label="Niska podłoga" />}
-              {currentVeh?.features?.longVehicle && (
-                <Feature icon={<ArrowsHorizontalIcon />} label="Przegubowy" title="Pojazd przegubowy, 18 m" />
-              )}
-              {currentVeh?.features?.ticketMachine && (
-                <Feature icon={<TicketIcon />} label="Biletomat" title="Biletomat na pokładzie" />
-              )}
-              {trip.note && (
-                <span className="rounded-full bg-late/10 px-2 py-0.5 font-medium text-late">{trip.note}</span>
-              )}
-              {loopStops.length > 0 && (
-                <span
-                  className="inline-flex items-center gap-1 rounded-full bg-white/6 px-2 py-0.5 text-text"
-                  title={`Kurs realizowany przez pętlę: ${loopStops.map(displayStopName).join(", ")}`}
-                >
-                  <ArrowsClockwiseIcon className="text-[12px] text-text-mute" />
-                  przez {loopStops.map((s) => formatPrzezLoop(displayStopName(s))).join(", ")}
-                </span>
-              )}
-            </div>
-          ) : null}
         </div>
-        {!loading && (
-          <ShareButton title={`Linia ${trip.line}${direction ? ` → ${displayStopName(direction)}` : ""}`} />
+        {isLiveWithLoc && locateFix && (
+          <IconButton
+            label="Pokaż pojazd na mapie"
+            onClick={() => onLocate({ id: currentVeh?.id ?? trip.execId, lat: locateFix.lat, lon: locateFix.lon })}
+          >
+            <CrosshairIcon />
+          </IconButton>
+        )}
+        {hasDetails && (
+          <button
+            ref={menuBtnRef}
+            type="button"
+            aria-label="Szczegóły kursu"
+            aria-haspopup="true"
+            aria-expanded={menuAt != null}
+            onClick={toggleMenu}
+            className={`tap grid h-11 w-11 shrink-0 place-items-center rounded-full text-[18px] md:h-9 md:w-9 ${
+              menuAt ? "bg-white/10 text-text" : "text-text-mute hover:bg-white/8 hover:text-text"
+            }`}
+          >
+            <DotsThreeVerticalIcon weight="bold" />
+          </button>
         )}
         <IconButton label="Zamknij trasę" onClick={onClose}>
           <CloseIcon />
         </IconButton>
       </div>
+      {hasDetails && menuAt && (
+        /* fixed: the sheet's overflow-hidden would clip it at the peek height. Its pointerdown must not reach
+           the header's drag zone */
+        <div
+          ref={menuRef}
+          onPointerDown={(e) => e.stopPropagation()}
+          className="surface fixed z-20 w-[min(300px,calc(100vw-24px))] overflow-y-auto rounded-[20px] p-2 text-[13.5px] animate-drop"
+          style={{ top: menuAt.top, right: menuAt.right, maxHeight: `calc(100dvh - ${menuAt.top + 12}px)` }}
+        >
+          <div className="flex items-center gap-2 pl-3">
+            <span className={`h-2 w-2 rounded-full ${isMzkTrip ? "bg-mzk" : "bg-kb"}`} aria-hidden />
+            <span className="flex-1 text-[12px] font-medium text-text-faint">
+              {isMzkTrip ? "MZK Bielsko-Biała" : "Komunikacja Beskidzka"}
+            </span>
+            <ShareButton title={`Linia ${trip.line}${direction ? ` → ${displayStopName(direction)}` : ""}`} />
+          </div>
+          {isMzkTrip && currentVeh?.side_number && (
+            <a
+              href={`/brygady?tabor=${encodeURIComponent(currentVeh.side_number)}`}
+              onClick={(e) => {
+                // a modified click still opens the fleet page in a new tab
+                if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || !currentVeh.side_number) return;
+                e.preventDefault();
+                setMenuAt(null);
+                onOpenVehicleCard(currentVeh.side_number);
+              }}
+              className="group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-text transition-colors hover:bg-white/5"
+            >
+              <CardsIcon className="text-[17px] text-text-mute" />
+              <span className="min-w-0 flex-1">
+                <span className="block">Karta pojazdu</span>
+                <span className="block truncate text-[12px] tabular-nums text-text-mute">
+                  #{currentVeh.side_number}
+                  {currentVeh.model ? ` · ${currentVeh.model}` : ""}
+                </span>
+              </span>
+              <ArrowRightIcon className="text-[14px] text-text-faint transition-transform duration-200 group-hover:translate-x-0.5" />
+            </a>
+          )}
+          {loopStops.length > 0 && (
+            <p
+              className="flex items-center gap-3 px-3 py-2.5 text-text"
+              title={`Kurs realizowany przez pętlę: ${loopStops.map(displayStopName).join(", ")}`}
+            >
+              <ArrowsClockwiseIcon className="text-[17px] text-text-mute" />
+              <span className="min-w-0 flex-1">
+                przez {loopStops.map((l) => formatPrzezLoop(displayStopName(l))).join(", ")}
+              </span>
+            </p>
+          )}
+          {feats && SHOWN_FEATURES.some((k) => feats[k]) && (
+            <div className="mt-1 flex flex-wrap gap-1.5 border-t border-hairline px-3 pb-1.5 pt-3 text-[11.5px]">
+              {feats.electric && <Feature icon={<LightningIcon weight="fill" />} label="Elektryczny" />}
+              {feats.hydrogen && <Feature icon={<DropIcon weight="fill" />} label="Wodorowy" />}
+              {feats.hybrid && <Feature icon={<LeafIcon weight="fill" />} label="Hybryda" />}
+              {feats.airCondition && <Feature icon={<SnowflakeIcon />} label="Klima" title="Klimatyzacja" />}
+              {feats.lowFloor && <Feature icon={<WheelchairIcon />} label="Niska podłoga" />}
+              {feats.longVehicle && (
+                <Feature icon={<ArrowsHorizontalIcon />} label="Przegubowy" title="Pojazd przegubowy, 18 m" />
+              )}
+              {feats.ticketMachine && <Feature icon={<TicketIcon />} label="Biletomat" title="Biletomat na pokładzie" />}
+            </div>
+          )}
+        </div>
+      )}
+      {trip.note && (
+        <p className="mt-2.5 inline-block rounded-full bg-late/10 px-2.5 py-0.5 text-[11.5px] font-medium text-late">
+          {trip.note}
+        </p>
+      )}
       {eta && (
-        <p className="mt-3 rounded-xl bg-white/5 px-3 py-2 text-[12.5px] tabular-nums text-text-mute" aria-live="polite">
+        <p className="mt-2.5 rounded-xl bg-white/5 px-3 py-2 text-[12.5px] tabular-nums text-text-mute" aria-live="polite">
           {eta}
         </p>
       )}
@@ -374,14 +467,26 @@ function TripView({
             {trip.rawTimes.map((t, idx) => {
               const isCurrent = idx === vti;
               const passed = idx < vti;
-              const diff = notStarted ? null : (t.estimate?.time_diff ?? null);
-              const effectiveDiff = diff ?? (isLiveWithLoc && !passed ? headerDelay : null);
               const planned = secsFromHHMM(t.departure_time);
-              const est = isLiveWithLoc && effectiveDiff != null && planned != null;
-              const shown = est ? hhmmFromSecs((planned as number) + (effectiveDiff as number)) : t.departure_time;
-              const bigDiff = est && Math.abs(effectiveDiff as number) > 60;
-              const selected = !!trip.stop && tripTimeMatchesStop(t, trip.stop);
+              /* passed: the recorded arrival; ahead: the live forecast (the stop's own estimate, else the bus's delay) */
+              const forecast = notStarted ? null : (t.estimate?.time_diff ?? headerDelay);
+              const actual =
+                !isLiveWithLoc || notStarted || planned == null
+                  ? null
+                  : passed
+                    ? (trip.arrived?.[idx] ?? null)
+                    : forecast != null
+                      ? planned + forecast
+                      : null;
+              const rowDiff = actual != null && planned != null ? wrapDay(actual - planned) : null;
+              const bigDiff = rowDiff != null && Math.abs(rowDiff) > 60;
+              let left = actual != null && !passed ? actual - now : Infinity;
+              if (left < -43200) left += 86400;
+              const soon = left < 3600 ? countdown(actual, now) : "";
               const coord = stopByIndex.get(t.index);
+              const plat = formatPlatform(t.platform, isBusStation(t.stop_name, coord));
+              const status = passed && rowDiff != null ? delayStatus(rowDiff) : "";
+              const selected = !!trip.stop && tripTimeMatchesStop(t, trip.stop);
               const first = idx === 0;
               const last = idx === trip.rawTimes.length - 1;
               return (
@@ -394,13 +499,18 @@ function TripView({
                       coord ? "hover:bg-white/5 active:bg-white/8" : ""
                     } ${selected ? "bg-primary-dim" : ""}`}
                   >
-                    {/* time */}
-                    <span
-                      className={`w-12 shrink-0 self-center pl-1 text-right text-[13px] font-semibold tabular-nums ${
-                        passed ? "text-text-faint" : est ? delayClass(effectiveDiff) : "text-text"
-                      }`}
-                    >
-                      {shown}
+                    {/* time: the plan struck through above the actual one when they differ */}
+                    <span className="w-12 shrink-0 self-center pl-1 text-right tabular-nums">
+                      {bigDiff && (
+                        <s className="block text-[11px] leading-tight text-text-faint">{t.departure_time}</s>
+                      )}
+                      <span
+                        className={`block text-[13px] font-semibold ${
+                          rowDiff != null ? delayClass(rowDiff) : passed ? "text-text-faint" : "text-text"
+                        } ${passed && rowDiff != null ? "opacity-75" : ""}`}
+                      >
+                        {actual != null ? hhmmFromSecs(actual) : t.departure_time}
+                      </span>
                     </span>
 
                     {/* rail: the travelled part muted, the rest in the line colour; the live bus rides on it */}
@@ -459,18 +569,19 @@ function TripView({
                       >
                         {displayStopName(t.stop_name)}
                       </span>
-                      {(() => {
-                        const plat = formatPlatform(t.platform, isBusStation(t.stop_name, coord));
-                        if (!plat && !bigDiff) return null;
-                        return (
-                          <span className="mt-0.5 block text-[12px] text-text-faint">
-                            {bigDiff ? <s className="tabular-nums">plan {t.departure_time}</s> : null}
-                            {bigDiff && plat ? " · " : ""}
-                            {plat}
-                          </span>
-                        );
-                      })()}
+                      {(status || plat) && (
+                        <span className="mt-0.5 block truncate text-[12px] text-text-faint">
+                          {status && <span className={rowDiff != null ? delayClass(rowDiff) : ""}>{status}</span>}
+                          {status && plat ? " · " : ""}
+                          {plat}
+                        </span>
+                      )}
                     </span>
+                    {soon && (
+                      <span className="shrink-0 self-center pr-2 text-[12.5px] font-semibold tabular-nums text-text">
+                        {soon}
+                      </span>
+                    )}
                   </button>
                 </li>
               );

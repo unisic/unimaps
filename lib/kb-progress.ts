@@ -439,3 +439,32 @@ export function stepKbProgress(inp: KbProgIn, prev: KbProgState | null): KbProgO
   const state: KbProgState = { D, t: inp.tEpoch, staleVti: null, robust: null, robustAt: 0, endDelay: null, ended: false };
   return { state, mode: tr.mode, D, lastIdx: pg.lastIdx, nextIdx: pg.nextIdx, stale: false, src: "est", delay: inp.delayUp, finished: false, dev };
 }
+
+/** Arrival log of one KB execution: `arrived[i]` = epoch secs the bus was first seen at/past times[i]
+ *  (array position, like vti); `reached` = highest index seen; `t` = poll time of the last step. */
+export interface KbArrivals {
+  arrived: (number | null)[];
+  reached: number;
+  t: number;
+}
+
+/** Longest poll gap whose newly reached stop is still stamped (a bus re-acquired after a gap passed it at an
+ *  unknown moment inside it). */
+const ARRIVAL_GAP_S = 60;
+/** Most stops a bus passes between two polls (≤ ARRIVAL_GAP_S apart). A longer jump is a resync (the GPS index
+ *  taking over a stale upstream one after a restart), not an arrival seen now. */
+const ARRIVAL_MAX_STEP = 2;
+
+/**
+ * Upstream drops the times of passed KB stops, so the poller records them itself. The first sighting is only a
+ * baseline (stops passed before it stay unknown, never "now"); afterwards the newly reached stop gets `fixAt`.
+ * Stops skipped in one step get null: a jump means upstream registered them late or not at all.
+ */
+export function stepArrivals(prev: KbArrivals | undefined, reached: number, t: number, fixAt: number): KbArrivals {
+  if (!prev) return { arrived: [], reached, t };
+  if (reached <= prev.reached) return { ...prev, t };
+  const arrived = prev.arrived.slice();
+  while (arrived.length < reached) arrived.push(null);
+  arrived[reached] = t - prev.t <= ARRIVAL_GAP_S && reached - prev.reached <= ARRIVAL_MAX_STEP ? fixAt : null;
+  return { arrived, reached, t };
+}

@@ -21,6 +21,8 @@ export { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
 export { CaretUpIcon } from "@phosphor-icons/react/dist/csr/CaretUp";
 export { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
 export { ClockIcon } from "@phosphor-icons/react/dist/csr/Clock";
+export { CrosshairIcon } from "@phosphor-icons/react/dist/csr/Crosshair";
+export { DotsThreeVerticalIcon } from "@phosphor-icons/react/dist/csr/DotsThreeVertical";
 export { DropIcon } from "@phosphor-icons/react/dist/csr/Drop";
 export { EyeIcon } from "@phosphor-icons/react/dist/csr/Eye";
 export { EyeSlashIcon } from "@phosphor-icons/react/dist/csr/EyeSlash";

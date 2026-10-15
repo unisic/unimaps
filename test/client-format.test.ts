@@ -2,11 +2,13 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  arrivedSecs,
   BRAND,
   BRAND_KB,
   BRAND_MZK,
   computeEta,
   countdown,
+  delayStatus,
   delayTxt,
   detectLoopStops,
   displayStopName,
@@ -79,6 +81,7 @@ describe("displayStopName", () => {
 
   it("keeps vowelless acronyms and roman numerals uppercase", () => {
     assert.equal(displayStopName("SZCZYRK ZML"), "Szczyrk ZML");
+    assert.equal(displayStopName("CZECHOWICE-DZ. KOŚCIÓŁ ŚW. BARBARY"), "Czechowice-Dz. Kościół Św. Barbary");
     assert.equal(displayStopName("OSIEDLE II"), "Osiedle II");
   });
 
@@ -223,7 +226,7 @@ describe("computeEta", () => {
       stop,
       rawTimes: [time({ designator: 123, estimate: { time_diff: 120 } })],
     });
-    assert.equal(computeEta(trip, 36000), "na TESTOWA: 10:02 (+2 min) · za 2 min");
+    assert.equal(computeEta(trip, 36000), "na Testowa: 10:02 (+2 min) · za 2 min");
   });
 
   it("matches by place_id -> Stop.designator when designator is absent", () => {
@@ -231,7 +234,7 @@ describe("computeEta", () => {
       stop,
       rawTimes: [time({ place_id: "P:9" })],
     });
-    assert.equal(computeEta(trip, 36000), "na TESTOWA: 10:00 · za 0 min");
+    assert.equal(computeEta(trip, 36000), "na Testowa: 10:00 · za 0 min");
   });
 
   it("uses liveDelay fallback when time estimate is absent", () => {
@@ -239,7 +242,7 @@ describe("computeEta", () => {
       stop,
       rawTimes: [time({ designator: 123 })],
     });
-    assert.equal(computeEta(trip, 36000, null, false, 480), "na TESTOWA: 10:08 (+8 min) · za 8 min");
+    assert.equal(computeEta(trip, 36000, null, false, 480), "na Testowa: 10:08 (+8 min) · za 8 min");
   });
 
   it("static: planned arrival only", () => {
@@ -258,7 +261,7 @@ describe("computeEta", () => {
         time({ designator: 123, departure_time: "10:30" }),
       ],
     });
-    assert.equal(computeEta(trip, 37800), "na TESTOWA: 10:30 · za 0 min");
+    assert.equal(computeEta(trip, 37800), "na Testowa: 10:30 · za 0 min");
   });
 
   it("falls back to the vehicle's current stop when nothing matches", () => {
@@ -266,7 +269,7 @@ describe("computeEta", () => {
       vti: 1,
       rawTimes: [time({}), time({ stop_name: "DRUGA" })],
     });
-    assert.equal(computeEta(trip, 0), "pojazd na: DRUGA");
+    assert.equal(computeEta(trip, 0), "pojazd na: Druga");
   });
 });
 
@@ -384,7 +387,7 @@ describe("notStartedEta", () => {
   it("opened from a stop: the earliest possible arrival, never a delay (screenshot B/C numbers)", () => {
     // 15:22, course scheduled 15:05 and still parked -> Andersa not before 15:12 + 17 min
     const eta = notStartedEta({ stop: andersa as never, rawTimes }, at(15, 22));
-    assert.match(eta, /na BIELSKO-BIAŁA PARTYZANTÓW ANDERSA: najwcześniej 15:29$/);
+    assert.match(eta, /na Bielsko-Biała Partyzantów Andersa: najwcześniej 15:29$/);
     assert.doesNotMatch(eta, /\+\d+ min/);
     // before the scheduled start the schedule stands
     assert.match(notStartedEta({ stop: andersa as never, rawTimes }, at(14, 50)), /najwcześniej 15:12$/);
@@ -395,5 +398,33 @@ describe("notStartedEta", () => {
     const b = { id: "mzk:2", designator: "mzk:2", name: "B", mzkSymbol: "2" };
     assert.match(notStartedEta({ stop: b as never, rawTimes: night }, at(0, 5)), /najwcześniej 00:13$/); // 10 min overstay
     assert.match(notStartedEta({ stop: b as never, rawTimes: night }, at(23, 50)), /najwcześniej 00:03$/); // still early
+  });
+});
+
+describe("arrivedSecs / delayStatus", () => {
+  const t = (departure_time: string, time_diff?: number): TripTime => ({
+    stop_name: "X",
+    departure_time,
+    index: 0,
+    ...(time_diff !== undefined ? { estimate: { time_diff } } : {}),
+  });
+
+  it("KB: epoch arrivals become Warsaw seconds of day", () => {
+    // 2026-10-15 08:04:30 UTC = 10:04:30 CEST
+    const e = Date.UTC(2026, 9, 15, 8, 4, 30) / 1000;
+    assert.deepEqual(arrivedSecs({ trip: { times: [t("10:00"), t("10:03")] }, arrived: [null, e] }), [null, 36270]);
+  });
+
+  it("MZK: only stops before the vehicle's index carry a recorded time", () => {
+    const trip = { operator: "MZK" as const, times: [t("10:00", 15), t("10:05", -35), t("10:10", -60)] };
+    assert.deepEqual(arrivedSecs({ trip, vehicle_trip_index: 2 }), [36015, 36265, null]);
+    assert.equal(arrivedSecs({ trip: { times: trip.times }, vehicle_trip_index: 2 }), null, "KB without a log");
+  });
+
+  it("labels on the delayClass threshold", () => {
+    assert.equal(delayStatus(60), "Na czas");
+    assert.equal(delayStatus(-60), "Na czas");
+    assert.equal(delayStatus(240), "Opóźniony 4 min");
+    assert.equal(delayStatus(-150), "Przed czasem 3 min");
   });
 });

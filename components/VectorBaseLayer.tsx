@@ -40,6 +40,8 @@ type MaplibreGLFactory = (opts: {
   /** bridge option: render this fraction of the viewport beyond each edge so
    *  panning reveals already-drawn map instead of blank tiles */
   padding?: number;
+  /** bridge option: ms between GL re-centres while the map moves (default 32) */
+  updateInterval?: number;
   /** maplibre Map options — forwarded verbatim into `new maplibregl.Map()` */
   fadeDuration?: number;
   maxTileCacheSize?: number;
@@ -76,6 +78,8 @@ export default function VectorBaseLayer({
       // ---- smoothness tuning ----
       // moderate padding: keep enough margin for fluid panning without overloading initial network download
       padding: 0.08,
+      // re-centre every frame: at 32 ms a fast glide or fling outruns the padding by a frame or two
+      updateInterval: 16,
       // no cross-fade: freshly loaded tiles snap in instead of ghosting for 300ms
       fadeDuration: 0,
       // keep lots of already-rendered tiles so zoom-out/in & back-pan are instant

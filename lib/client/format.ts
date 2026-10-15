@@ -1,5 +1,5 @@
 import { delayMinutes } from "../shared/departures";
-import type { Stop, TripTime, TripView, Vehicle } from "./types";
+import type { Stop, TripExecutionResponse, TripTime, TripView, Vehicle } from "./types";
 
 /**
  * TWO STOP ID SPACES (upstream quirk — crossed on purpose): a trip time's
@@ -114,9 +114,9 @@ const AGENCY_TZ = "Europe/Warsaw";
 let timeFmt: Intl.DateTimeFormat | null = null;
 let dateFmt: Intl.DateTimeFormat | null = null;
 
-/** Seconds since midnight in Europe/Warsaw — all schedule strings are agency
+/** Seconds since midnight in Europe/Warsaw (now, or at `at`) — all schedule strings are agency
  *  wall-clock, so the device-local clock must not leak into the math. */
-export function nowSecs(): number {
+export function nowSecs(at: Date = new Date()): number {
   try {
     timeFmt ??= new Intl.DateTimeFormat("en-GB", {
       timeZone: AGENCY_TZ,
@@ -125,7 +125,7 @@ export function nowSecs(): number {
       minute: "2-digit",
       second: "2-digit",
     });
-    const parts = timeFmt.formatToParts(new Date());
+    const parts = timeFmt.formatToParts(at);
     let h = 0;
     let m = 0;
     let s = 0;
@@ -136,8 +136,7 @@ export function nowSecs(): number {
     }
     return h * 3600 + m * 60 + s;
   } catch {
-    const n = new Date();
-    return n.getHours() * 3600 + n.getMinutes() * 60 + n.getSeconds();
+    return at.getHours() * 3600 + at.getMinutes() * 60 + at.getSeconds();
   }
 }
 
@@ -151,12 +150,36 @@ export function delayTxt(td: number | null | undefined): string {
   return (m > 0 ? "+" : "") + m + " min";
 }
 
+/** Row status for a recorded deviation in seconds, on the same 60 s threshold as delayClass. */
+export function delayStatus(td: number): string {
+  if (Math.abs(td) <= 60) return "Na czas";
+  const m = delayMinutes(td);
+  return m > 0 ? `Opóźniony ${m} min` : `Przed czasem ${-m} min`;
+}
+
 /** Tailwind text-color class for a delay in seconds. */
 export function delayClass(td: number | null | undefined): string {
   if (td == null) return "text-text-mute";
   if (td > 60) return "text-late";
   if (td < -60) return "text-early";
   return "text-good";
+}
+
+/**
+ * Recorded arrival per trip.times position as Warsaw seconds since midnight (null = unknown or not passed):
+ * KB from the server's arrival log (`arrived`, epoch secs; upstream drops passed stops' times), MZK from the
+ * operator's per-stop times of the stops before the vehicle's index.
+ */
+export function arrivedSecs(resp: Pick<TripExecutionResponse, "trip" | "arrived" | "vehicle_trip_index">): (number | null)[] | null {
+  if (resp.arrived) return resp.arrived.map((e) => (e == null ? null : nowSecs(new Date(e * 1000))));
+  const times = resp.trip?.times;
+  const vti = resp.vehicle_trip_index;
+  if (resp.trip?.operator !== "MZK" || !times || vti == null) return null;
+  return times.map((t, i) => {
+    const plan = secsFromHHMM(t.departure_time);
+    const diff = t.estimate?.time_diff;
+    return i < vti && plan != null && diff != null ? plan + diff : null;
+  });
 }
 
 /** Countdown label for a departure at `secs` (seconds since midnight). */
@@ -180,9 +203,10 @@ export function countdown(secs: number | null, now: number): string {
  */
 export function displayStopName(raw: string): string {
   if (!raw) return raw;
-  return raw.toLocaleLowerCase("pl-PL").replace(/\p{L}+/gu, (w) => {
+  return raw.toLocaleLowerCase("pl-PL").replace(/\p{L}+/gu, (w, at: number, s: string) => {
     if (w.length === 1) return w.toLocaleUpperCase("pl-PL"); // "d.a." → "D.A."
-    if (!/[aeiouyąęó]/.test(w)) return w.toLocaleUpperCase("pl-PL"); // ZML, PKP
+    // ZML, PKP; a dotted one is an abbreviation ("DZ." → "Dz.", "ŚW." → "Św.")
+    if (!/[aeiouyąęó]/.test(w) && s[at + w.length] !== ".") return w.toLocaleUpperCase("pl-PL");
     if (w.length <= 4 && /^[ixv]+$/.test(w)) return w.toLocaleUpperCase("pl-PL"); // II, IV
     return w.charAt(0).toLocaleUpperCase("pl-PL") + w.slice(1);
   });
@@ -327,7 +351,7 @@ export function notStartedEta(trip: Pick<TripView, "stop" | "rawTimes">, now: nu
     let overstay = now - sched0;
     if (overstay > 43200) overstay -= 86400; // first departure is "tomorrow" (post-midnight) while now is before midnight
     else if (overstay < -43200) overstay += 86400;
-    eta += ` · na ${stop.name}: najwcześniej ${hhmmFromSecs(schedI + Math.max(0, overstay))}`;
+    eta += ` · na ${displayStopName(stop.name)}: najwcześniej ${hhmmFromSecs(schedI + Math.max(0, overstay))}`;
   }
   return eta;
 }
@@ -359,7 +383,7 @@ export function computeEta(
         if (delta < -43200) delta += 86400; // post-midnight arrival viewed before midnight
         const mins = Math.round(delta / 60);
         eta = isLive
-          ? `na ${stop.name}: ${hhmmFromSecs(arr)}${est != null ? ` (${delayTxt(est)})` : ""}`
+          ? `na ${displayStopName(stop.name)}: ${hhmmFromSecs(arr)}${est != null ? ` (${delayTxt(est)})` : ""}`
           : `planowany przyjazd ${st.departure_time}`;
         if (isLive && mins >= 0) eta += ` · za ${mins} min`;
       }
@@ -367,7 +391,8 @@ export function computeEta(
   }
   if (!eta && isLive && vti != null && rawTimes[vti]) {
     const target = rawTimes[vti];
-    eta = isAtStop === false ? `następny: ${target.stop_name}` : `pojazd na: ${target.stop_name}`;
+    const name = displayStopName(target.stop_name);
+    eta = isAtStop === false ? `następny: ${name}` : `pojazd na: ${name}`;
   }
   return eta;
 }

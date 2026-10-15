@@ -25,6 +25,18 @@ const SNAP_HEIGHTS: Record<Snap, string> = {
   peek: `${PEEK * 100}dvh`,
 };
 
+/** Viewport fraction a mobile sheet covers at each snap. */
+export const SNAP_COVER: Record<Snap, number> = { full: FULL, half: HALF, peek: PEEK };
+
+/** What the open sheet covers once it settles (its snap, never a mid-transition height):
+ *  a viewport fraction on mobile, 1 for the docked desktop panel, 0 when none is open. */
+export function openSheetCover(): number {
+  const el = document.querySelector<HTMLElement>('section[role="dialog"]');
+  if (!el) return 0;
+  const snap = el.dataset.snap as Snap | undefined;
+  return snap ? SNAP_COVER[snap] : 1;
+}
+
 // Apple WWDC 2018 Fluid Interfaces rubber-band formula
 function rubberband(overshoot: number, dimension: number, constant = 0.45): number {
   return (overshoot * dimension * constant) / (dimension + constant * Math.abs(overshoot));
@@ -89,17 +101,20 @@ export default function BottomSheet({
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      // a dialog over the sheet (vehicle card) claims its Escape with preventDefault
+      if (e.key === "Escape" && !e.defaultPrevented) onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  /* focus restoration */
+  /* focus restoration. preventScroll: the sheet mounts translated below the viewport, and a plain
+     focus() scrolls the overflow-hidden app root by the sheet's height (the whole map jumps up, then
+     slides back as the entrance transition shrinks the overflow) */
   useEffect(() => {
     restoreRef.current = (document.activeElement as HTMLElement | null) ?? null;
-    sheetRef.current?.focus();
-    return () => restoreRef.current?.focus?.();
+    sheetRef.current?.focus({ preventScroll: true });
+    return () => restoreRef.current?.focus?.({ preventScroll: true });
   }, []);
 
   const vh = () => (typeof window !== "undefined" ? window.innerHeight : 800);

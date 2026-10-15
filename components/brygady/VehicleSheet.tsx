@@ -1,9 +1,11 @@
 "use client";
 
 import { useEffect, useEffectEvent, useId, useMemo, useRef, useState } from "react";
-import { isNotFound, useVehicleDetail, type FleetSummaryItem } from "@/lib/client/fleet";
-import type { FleetCurrentCourse, FleetVehicleDetail, VehicleCourseRecord } from "@/lib/shared/fleet";
+import { isNotFound, useVehicleDetail, useVehiclePhotos, type FleetSummaryItem } from "@/lib/client/fleet";
+import { prefersReducedMotion } from "@/lib/client/motion";
+import type { FleetCurrentCourse, FleetVehicleDetail, VehicleCourseRecord, VehiclePhoto } from "@/lib/shared/fleet";
 import { useNow } from "../hooks";
+import { CaretLeftIcon, CaretRightIcon } from "../icons";
 import { CloseIcon, LineBadge, ShareButton } from "../ui";
 import { CourseDelayColumns, CourseGantt, GanttLegend, type DelayColumn, type GanttCourse } from "./charts";
 import {
@@ -26,8 +28,21 @@ import {
 
 const FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]),select,textarea,summary,[tabindex]:not([tabindex="-1"])';
 
+/** Opens a live course on the map in place (the card sits over the map); without it the link navigates. */
+type ShowOnMap = (execId: string) => void;
+
 /** Modal sheet: bottom sheet on phones, centred dialog from md up. */
-export function VehicleSheet({ side, seed, onClose }: { side: string; seed?: FleetSummaryItem; onClose: () => void }) {
+export function VehicleSheet({
+  side,
+  seed,
+  onClose,
+  onShowOnMap,
+}: {
+  side: string;
+  seed?: FleetSummaryItem;
+  onClose: () => void;
+  onShowOnMap?: ShowOnMap;
+}) {
   const titleId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
   const { data, error, isLoading, mutate } = useVehicleDetail(side);
@@ -76,7 +91,7 @@ export function VehicleSheet({ side, seed, onClose }: { side: string; seed?: Fle
   const model = vehicle?.model ?? seed?.model;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center md:items-center md:p-6">
+    <div className="fixed inset-0 z-[2000] flex items-end justify-center md:items-center md:p-6">
       <div className="absolute inset-0 animate-fade bg-black/65" onClick={onClose} aria-hidden />
       <div
         ref={panelRef}
@@ -97,7 +112,7 @@ export function VehicleSheet({ side, seed, onClose }: { side: string; seed?: Fle
               {vehicle?.year ? <span className="text-text-faint"> ({vehicle.year})</span> : null}
             </p>
           </div>
-          <ShareButton title={`Pojazd MZK #${side}`} />
+          <ShareButton title={`Pojazd MZK #${side}`} path={`/brygady?tabor=${encodeURIComponent(side)}`} />
           <button
             type="button"
             onClick={onClose}
@@ -117,7 +132,7 @@ export function VehicleSheet({ side, seed, onClose }: { side: string; seed?: Fle
                   Nie udało się odświeżyć, pokazujemy ostatnie dane.
                 </p>
               ) : null}
-              <VehicleBody v={vehicle} />
+              <VehicleBody v={vehicle} onShowOnMap={onShowOnMap} />
             </>
           ) : notFound ? (
             <div className="py-12 text-center">
@@ -183,12 +198,11 @@ function Block({ title, children, aside }: { title: string; children: React.Reac
   );
 }
 
-function mapHref(v: FleetVehicleDetail, c: FleetCurrentCourse): string | null {
-  if (c.courseLoid === undefined) return null;
-  return `/?exec=${encodeURIComponent(`mzk:${c.courseLoid}:${v.sideNumber}`)}`;
+function liveExec(v: FleetVehicleDetail, c: FleetCurrentCourse): string | null {
+  return c.courseLoid === undefined ? null : `mzk:${c.courseLoid}:${v.sideNumber}`;
 }
 
-function VehicleBody({ v }: { v: FleetVehicleDetail }) {
+function VehicleBody({ v, onShowOnMap }: { v: FleetVehicleDetail; onShowOnMap?: ShowOnMap }) {
   const nowSecs = useNow(30_000);
   const nowEpoch = useEpochNow(30_000);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
@@ -238,7 +252,10 @@ function VehicleBody({ v }: { v: FleetVehicleDetail }) {
 
   return (
     <div className="space-y-4">
-      <StatusBlock v={v} nowEpoch={nowEpoch} />
+      <div className="space-y-4 md:flex md:gap-4 md:space-y-0">
+        <PhotoGallery side={v.sideNumber} />
+        <StatusBlock v={v} nowEpoch={nowEpoch} onShowOnMap={onShowOnMap} />
+      </div>
 
       <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Kpi label="Kursy dziś" value={String(s.totalCoursesToday)}>
@@ -352,14 +369,14 @@ function Kpi({ label, value, children }: { label: string; value: string; childre
   );
 }
 
-function StatusBlock({ v, nowEpoch }: { v: FleetVehicleDetail; nowEpoch: number }) {
+function StatusBlock({ v, nowEpoch, onShowOnMap }: { v: FleetVehicleDetail; nowEpoch: number; onShowOnMap?: ShowOnMap }) {
   const c = v.currentCourse;
   if (c && v.status === "active") {
-    const href = mapHref(v, c);
+    const exec = liveExec(v, c);
     const driven = c.drivenMeters !== undefined ? c.drivenMeters / 1000 : null;
     const length = c.lengthMeters !== undefined ? c.lengthMeters / 1000 : null;
     return (
-      <section aria-label="Bieżący kurs" className="rounded-2xl border border-hairline bg-surface p-4">
+      <section aria-label="Bieżący kurs" className="flex flex-col rounded-2xl border border-hairline bg-surface p-4 md:min-w-0 md:flex-1">
         <div className="flex items-center gap-2.5">
           <LineBadge line={c.lineName} operator="MZK" big />
           <div className="min-w-0 flex-1">
@@ -413,11 +430,17 @@ function StatusBlock({ v, nowEpoch }: { v: FleetVehicleDetail; nowEpoch: number 
           </>
         )}
 
-        <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+        <div className="mt-auto flex flex-wrap items-center justify-between gap-2 pt-3">
           <span className="text-[12px] text-text-faint">Pozycja {fmtAgo(v.lastSeenAt, nowEpoch)}</span>
-          {href ? (
+          {exec ? (
             <a
-              href={href}
+              href={`/?exec=${encodeURIComponent(exec)}`}
+              onClick={(e) => {
+                // a modified click still opens a new tab
+                if (!onShowOnMap || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+                e.preventDefault();
+                onShowOnMap(exec);
+              }}
               className="inline-flex min-h-10 items-center gap-2 rounded-full bg-brand px-4 text-[13px] font-semibold text-on-brand transition-colors hover:bg-brand-hi"
             >
               <MapIcon size={15} />
@@ -432,7 +455,7 @@ function StatusBlock({ v, nowEpoch }: { v: FleetVehicleDetail; nowEpoch: number 
   const loc = v.lastKnownLocation;
   const hasCoords = loc && Math.abs(loc.lat) > 1 && Math.abs(loc.lon) > 1;
   return (
-    <section aria-label="Stan pojazdu" className="rounded-2xl border border-hairline bg-surface p-4">
+    <section aria-label="Stan pojazdu" className="flex flex-col rounded-2xl border border-hairline bg-surface p-4 md:min-w-0 md:flex-1">
       <p className="text-[15px] font-semibold text-text">Nie kursuje</p>
       <p className="mt-1 text-[13px] text-text-mute">
         {v.lastSeenAt > 0 ? (
@@ -445,16 +468,121 @@ function StatusBlock({ v, nowEpoch }: { v: FleetVehicleDetail; nowEpoch: number 
         )}
       </p>
       {v.lastSeenAt > 0 && hasCoords ? (
-        <a
-          href={`/?map=${loc.lat.toFixed(5)},${loc.lon.toFixed(5)},16`}
-          className="mt-3 inline-flex min-h-10 items-center gap-2 rounded-full bg-surface-3 px-4 text-[13px] font-semibold text-text transition-colors hover:bg-white/12"
-        >
-          <MapIcon size={15} />
-          Ostatnia pozycja na mapie
-        </a>
+        <div className="mt-auto pt-3">
+          <a
+            href={`/?map=${loc.lat.toFixed(5)},${loc.lon.toFixed(5)},16`}
+            className="inline-flex min-h-10 items-center gap-2 rounded-full bg-surface-3 px-4 text-[13px] font-semibold text-text transition-colors hover:bg-white/12"
+          >
+            <MapIcon size={15} />
+            Ostatnia pozycja na mapie
+          </a>
+        </div>
       ) : null}
     </section>
   );
+}
+
+const STRIP = "flex snap-x snap-mandatory overflow-x-auto overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden";
+const ARROW =
+  "absolute top-1/2 grid h-9 w-9 -translate-y-1/2 place-items-center rounded-full bg-black/55 text-[15px] text-white transition-opacity hover:bg-black/75 disabled:pointer-events-none disabled:opacity-0 pointer-coarse:hidden";
+
+const slideAt = (el: HTMLElement) => Math.round(el.scrollLeft / el.clientWidth);
+
+function slideTo(el: HTMLElement | null, k: number) {
+  el?.scrollTo({ left: k * el.clientWidth, behavior: prefersReducedMotion() ? "auto" : "smooth" });
+}
+
+/** The newest phototrans photos as a swipeable strip (scroll snap), hot-linked and credited; a tap
+ *  opens the photo's page on phototrans, the only place its original shows (phototrans answers a
+ *  foreign Referer with an empty page). Nothing when the vehicle has none. */
+function PhotoGallery({ side }: { side: string }) {
+  const { data, isLoading } = useVehiclePhotos(side);
+  const [failed, setFailed] = useState<ReadonlySet<string>>(() => new Set());
+  const [index, setIndex] = useState(0);
+  const stripRef = useRef<HTMLDivElement>(null);
+  if (isLoading) return <div className="skeleton aspect-[3/2] w-full rounded-2xl md:w-[300px] md:shrink-0 md:self-start" />;
+  const photos = (data?.photos ?? []).filter((ph) => !failed.has(ph.thumb));
+  if (photos.length === 0) return null;
+  const n = photos.length;
+  const i = Math.min(index, n - 1);
+  return (
+    <figure
+      aria-label={`Zdjęcia pojazdu #${side}`}
+      className="overflow-hidden rounded-2xl border border-hairline bg-surface md:w-[300px] md:shrink-0 md:self-start"
+    >
+      <div className="relative">
+        <div ref={stripRef} onScroll={(e) => setIndex(slideAt(e.currentTarget))} className={STRIP}>
+          {photos.map((ph, k) => (
+            <a
+              key={ph.thumb}
+              href={ph.page}
+              target="_blank"
+              rel="noopener"
+              title="Pełna rozdzielczość na phototrans"
+              className="block w-full shrink-0 snap-center"
+            >
+              {/* the photos stay on phototrans: next/image would re-host them through our server */}
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={ph.thumb}
+                alt={`Pojazd #${side}, zdjęcie ${k + 1} z ${n}, fot. ${ph.author}`}
+                width={300}
+                height={200}
+                loading={k === 0 ? "eager" : "lazy"}
+                draggable={false}
+                className="aspect-[3/2] w-full bg-surface-2 object-cover"
+                onError={() => setFailed((prev) => new Set(prev).add(ph.thumb))}
+              />
+            </a>
+          ))}
+        </div>
+        {n > 1 ? (
+          <>
+            <span className="pointer-events-none absolute right-2 top-2 rounded-full bg-black/60 px-2 py-0.5 text-[11.5px] font-medium tabular-nums text-white">
+              {i + 1} / {n}
+            </span>
+            <SlideArrows i={i} n={n} go={(k) => slideTo(stripRef.current, k)} />
+          </>
+        ) : null}
+      </div>
+      <PhotoCredit p={photos[i]} className="px-3 py-2" />
+    </figure>
+  );
+}
+
+function SlideArrows({ i, n, go }: { i: number; n: number; go: (k: number) => void }) {
+  return (
+    <>
+      <button type="button" aria-label="Poprzednie zdjęcie" disabled={i === 0} onClick={() => go(i - 1)} className={`${ARROW} left-2`}>
+        <CaretLeftIcon size="1em" weight="bold" aria-hidden />
+      </button>
+      <button type="button" aria-label="Następne zdjęcie" disabled={i === n - 1} onClick={() => go(i + 1)} className={`${ARROW} right-2`}>
+        <CaretRightIcon size="1em" weight="bold" aria-hidden />
+      </button>
+    </>
+  );
+}
+
+function PhotoCredit({ p, className }: { p: VehiclePhoto; className: string }) {
+  return (
+    <figcaption className={`flex items-baseline gap-1.5 text-[12px] text-text-mute ${className}`}>
+      <span className="min-w-0 truncate">
+        Fot.{" "}
+        <a href={p.authorPage} target="_blank" rel="noopener" className="font-medium text-text hover:underline">
+          {p.author}
+        </a>
+        {p.date ? <span className="tabular-nums"> · {fmtPhotoDate(p.date)}</span> : null}
+      </span>
+      <a href={p.page} target="_blank" rel="noopener" className="ml-auto shrink-0 text-text-faint hover:text-text">
+        phototrans
+      </a>
+    </figcaption>
+  );
+}
+
+function fmtPhotoDate(date: NonNullable<VehiclePhoto["date"]>): string {
+  const [y, m, d] = date.split("-");
+  return `${Number(d)}.${m}.${y}`;
 }
 
 function PredictionCard({ p }: { p: NonNullable<FleetVehicleDetail["predictedNextCourse"]> }) {

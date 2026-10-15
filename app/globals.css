@@ -397,6 +397,25 @@ body {
 /* drop the Leaflet-prefix flag icon — visual noise in a tiny license line
    (leaflet.css pins it with `display: inline !important`, hence the specificity) */
 .leaflet-control-attribution svg.leaflet-attribution-flag { display: none !important; }
+/* collapsed by AttributionCollapse (MapApp): a corner tab with an "i" covering the text */
+.leaflet-control-attribution.is-collapsed {
+  width: 24px;
+  height: 22px;
+  overflow: hidden;
+  cursor: pointer;
+}
+.leaflet-control-attribution.is-collapsed a { display: none; }
+.leaflet-control-attribution.is-collapsed::before {
+  content: "i";
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  border-radius: inherit;
+  background: var(--color-surface);
+  color: var(--color-text-mute);
+  font: italic 700 12px/1 Georgia, serif;
+}
 
 /* dark mode styling for keyless raster fallback tiles */
 .raster-dark-filter {

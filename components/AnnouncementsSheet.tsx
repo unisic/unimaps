@@ -61,7 +61,10 @@ function AnnouncementsSheet({ desktop, onClose }: Props) {
             {items.map((a) => (
               <li key={`${a.id}-${a.rev}`} className="rounded-xl bg-white/4 px-4 py-3.5">
                 <p className="max-w-[65ch] whitespace-pre-line text-[13.5px] leading-relaxed text-text">
-                  {a.content_markdown}
+                  {/* upstream marks headlines with markdown **bold**; the odd split parts are the bold runs */}
+                  {a.content_markdown
+                    .split(/\*\*([\s\S]+?)\*\*/)
+                    .map((part, i) => (i % 2 ? <strong key={i} className="font-semibold">{part}</strong> : part))}
                 </p>
               </li>
             ))}

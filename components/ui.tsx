@@ -80,10 +80,11 @@ export function StarIcon({ filled = false }: { filled?: boolean }) {
 /** Shares the CURRENT url (deep-link state keeps it fresh) via the native share
  *  sheet, falling back to clipboard + a 2 s "copied" check. Self-contained on
  *  purpose: no new props on the memo()-ized sheets. */
-export function ShareButton({ title }: { title: string }) {
+/** Shares `path` (resolved against this page), else the page itself. */
+export function ShareButton({ title, path }: { title: string; path?: string }) {
   const [copied, setCopied] = useState(false);
   const onShare = useCallback(async () => {
-    const url = window.location.href;
+    const url = path ? new URL(path, window.location.href).href : window.location.href;
     if (navigator.share) {
       try {
         await navigator.share({ title, url });
@@ -99,7 +100,7 @@ export function ShareButton({ title }: { title: string }) {
     } catch {
       /* clipboard blocked — nothing sensible to do */
     }
-  }, [title]);
+  }, [title, path]);
   return (
     <IconButton label={copied ? "Skopiowano link" : "Udostępnij"} onClick={() => void onShare()} pressed={copied}>
       {copied ? (

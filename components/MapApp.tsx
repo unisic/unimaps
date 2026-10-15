@@ -1,7 +1,7 @@
 "use client";
 
 import "leaflet/dist/leaflet.css";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AttributionControl, Circle, MapContainer, Marker, TileLayer, ZoomControl, useMap } from "react-leaflet";
 import L from "leaflet";
 import { fetchJSON, fetchRoute, getTrip } from "@/lib/client/api";
@@ -9,9 +9,10 @@ import { loadShapeLatest } from "@/lib/client/shapes";
 import { projectStopsAlong, slicePolyline } from "@/lib/shared/polyline";
 import { peekVehicleAnimator } from "@/lib/client/vehicleAnimator";
 import { adjustStopRoutePoint, injectDetourPoints } from "@/lib/client/detours";
-import { tripTimeMatchesStop, hslColor } from "@/lib/client/format";
+import { arrivedSecs, tripTimeMatchesStop, hslColor } from "@/lib/client/format";
 import { makeStopPingIcon, makeUserLocationIcon } from "@/lib/client/leafletIcons";
 import { panMotion } from "@/lib/client/motion";
+import { focusPoint, glideTo, installSmoothZoom, isCovered } from "@/lib/client/mapGlide";
 import { buildSearch, parseUrlState, type UrlState } from "@/lib/client/urlState";
 import type {
   ConnectionItinerary,
@@ -28,6 +29,7 @@ import type {
 } from "@/lib/client/types";
 import { useGeolocation, useIsDesktop, useStops, useVehicles } from "@/components/hooks";
 import AnnouncementsSheet from "@/components/AnnouncementsSheet";
+import { SNAP_COVER, openSheetCover } from "@/components/BottomSheet";
 import { type TopBarSearchHandle } from "@/components/TopBarSearch";
 import ConnectionsModal from "@/components/ConnectionsModal";
 import Toast from "@/components/Toast";
@@ -45,7 +47,11 @@ import JourneyLayer from "@/components/JourneyLayer";
 import VectorBaseLayer, { type BasemapStatus } from "@/components/VectorBaseLayer";
 import { IconContext } from "@/components/icons";
 
+/* the fleet card (charts and all) loads only when a vehicle card is first opened */
+const VehicleSheet = lazy(() => import("@/components/brygady/VehicleSheet").then((m) => ({ default: m.VehicleSheet })));
+
 const NOT_STARTED = "Pojazd jeszcze nie wyruszył";
+const TRIP_REFRESH_MS = 30_000;
 const LAYER_KEY = "kb:baseLayer";
 /* module-level: a stable context value never re-renders the memo()-ized icon consumers */
 const ICON_DEFAULTS = { size: "1em", weight: "bold", "aria-hidden": true } as const;
@@ -57,6 +63,58 @@ type LastRequest =
 function MapBridge({ onMap }: { onMap: (m: L.Map) => void }) {
   const map = useMap();
   useEffect(() => onMap(map), [map, onMap]);
+  return null;
+}
+
+/** The OSMF attribution guidelines let the credit line collapse to an "i" in its corner after 5 s or
+ *  the first touch of the map; a tap (or Enter) on the "i" opens it again until the next touch. */
+function AttributionCollapse() {
+  const map = useMap();
+  useEffect(() => {
+    const el = map.getContainer().querySelector<HTMLElement>(".leaflet-control-attribution");
+    if (!el) return;
+    const mapEl = map.getContainer();
+    const set = (collapsed: boolean) => {
+      if (el.classList.contains("is-collapsed") === collapsed) return;
+      el.classList.toggle("is-collapsed", collapsed);
+      if (collapsed) {
+        el.tabIndex = 0;
+        el.setAttribute("role", "button");
+        el.setAttribute("aria-label", "Pokaż źródła mapy");
+      } else {
+        el.removeAttribute("tabindex");
+        el.removeAttribute("role");
+        el.removeAttribute("aria-label");
+      }
+    };
+    const onMapInput = (e: Event) => {
+      if (!el.contains(e.target as Node)) set(true);
+    };
+    const onClick = (e: MouseEvent) => {
+      if (!el.classList.contains("is-collapsed")) return;
+      e.preventDefault();
+      set(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (!el.classList.contains("is-collapsed") || (e.key !== "Enter" && e.key !== " ")) return;
+      e.preventDefault();
+      set(false);
+      el.querySelector("a")?.focus();
+    };
+    const timer = setTimeout(() => set(true), 5000);
+    mapEl.addEventListener("pointerdown", onMapInput, { passive: true });
+    mapEl.addEventListener("wheel", onMapInput, { passive: true });
+    el.addEventListener("click", onClick);
+    el.addEventListener("keydown", onKey);
+    return () => {
+      clearTimeout(timer);
+      mapEl.removeEventListener("pointerdown", onMapInput);
+      mapEl.removeEventListener("wheel", onMapInput);
+      el.removeEventListener("click", onClick);
+      el.removeEventListener("keydown", onKey);
+      set(false);
+    };
+  }, [map]);
   return null;
 }
 
@@ -120,6 +178,10 @@ export default function MapApp() {
   const [connModalOpen, setConnModalOpen] = useState(false);
   const [connInitialFrom, setConnInitialFrom] = useState<Stop | null>(null);
   const [annOpen, setAnnOpen] = useState(false);
+  /* MZK vehicle card over the map (side number). It has its own history entry: back closes
+     the card and leaves the trip under it open. The ref is what the popstate listener reads. */
+  const [cardSide, setCardSide] = useState<string | null>(null);
+  const cardRef = useRef<string | null>(null);
   /* deep link parsed exactly once, before any state settles (ssr:false — window
      is safe in the lazy initializer) */
   const [initialUrl] = useState<UrlState>(() => parseUrlState(window.location.search));
@@ -248,6 +310,7 @@ export default function MapApp() {
       tripId: string | number | null = null,
       precomputedRoute?: LatLng[] | null,
       serverRoute?: { id?: string; status?: ShapeStatus } | null,
+      arrived: (number | null)[] | null = null,
     ) => {
       if (gen !== genRef.current) return;
       const { byId, byDesig } = stopsMapsRef.current;
@@ -288,6 +351,7 @@ export default function MapApp() {
         operator: tripData?.operator,
         shapeId: initialRouted ? (serverRoute?.id ?? null) : null,
         routeHint: serverRoute ?? null,
+        arrived,
       });
       if (initialRouted || !needRoute) return;
       let road: LatLng[] | null = null;
@@ -332,6 +396,7 @@ export default function MapApp() {
       t.tripId,
       null,
       t.routeHint,
+      t.arrived,
     );
   }, [stopsMaps, trip, buildTrip]);
 
@@ -422,6 +487,7 @@ export default function MapApp() {
           tripId,
           resp.shape,
           { id: resp.shape_id, status: resp.shape_status },
+          arrivedSecs(resp),
         );
       } catch {
         if (gen !== genRef.current) return;
@@ -430,6 +496,36 @@ export default function MapApp() {
     },
     [buildTrip, openTripStatic, showToast],
   );
+
+  /* the live timeline is fetched once on open: re-fetch it so stops passed meanwhile gain their recorded
+     arrival. One request per 30 s per open trip, none while the tab is hidden, never two in flight. */
+  const liveExecId = trip?.isLive && (trip.status === "ready" || trip.status === "routing") ? trip.execId : null;
+  const tripGen = trip?.gen;
+  useEffect(() => {
+    if (!liveExecId) return;
+    let ac: AbortController | null = null;
+    const id = setInterval(async () => {
+      if (document.hidden || ac) return;
+      ac = new AbortController();
+      try {
+        const resp = await fetchJSON<TripExecutionResponse>(
+          `/api/trip_execution?exec_id=${encodeURIComponent(liveExecId)}`,
+          { cache: "no-store", signal: ac.signal },
+        );
+        if (tripGen !== genRef.current || !resp?.trip) return;
+        const arrived = arrivedSecs(resp);
+        if (arrived) setTrip((prev) => (prev && prev.gen === tripGen ? { ...prev, arrived } : prev));
+      } catch {
+        /* keep the last timeline; the next tick retries */
+      } finally {
+        ac = null;
+      }
+    }, TRIP_REFRESH_MS);
+    return () => {
+      clearInterval(id);
+      ac?.abort();
+    };
+  }, [liveExecId, tripGen]);
 
   const retryTrip = useCallback(() => {
     const req = lastReqRef.current;
@@ -452,13 +548,13 @@ export default function MapApp() {
     setConnModalOpen(true);
   }, [closeJourney]);
 
-  const handleFocusJourneyStop = useCallback((lat: number, lon: number) => {
-    const m = mapRef.current;
-    if (m) {
-      m.getContainer().classList.add("map-moving");
-      m.flyTo([lat, lon], Math.max(m.getZoom(), 16), panMotion(0.9));
-    }
-  }, []);
+  const handleFocusJourneyStop = useCallback(
+    (lat: number, lon: number) => {
+      const m = mapRef.current;
+      if (m) glideTo(m, [lat, lon], Math.max(m.getZoom(), 16), focusPoint(m, desktop, openSheetCover()));
+    },
+    [desktop],
+  );
 
   const handleSelectStop = useCallback(
     (s: Stop, opts?: { fly?: boolean }) => {
@@ -467,13 +563,16 @@ export default function MapApp() {
       closeTrip();
       closeJourney();
       setSelectedStop(s);
-      if (opts?.fly && mapRef.current) {
-        const m = mapRef.current;
-        m.getContainer().classList.add("map-moving");
-        m.flyTo([s.lat, s.lon], Math.max(m.getZoom(), 16), panMotion(1.1));
-      }
+      const m = mapRef.current;
+      if (!m) return;
+      // the stop sheet opens at half: land the stop in the map left above it
+      const at = focusPoint(m, desktop, SNAP_COVER.half);
+      if (opts?.fly) glideTo(m, [s.lat, s.lon], Math.max(m.getZoom(), 16), at);
+      // tapped on the map: move only when the sheet would cover it
+      else if (isCovered(m, desktop, SNAP_COVER.half, m.latLngToContainerPoint([s.lat, s.lon])))
+        glideTo(m, [s.lat, s.lon], m.getZoom(), at);
     },
-    [closeTrip, closeJourney],
+    [closeTrip, closeJourney, desktop],
   );
 
   /* stable identities so memo(TopBar) survives the 5 s vehicle poll re-render */
@@ -687,14 +786,45 @@ export default function MapApp() {
     }
   }, [selectedStop, tripOpen, tripExecId, tripIsStatic, filterLines]);
 
+  const openVehicleCard = useCallback((side: string) => {
+    if (cardRef.current) return;
+    cardRef.current = side;
+    window.history.pushState({ kb: true }, "", window.location.href);
+    setCardSide(side);
+  }, []);
+
+  const closeVehicleCard = useCallback(() => {
+    if (!cardRef.current) return;
+    cardRef.current = null;
+    setCardSide(null);
+    urlSyncRef.current.expectPop++;
+    window.history.back();
+  }, []);
+
+  /* "Pokaż na mapie" in the card: its course is usually the open trip, else open that one */
+  const showCardOnMap = useCallback(
+    (execId: string) => {
+      closeVehicleCard();
+      if (tripExecId === execId) return;
+      setVehMeta(null);
+      void openTripLive(execId, null, null);
+    },
+    [closeVehicleCard, tripExecId, openTripLive],
+  );
+
   /* popstate: deliberately close-only — Android/browser back closes sheets;
      forward into a sheet the state doesn't have just repairs the URL (state is
      authoritative). Full back/forward re-opening is not worth the surface. */
   useEffect(() => {
     const onPop = (): void => {
       const st = urlSyncRef.current;
-      if (st.expectPop > 0) {
-        st.expectPop--;
+      if (st.expectPop > 0 || cardRef.current) {
+        // our own unwind, or back while the vehicle card is open: that closes just the card
+        if (st.expectPop > 0) st.expectPop--;
+        else {
+          cardRef.current = null;
+          setCardSide(null);
+        }
         const want = buildSearch(urlStateRef.current);
         if (window.location.search !== want) {
           window.history.replaceState({ kb: true }, "", want || window.location.pathname);
@@ -767,27 +897,41 @@ export default function MapApp() {
       setVehMeta(v);
       const m = mapRef.current;
       if (m && Number.isFinite(v.lat) && Number.isFinite(v.lon)) {
-        // fly to where the marker is drawn (dead-reckoned), not the raw fix behind it
+        // zoom in on where the marker is drawn (dead-reckoned), not the raw fix behind it, landing
+        // it above the trip sheet (opens at half); TripLayer skips its route fit for this trip
         const d = peekVehicleAnimator(m)?.displayed(v.id);
-        m.getContainer().classList.add("map-moving");
-        m.flyTo(d ? [d.lat, d.lon] : [v.lat, v.lon], Math.max(m.getZoom(), 15), panMotion(0.9));
+        const at = focusPoint(m, desktop, SNAP_COVER.half);
+        glideTo(m, d ? [d.lat, d.lon] : [v.lat, v.lon], Math.max(m.getZoom(), 16), at);
       }
       void openTripLive(v.id, null, null);
     },
-    [openTripLive],
+    [openTripLive, desktop],
   );
 
-  /* fly to a stop tapped on the trip timeline (does not change selection) */
-  const handleFocusStop = useCallback((s: Stop) => {
-    const m = mapRef.current;
-    if (m) {
-      m.getContainer().classList.add("map-moving");
-      m.flyTo([s.lat, s.lon], Math.max(m.getZoom(), 15), panMotion(0.9));
-    }
-  }, []);
+  /* trip sheet's locate button: fly to where the bus is drawn (dead-reckoned) when it is on the fleet layer */
+  const handleLocateVehicle = useCallback(
+    (v: { id: string | null; lat: number; lon: number }) => {
+      const m = mapRef.current;
+      if (!m) return;
+      const d = v.id ? peekVehicleAnimator(m)?.displayed(v.id) : null;
+      const at = focusPoint(m, desktop, openSheetCover());
+      glideTo(m, d ? [d.lat, d.lon] : [v.lat, v.lon], Math.max(m.getZoom(), 16), at);
+    },
+    [desktop],
+  );
+
+  /* glide to a stop tapped on the trip timeline (does not change selection) */
+  const handleFocusStop = useCallback(
+    (s: Stop) => {
+      const m = mapRef.current;
+      if (m) glideTo(m, [s.lat, s.lon], Math.max(m.getZoom(), 16), focusPoint(m, desktop, openSheetCover()));
+    },
+    [desktop],
+  );
 
   const handleMap = useCallback((m: L.Map) => {
     mapRef.current = m;
+    installSmoothZoom(m);
     // guard against a 0×0 container at mount (dvh reflow on mobile): re-measure
     // once layout settles so the GL canvas isn't sized from an empty box
     requestAnimationFrame(() => m.invalidateSize(false));
@@ -830,13 +974,13 @@ export default function MapApp() {
   }, []);
 
   /* locate button: start (or reuse) the GPS watch and recenter on the fix */
-  const flyToUser = useCallback((p: { lat: number; lon: number }) => {
-    const m = mapRef.current;
-    if (m) {
-      m.getContainer().classList.add("map-moving");
-      m.flyTo([p.lat, p.lon], Math.max(m.getZoom(), 15), panMotion(1.1));
-    }
-  }, []);
+  const flyToUser = useCallback(
+    (p: { lat: number; lon: number }) => {
+      const m = mapRef.current;
+      if (m) glideTo(m, [p.lat, p.lon], Math.max(m.getZoom(), 15), focusPoint(m, desktop, openSheetCover()));
+    },
+    [desktop],
+  );
 
   const handleLocate = useCallback(() => {
     // watch already running → a second tap turns it off (stops the GPS drain)
@@ -908,6 +1052,7 @@ export default function MapApp() {
             position="bottomleft"
             prefix={'Trasy: <a href="https://project-osrm.org/" target="_blank" rel="noopener noreferrer">OSRM</a>'}
           />
+          <AttributionCollapse />
           <MapBridge onMap={handleMap} />
           {basemap.status !== "failed" && tiles.kind === "vector" ? (
             <VectorBaseLayer
@@ -1030,6 +1175,12 @@ export default function MapApp() {
 
         {toast && <Toast text={toast} onClose={closeToast} />}
 
+        {cardSide && (
+          <Suspense fallback={null}>
+            <VehicleSheet key={cardSide} side={cardSide} onClose={closeVehicleCard} onShowOnMap={showCardOnMap} />
+          </Suspense>
+        )}
+
         {/* one sheet at a time: announcements over trip over stop; closing the
             announcements returns to whichever sheet was underneath */}
         {annOpen ? (
@@ -1044,7 +1195,9 @@ export default function MapApp() {
             onBack={tripFromStop ? closeTrip : null}
             onClose={handleCloseAll}
             onFocusStop={handleFocusStop}
+            onLocate={handleLocateVehicle}
             onRetry={retryTrip}
+            onOpenVehicleCard={openVehicleCard}
             initialSnap="half"
           />
         ) : journey ? (

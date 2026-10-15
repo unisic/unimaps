@@ -32,9 +32,10 @@ export async function GET(req: Request): Promise<Response> {
     const data = await getApi().fetchTripExecution(execId, index);
     let body: unknown = pyTruthy(data) ? data : {};
     if (pyTruthy(data) && isRecord(data)) {
-      getPoller().ingestTripExecution(execId, data);
-      // stored road geometry for this trip's stop pattern (never mutate `data`)
-      body = { ...data, ...kbShapeRef(asRecord(data.trip)) };
+      const pos = getPoller().ingestTripExecution(execId, data);
+      // stored road geometry for this trip's stop pattern (never mutate `data`); `arrived` = recorded arrival
+      // epoch secs per times[] position, which upstream drops for passed stops
+      body = { ...data, ...kbShapeRef(asRecord(data.trip)), ...(pos?.arrivals ? { arrived: pos.arrivals.arrived } : {}) };
     }
     return Response.json(body, {
       headers: {

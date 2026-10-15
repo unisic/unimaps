@@ -8,7 +8,7 @@ import type { transit_realtime } from "gtfs-realtime-bindings";
 import * as config from "./config";
 import { bearing, metersBetween } from "./geo";
 import { KbApi, asRecord, isRecord, parseIntStrict, pyTruthy } from "./kb-api";
-import { stepKbProgress, straightGeom, type ProgressGeom } from "./kb-progress";
+import { stepArrivals, stepKbProgress, straightGeom, type ProgressGeom } from "./kb-progress";
 import { log } from "./logger";
 import { estimateFixAt, kbAheadM, kbDistAlong, nextSpeed, type KbShapeSink } from "./route-info";
 import { buildKbPattern, type KbPattern } from "./shape-patterns";
@@ -669,8 +669,9 @@ export class LivePoller {
               pos.bearing = prev.bearing;
             }
           }
-          this.attachProgress(pos, prev, asRecord(resp));
+          const gpsLast = this.attachProgress(pos, prev, asRecord(resp));
           this.attachRouteInfo(pos, prev, asRecord(resp), "urgent");
+          this.attachArrivals(pos, prev, gpsLast);
           pos.schedTripId = this.execTrip.get(eid)?.trip;
           this.positions.set(eid, pos);
           this.notFound.delete(eid);
@@ -898,22 +899,22 @@ export class LivePoller {
    * at the real position. Runs on EVERY poll (a standing late bus must keep
    * getting later), before attachRouteInfo (whose along-route search uses the
    * GPS indices). Isolated like attachRouteInfo: an error leaves the upstream
-   * value untouched.
+   * value untouched. Returns the GPS last-passed stop index (null = unplaced).
    */
-  private attachProgress(pos: VehiclePos, prev: VehiclePos | undefined, resp: Record<string, unknown>): void {
+  private attachProgress(pos: VehiclePos, prev: VehiclePos | undefined, resp: Record<string, unknown>): number | null {
     pos.delayUp = pos.delay;
-    if (!config.GPS_DELAY) return;
+    if (!config.GPS_DELAY) return null;
     try {
       const trip = asRecord(resp.trip);
       const times: unknown[] = Array.isArray(trip.times) ? trip.times : [];
       const pattern = this.kbPatternFor(times, pos.line, pos.headsign);
-      if (!pattern) return;
+      if (!pattern) return null;
       let geom = this.straightMemo.get(pattern);
       if (geom === undefined) {
         geom = straightGeom(pattern.stopPts);
         this.straightMemo.set(pattern, geom);
       }
-      if (!geom) return;
+      if (!geom) return null;
       const plan = times.map((t) => (isRecord(t) ? hhmmToSecs(t.departure_time) : null));
       const o = stepKbProgress(
         {
@@ -950,6 +951,7 @@ export class LivePoller {
       }
       // reached its last stop with upstream's index stale (parsePosition's own rule can't fire: vti never gets there)
       if (o.finished) pos.finished = true;
+      return o.lastIdx;
     } catch (err) {
       pos.delay = pos.delayUp;
       pos.delaySrc = undefined;
@@ -960,7 +962,15 @@ export class LivePoller {
         this.progressErrLoggedAt = now;
         log.error("rt", `gps progress failed for ${pos.execId}: ${err}`);
       }
+      return null;
     }
+  }
+
+  /** Stop arrival log (stepArrivals): the further of upstream's index and the GPS one. Bounded by the trip's stop
+   *  count, dropped with the vehicle. */
+  private attachArrivals(pos: VehiclePos, prev: VehiclePos | undefined, gpsLast: number | null): void {
+    const reached = Math.max(pos.currentStopSequence ?? -1, gpsLast ?? -1);
+    pos.arrivals = stepArrivals(prev?.arrivals, reached, pos.updatedAt, pos.fixAt ?? pos.updatedAt);
   }
 
   /**
@@ -1091,8 +1101,9 @@ export class LivePoller {
         pos.bearing = prev.bearing;
       }
     }
-    this.attachProgress(pos, prev, resp);
+    const gpsLast = this.attachProgress(pos, prev, resp);
     this.attachRouteInfo(pos, prev, resp, "urgent");
+    this.attachArrivals(pos, prev, gpsLast);
     pos.schedTripId = this.execTrip.get(eid)?.trip;
     this.positions.set(eid, pos);
     this.notFound.delete(eid);

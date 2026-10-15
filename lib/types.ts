@@ -3,7 +3,7 @@
  * HTTP response shapes).
  */
 
-import type { KbProgState } from "./kb-progress";
+import type { KbArrivals, KbProgState } from "./kb-progress";
 
 /** A generic upstream JSON object we only loosely trust. */
 export type UpstreamRecord = Record<string, unknown>;
@@ -145,6 +145,8 @@ export interface VehiclePos {
   geoNextSeq?: number | null;
   /** tracker state carried across polls */
   prog?: KbProgState;
+  /** KB: recorded stop arrivals (upstream keeps none for passed stops) */
+  arrivals?: KbArrivals;
   /** KB: static timetable trip id this execution serves (learned from departures boards) */
   schedTripId?: string;
 }

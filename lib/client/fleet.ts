@@ -5,7 +5,7 @@
 import { useEffect, useRef } from "react";
 import useSWR from "swr";
 import { fetchJSON, HttpError } from "./api";
-import type { FleetStats, FleetSummaryItem, FleetTimelinePoint, FleetVehicleDetail } from "../shared/fleet";
+import type { FleetStats, FleetSummaryItem, FleetTimelinePoint, FleetVehicleDetail, VehiclePhoto } from "../shared/fleet";
 
 export type * from "../shared/fleet";
 
@@ -86,5 +86,15 @@ export function useFleetTimeline(enabled: boolean) {
     refreshInterval: 60_000,
     dedupingInterval: 30_000,
     revalidateOnFocus: true,
+  });
+}
+
+/** The vehicle's phototrans photos: fetched once per card, the server caches them for a day. */
+export function useVehiclePhotos(sideNumber: string | null) {
+  return useSWR<{ photos: VehiclePhoto[] }>(sideNumber ? `/api/fleet/${encodeURIComponent(sideNumber)}/photo` : null, fetcher, {
+    revalidateIfStale: false,
+    revalidateOnFocus: false,
+    revalidateOnReconnect: false,
+    shouldRetryOnError: false,
   });
 }

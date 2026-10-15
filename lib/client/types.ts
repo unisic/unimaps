@@ -199,6 +199,8 @@ export interface TripExecutionResponse {
   shape?: LatLng[];
   shape_id?: string;
   shape_status?: ShapeStatus;
+  /** KB: recorded arrival epoch secs per trip.times position (null = unknown / not reached) */
+  arrived?: (number | null)[];
 }
 
 /** One upstream service announcement (utrudnienia/objazdy). Despite the field
@@ -252,6 +254,8 @@ export interface TripView {
   shapeId?: string | null;
   /** the server's shape reference for this trip (kept so a rebuild can reuse it) */
   routeHint?: { id?: string; status?: ShapeStatus } | null;
+  /** live trips: recorded arrival per rawTimes position, Warsaw secs since midnight (arrivedSecs) */
+  arrived?: (number | null)[] | null;
 }
 
 export interface ConnectionLegStop {

@@ -201,6 +201,17 @@ export interface FleetTimelinePoint {
 
 export const TIMELINE_SLOT_SECS = 300;
 
+/** A phototrans photo of a vehicle: the browser hot-links the 300x200 thumbnail, credited to its
+ *  author, both linking back to phototrans. */
+export interface VehiclePhoto {
+  thumb: string;
+  page: string;
+  author: string;
+  authorPage: string;
+  /** YYYY-MM-DD the photo was taken, when phototrans gives one */
+  date: string | null;
+}
+
 /* ── punctuality ─────────────────────────────────────────────────────────────── */
 
 /** On time = at most 1 min early and at most 3 min late (the usual Polish operator rule). */

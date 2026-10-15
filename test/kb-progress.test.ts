@@ -16,6 +16,7 @@ import {
   plannedAt,
   progressAt,
   scheduleDelay,
+  stepArrivals,
   stepKbProgress,
   straightGeom,
   trackAlong,
@@ -549,5 +550,26 @@ describe("isFeedStale tests upstream's raw delay", () => {
     assert.equal(isFeedStale({ delay: 30, delayUp: 30, lastMovedAt: 0 }, 1000, 300), false);
     assert.equal(isFeedStale({ delay: null, lastMovedAt: 0 }, 1000, 300), true, "MZK-style vehicle without delayUp");
     assert.equal(isFeedStale({ delay: null, delayUp: null, lastMovedAt: 900 }, 1000, 300), false, "moved recently");
+  });
+});
+
+describe("stepArrivals", () => {
+  it("baselines the first sighting, stamps reached stops, nulls skipped ones and stale gaps", () => {
+    let a = stepArrivals(undefined, 3, 1000, 1000);
+    assert.deepEqual(a.arrived, [], "stops passed before the first sighting stay unknown");
+    a = stepArrivals(a, 3, 1010, 1008);
+    assert.deepEqual(a.arrived, []);
+    a = stepArrivals(a, 4, 1020, 1015);
+    assert.deepEqual(a.arrived, [null, null, null, null, 1015]);
+    a = stepArrivals(a, 6, 1030, 1025);
+    assert.deepEqual(a.arrived, [null, null, null, null, 1015, null, 1025], "a jump stamps only the reached stop");
+    a = stepArrivals(a, 5, 1040, 1040);
+    assert.equal(a.reached, 6, "never goes back");
+    a = stepArrivals(a, 7, 1200, 1190);
+    assert.equal(a.arrived[7], null, "reached at an unknown moment inside a long poll gap");
+    a = stepArrivals(a, 12, 1210, 1205);
+    assert.equal(a.arrived[12], null, "a 5-stop jump in one poll is a resync, not an arrival");
+    a = stepArrivals(a, 13, 1220, 1215);
+    assert.equal(a.arrived[13], 1215);
   });
 });

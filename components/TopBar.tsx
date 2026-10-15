@@ -404,6 +404,24 @@ function TopBar({
               kierunek jazdy
             </span>
           </div>
+          <p className="px-3 pb-1.5 text-[11px] leading-snug text-text-faint [&_a]:text-text-mute [&_a:hover]:text-text">
+            Mapa: ©{" "}
+            <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">
+              OpenStreetMap
+            </a>
+            ,{" "}
+            <a href="https://openfreemap.org" target="_blank" rel="noopener">
+              OpenFreeMap
+            </a>
+            , ©{" "}
+            <a href="https://www.openmaptiles.org/" target="_blank" rel="noopener">
+              OpenMapTiles
+            </a>
+            . Trasy:{" "}
+            <a href="https://project-osrm.org/" target="_blank" rel="noopener">
+              OSRM
+            </a>
+          </p>
         </div>
       )}
     </div>

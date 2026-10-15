@@ -157,6 +157,8 @@ function TripLayer({ trip, desktop, vehMeta, liveVehicle }: Props) {
   // route is not hidden under the sheet (mobile) or the panel (desktop).
   useEffect(() => {
     if (!trip || trip.status !== "ready") return;
+    // opened by tapping the bus: MapApp already zoomed in on it, the whole route would zoom back out
+    if (vehMeta && vehMeta.id === trip.execId) return;
     const pts: LatLng[] =
       trip.routed && trip.routed.length >= 2
         ? trip.routed
