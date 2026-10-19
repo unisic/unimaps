@@ -120,6 +120,8 @@ export const SHAPES_MAX_AGE_DAYS = envInt("KB_SHAPES_MAX_AGE_DAYS", 14);
 export const SHAPES_FILE = envStr("KB_SHAPES_FILE", path.join(OUTPUT_DIR, "shapes", "route-shapes.v1.json"));
 /** MZK stop travel directions learned from running courses (lib/mzk-stop-dirs.ts); outside output/gtfs for the same reason. */
 export const MZK_STOP_DIRS_FILE = envStr("KB_MZK_STOP_DIRS_FILE", path.join(OUTPUT_DIR, "mzk-stop-dirs.v1.json"));
+/** MZK static timetable built from OnTime for the connection search (lib/mzk-timetable.ts); outside output/gtfs for the same reason. */
+export const MZK_TIMETABLE_FILE = envStr("KB_MZK_TIMETABLE_FILE", path.join(OUTPUT_DIR, "mzk-timetable.v1.json"));
 
 export const USER_AGENT = envStr(
   "KB_USER_AGENT",
@@ -145,7 +147,7 @@ let isoDateFmt: Intl.DateTimeFormat | undefined;
  * default date stays correct when the server runs on UTC — see nowSecs() in
  * lib/poller.ts.
  */
-export function todayLocalISO(): string {
+export function todayLocalISO(at: Date = new Date()): string {
   try {
     isoDateFmt ??= new Intl.DateTimeFormat("en-CA", {
       timeZone: AGENCY_TIMEZONE,
@@ -153,9 +155,9 @@ export function todayLocalISO(): string {
       month: "2-digit",
       day: "2-digit",
     });
-    return isoDateFmt.format(new Date());
+    return isoDateFmt.format(at);
   } catch {
-    const d = new Date();
+    const d = at;
     const mm = String(d.getMonth() + 1).padStart(2, "0");
     const dd = String(d.getDate()).padStart(2, "0");
     return `${d.getFullYear()}-${mm}-${dd}`;

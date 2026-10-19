@@ -284,6 +284,7 @@ export interface ConnectionLeg {
   stops?: ConnectionLegStop[];
   /** stored road geometry of the leg's trip (GET /api/shapes) */
   shape_id?: string;
+  operator?: "KB" | "MZK";
 }
 
 export interface ConnectionItinerary {

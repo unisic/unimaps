@@ -9,12 +9,16 @@
  * (stop directions, line catalog) are invalidated so arrows and the palette
  * pick up the new feed without a restart, and `onBuilt` lets the caller
  * re-seed the road-shape store from the fresh stop patterns.
+ * The MZK timetable for the connection search (lib/mzk-timetable.ts) follows
+ * the same rules after the KB feed, with its own backoff; one build at a time.
  */
 import * as config from "./config";
 import { buildGtfs, gtfsFeedDate } from "./gtfs-builder";
 import { invalidateGtfsTrips } from "./gtfs-trips";
 import { invalidateLines } from "./lines";
 import { log } from "./logger";
+import type { MzkApi } from "./mzk-api";
+import { buildMzkTimetable, mzkTimetableDate, saveMzkTimetable } from "./mzk-timetable";
 import { nowSecs } from "./poller";
 import { invalidateRouter } from "./router";
 import { invalidateStopDirections } from "./stop-directions";
@@ -23,6 +27,7 @@ interface RefreshState {
   building: boolean;
   /** Epoch ms before which no build attempt may start (failure backoff). */
   nextAttemptAt: number;
+  mzkNextAttemptAt: number;
 }
 
 const CHECK_INTERVAL_MS = 10 * 60_000;
@@ -59,20 +64,42 @@ async function maybeBuild(st: RefreshState, onBuilt?: () => void): Promise<void>
   }
 }
 
+async function maybeBuildMzk(st: RefreshState, api: MzkApi): Promise<void> {
+  if (st.building || Date.now() < st.mzkNextAttemptAt) return;
+  const builtDate = mzkTimetableDate();
+  const today = config.todayLocalISO();
+  if (builtDate !== null && (builtDate === today || warsawHour() < config.GTFS_BUILD_HOUR)) return;
+  st.building = true;
+  try {
+    log.info("mzk-tt", builtDate === null ? "no MZK timetable found, building" : `MZK timetable from ${builtDate}, rebuilding`);
+    saveMzkTimetable(await buildMzkTimetable(api, today));
+    invalidateRouter();
+  } catch (err) {
+    st.mzkNextAttemptAt = Date.now() + FAIL_BACKOFF_MS;
+    log.error("mzk-tt", `MZK timetable build failed (retry in 30 min): ${err}`);
+  } finally {
+    st.building = false;
+  }
+}
+
 const KEY = Symbol.for("kb-gtfs.gtfs-refresh");
 type GlobalWithState = typeof globalThis & { [KEY]?: RefreshState };
 
 /** Idempotent; the globalThis guard survives dev-mode HMR (same pattern as the
  *  poller singleton). Timers are unref'd so they never hold the process open. */
-export function startGtfsRefresh(onBuilt?: () => void): void {
+export function startGtfsRefresh(onBuilt?: () => void, mzkApi?: MzkApi): void {
   if (!config.GTFS_AUTOBUILD) return;
   const g = globalThis as GlobalWithState;
   if (g[KEY]) return;
-  const st: RefreshState = { building: false, nextAttemptAt: 0 };
+  const st: RefreshState = { building: false, nextAttemptAt: 0, mzkNextAttemptAt: 0 };
   g[KEY] = st;
+  const check = async (): Promise<void> => {
+    await maybeBuild(st, onBuilt);
+    if (mzkApi) await maybeBuildMzk(st, mzkApi);
+  };
   const first = setTimeout(() => {
-    void maybeBuild(st, onBuilt);
-    const timer = setInterval(() => void maybeBuild(st, onBuilt), CHECK_INTERVAL_MS);
+    void check();
+    const timer = setInterval(() => void check(), CHECK_INTERVAL_MS);
     timer.unref?.();
   }, FIRST_CHECK_DELAY_MS);
   first.unref?.();

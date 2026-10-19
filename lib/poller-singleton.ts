@@ -208,7 +208,7 @@ export function startPoller(): Promise<void> {
     st.startPromise = Promise.allSettled([
       st.poller.start().then(() => {
         log.info("rt", `KB poller up, ${st.poller.stops.length} stops loaded`);
-        startGtfsRefresh(() => seedShapesFromGtfs(st));
+        startGtfsRefresh(() => seedShapesFromGtfs(st), st.mzkApi);
         const t = setTimeout(() => seedShapesFromGtfs(st), 3 * 60_000);
         t.unref?.();
       }),

@@ -97,6 +97,8 @@ export interface MzkScheduleDeparture {
   expectedVehicleType?: string;
   orderInCourse?: number;
   optionalDirection?: string;
+  /** scheduled departure of the course from its first stop */
+  courseStartSec?: number;
   letter?: string;
   visible?: boolean;
 }
@@ -114,6 +116,12 @@ export interface MzkAtomicScheduleResponse {
   lineSchedules?: Record<string, MzkLineSchedule>;
   scheduleDate?: string | null;
   error?: string | null;
+}
+
+export interface MzkCalendarDay {
+  /** epoch ms of the day's local midnight */
+  date: number;
+  dayType?: { dayTypeSymbol?: string | null; description?: string | null } | null;
 }
 
 export interface MzkMessage {
@@ -266,6 +274,7 @@ export class MzkApi {
   async fetchAtomicSchedule(
     symbol: string,
     date?: string | number,
+    opts: { cache?: boolean } = {},
   ): Promise<MzkAtomicScheduleResponse> {
     let dateParam: string | number;
     if (typeof date === "number") {
@@ -277,11 +286,21 @@ export class MzkApi {
       const now = new Date();
       dateParam = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate(), 12, 0, 0);
     }
-    return this.cached(this.scheduleCache, `${symbol}|${dateParam}`, MZK_SCHEDULE_TTL_MS, MZK_SCHEDULE_CACHE_MAX, () =>
+    const load = () =>
       this.requestJson<MzkAtomicScheduleResponse>(
         `getAtomicSchedule.json?symbol=${encodeURIComponent(symbol)}&date=${dateParam}`,
-      ),
-    );
+      );
+    // the timetable build reads every stop once; caching it would only evict the stop views' entries
+    if (opts.cache === false) return load();
+    return this.cached(this.scheduleCache, `${symbol}|${dateParam}`, MZK_SCHEDULE_TTL_MS, MZK_SCHEDULE_CACHE_MAX, load);
+  }
+
+  /**
+   * Fetches the operator calendar: the day type of each of the next ~90 days.
+   */
+  async fetchCalendar(): Promise<MzkCalendarDay[]> {
+    const res = await this.requestJson<{ days: MzkCalendarDay[] }>("getCalendar.json");
+    return res?.days ?? [];
   }
 
   /**

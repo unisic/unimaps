@@ -98,7 +98,7 @@ function JourneyView({
             aria-pressed={selectedLegIdx === lIdx}
             className={`${TAB} pl-1 pr-3 ${tabTone(selectedLegIdx === lIdx)}`}
           >
-            <LineBadge line={leg.line} />
+            <LineBadge line={leg.line} operator={leg.operator} />
             <span className="tabular-nums">{leg.durationMins} min</span>
           </button>
         ))}
@@ -138,7 +138,7 @@ function JourneyView({
                     <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-white/8 text-[11px] font-semibold tabular-nums text-text-mute">
                       {lIdx + 1}
                     </span>
-                    <LineBadge line={leg.line} />
+                    <LineBadge line={leg.line} operator={leg.operator} />
                     <span className="max-w-[180px] truncate text-[13px] font-medium text-text sm:max-w-[260px]">
                       {displayStopName(leg.headsign)}
                     </span>

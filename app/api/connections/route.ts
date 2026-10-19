@@ -1,5 +1,5 @@
 import { badRequest } from "@/lib/api-helpers";
-import { getShapes } from "@/lib/poller-singleton";
+import { getMergedStopsView, getShapes, startPoller } from "@/lib/poller-singleton";
 import { findConnections, type ConnectionItinerary } from "@/lib/router";
 import { rawTripId } from "@/lib/shape-patterns";
 
@@ -9,15 +9,32 @@ export const runtime = "nodejs";
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-/** Attach the stored road-shape id to each leg whose trip pattern is routed,
+/** Router stop ids of a merged stop: its KB pole and every MZK symbol its departures board asks
+ *  (a station hub lists several). Undefined for a name the merged list does not know. */
+function stopIds(key: string): string[] | undefined {
+  const m = getMergedStopsView().lookup(key);
+  if (!m) return undefined;
+  const syms = m.mzkSymbols ?? (m.mzkSymbol ? [m.mzkSymbol] : []);
+  return [...(m.kbId ? [m.kbId] : []), ...syms.map((s) => `mzk:${s}`)];
+}
+
+/** Tag each leg with its operator and attach the stored road-shape id of its trip pattern,
  *  so the client draws legs from server geometry instead of calling OSRM.
  *  Best effort — a store problem just leaves the ids off. */
 function attachLegShapes(connections: ConnectionItinerary[]): void {
+  for (const c of connections) {
+    for (const leg of c.legs) leg.operator = String(leg.tripId).startsWith("mzk:") ? "MZK" : "KB";
+  }
   try {
     const shapes = getShapes();
     for (const c of connections) {
       for (const leg of c.legs) {
-        const key = shapes.keyForRawTrip(rawTripId(String(leg.tripId)));
+        const tripId = String(leg.tripId);
+        // MZK trip ids are mzk:<courseId>:<variantId>; the store keys a variant's shape mzk:<variantId>
+        const key =
+          leg.operator === "MZK"
+            ? `mzk:${tripId.slice(tripId.lastIndexOf(":") + 1)}`
+            : shapes.keyForRawTrip(rawTripId(tripId));
         const id = key ? shapes.wireId(key) : null;
         if (id) leg.shape_id = id;
       }
@@ -71,9 +88,13 @@ export async function GET(req: Request): Promise<Response> {
   const limit = limitParam ? Number.parseInt(limitParam, 10) : undefined;
 
   try {
+    // the merged stop list needs both pollers' stops; a failed start still leaves name search working
+    await startPoller().catch(() => undefined);
     const connections = findConnections({
       from,
       to,
+      fromIds: stopIds(from),
+      toIds: stopIds(to),
       afterSecs,
       limit,
       directOnly,

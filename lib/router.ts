@@ -1,15 +1,19 @@
 /**
  * Static GTFS connection search / trip planner engine.
  *
- * Runs in-memory routing over the built GTFS feed (output/gtfs/{stops,trips,stop_times,calendar}.txt).
- * Because Komunikacja Beskidzka has ~950 stops and ~760 daily trips, the entire graph
- * fits in memory (<3 MB) and connection queries (direct, 1-transfer, and 2-transfer) run in single-digit ms.
+ * Runs in-memory routing over the built KB GTFS feed (output/gtfs/{stops,trips,stop_times,calendar}.txt)
+ * plus the MZK Bielsko-Biała timetable (lib/mzk-timetable.ts, stops `mzk:<symbol>`, trips active on the
+ * dates whose OnTime day type they belong to). ~1500 stops and ~5000 trips fit in memory (measured
+ * 2026-10-19: ~18 MB heap KB-only, ~52 MB with MZK, built in ~250 ms) and connection queries (direct,
+ * 1-transfer, and 2-transfer) run in milliseconds.
  */
 import fs from "node:fs";
 import path from "node:path";
 
 import * as config from "./config";
 import { col, parseCsvLine, splitLines } from "./gtfs-csv";
+import { log } from "./logger";
+import { loadMzkTimetable } from "./mzk-timetable";
 import { nowSecs } from "./poller";
 
 export interface ConnectionLegStop {
@@ -38,6 +42,7 @@ export interface ConnectionLeg {
   stops?: ConnectionLegStop[];
   /** stored road geometry of the leg's trip pattern (GET /api/shapes), when routed */
   shape_id?: string;
+  operator?: "KB" | "MZK";
 }
 
 export interface ConnectionItinerary {
@@ -60,6 +65,9 @@ export interface ConnectionItinerary {
 export interface RouteQuery {
   from: string;
   to: string;
+  /** router stop ids of the origin (KB stop id, `mzk:<symbol>`); `from` is the name fallback when none is known */
+  fromIds?: string[];
+  toIds?: string[];
   afterSecs?: number;
   limit?: number;
   directOnly?: boolean;
@@ -103,6 +111,8 @@ interface TripEntry {
   headsign: string;
   stops: TripStopEntry[];
   stopIndices: Map<string, number[]>;
+  /** MZK only: the OnTime day types the course runs on (KB trips use serviceId + calendar.txt) */
+  dayTypes?: Set<string>;
 }
 
 interface RouterIndex {
@@ -114,6 +124,8 @@ interface RouterIndex {
   tripsByStopKey: Map<string, Array<{ trip: TripEntry; stopIndex: number }>>;
   tripsByCleanKey: Map<string, Array<{ trip: TripEntry; stopIndex: number }>>;
   services: Map<string, number[]>;
+  /** Warsaw ISO date -> MZK day type, for the dates the MZK timetable covers */
+  mzkDayTypes: Map<string, string>;
 }
 
 const ROUTER_CACHE_KEY = Symbol.for("kb-gtfs.router-cache");
@@ -219,6 +231,26 @@ function loadIndex(): RouterIndex | null {
   const polesByName = new Map<string, Set<string>>();
   const polesByCleanKey = new Map<string, Set<string>>();
 
+  const addStop = (id: string, name: string, lat: number, lon: number): void => {
+    const nameKey = normalizeName(name);
+    const cleanKey = cleanText(name);
+    stops.set(id, { id, name, nameKey, cleanKey, lat, lon });
+
+    let set1 = polesByName.get(nameKey);
+    if (!set1) {
+      set1 = new Set();
+      polesByName.set(nameKey, set1);
+    }
+    set1.add(id);
+
+    let set2 = polesByCleanKey.get(cleanKey);
+    if (!set2) {
+      set2 = new Set();
+      polesByCleanKey.set(cleanKey, set2);
+    }
+    set2.add(id);
+  };
+
   const stopLines = splitLines(stopsTxt);
   const stopHdr = parseCsvLine(stopLines[0]);
   const iStopId = col(stopHdr, "stop_id");
@@ -233,26 +265,16 @@ function loadIndex(): RouterIndex | null {
       const id = f[iStopId];
       const name = f[iStopName];
       if (!id || !name) continue;
-      const nameKey = normalizeName(name);
-      const cleanKey = cleanText(name);
       const lat = iStopLat >= 0 ? Number(f[iStopLat]) || 0 : 0;
       const lon = iStopLon >= 0 ? Number(f[iStopLon]) || 0 : 0;
-      stops.set(id, { id, name, nameKey, cleanKey, lat, lon });
-
-      let set1 = polesByName.get(nameKey);
-      if (!set1) {
-        set1 = new Set();
-        polesByName.set(nameKey, set1);
-      }
-      set1.add(id);
-
-      let set2 = polesByCleanKey.get(cleanKey);
-      if (!set2) {
-        set2 = new Set();
-        polesByCleanKey.set(cleanKey, set2);
-      }
-      set2.add(id);
+      addStop(id, name, lat, lon);
     }
+  }
+
+  // MZK stops join the same pole maps, so walking transfers to/from KB poles come for free
+  const mzk = loadMzkTimetable();
+  if (mzk) {
+    for (const [sym, [name, lat, lon]] of Object.entries(mzk.stops)) addStop(`mzk:${sym}`, name, lat, lon);
   }
 
   // Precompute walkable transfers between nearby stops (within 350m, ~4-5 mins walk)
@@ -340,6 +362,25 @@ function loadIndex(): RouterIndex | null {
     }
   }
 
+  for (const t of mzk?.trips ?? []) {
+    const known = trips.get(t.id);
+    if (known?.dayTypes) {
+      known.dayTypes.add(t.dayType);
+      continue;
+    }
+    trips.set(t.id, {
+      tripId: t.id,
+      serviceId: `mzk:${t.dayType}`,
+      routeId: `mzk:${t.line}`,
+      headsign: t.headsign,
+      line: t.line,
+      stops: t.calls.map(([sym, secs], seq) => ({ stopId: `mzk:${sym}`, seq, arr: secs, dep: secs })),
+      stopIndices: new Map(),
+      dayTypes: new Set([t.dayType]),
+    });
+  }
+  if (mzk) log.info("router", `MZK timetable: ${Object.keys(mzk.stops).length} stops, ${mzk.trips.length} courses`);
+
   const tripsByStopKey = new Map<string, Array<{ trip: TripEntry; stopIndex: number }>>();
   const tripsByCleanKey = new Map<string, Array<{ trip: TripEntry; stopIndex: number }>>();
 
@@ -394,7 +435,18 @@ function loadIndex(): RouterIndex | null {
     // calendar.txt optional
   }
 
-  return { stops, polesByName, polesByCleanKey, nearbyTransfers, trips, tripsByStopKey, tripsByCleanKey, services };
+  const mzkDayTypes = new Map(Object.entries(mzk?.calendar ?? {}));
+  return {
+    stops,
+    polesByName,
+    polesByCleanKey,
+    nearbyTransfers,
+    trips,
+    tripsByStopKey,
+    tripsByCleanKey,
+    services,
+    mzkDayTypes,
+  };
 }
 
 function getIndex(): RouterIndex | null {
@@ -471,7 +523,22 @@ function resolvePoles(input: string, idx: RouterIndex): Set<string> {
   return combined;
 }
 
-function isTripActiveOnDay(trip: TripEntry, dayOfWeek: number, services: Map<string, number[]>): boolean {
+/** Union of the poles of the given stop ids; falls back to resolving `input` by name when none is known. */
+function resolveQueryPoles(ids: string[] | undefined, input: string, idx: RouterIndex): Set<string> {
+  const poles = new Set<string>();
+  for (const id of ids ?? []) {
+    if (idx.stops.has(id)) for (const p of resolvePoles(id, idx)) poles.add(p);
+  }
+  return poles.size > 0 ? poles : resolvePoles(input, idx);
+}
+
+/** `date` is the trip's service day (Warsaw ISO), `dayOfWeek` its weekday (Monday = 0). */
+function isTripActiveOnDay(trip: TripEntry, dayOfWeek: number, date: string, idx: RouterIndex): boolean {
+  if (trip.dayTypes) {
+    const type = idx.mzkDayTypes.get(date);
+    return type !== undefined && trip.dayTypes.has(type);
+  }
+  const services = idx.services;
   if (services.size <= 1) return true;
   const days = services.get(trip.serviceId);
   if (!days) return true;
@@ -515,6 +582,8 @@ function searchDayConnections(
   dayOfWeek: number,
 ): ConnectionItinerary[] {
   const itineraries: ConnectionItinerary[] = [];
+  const dates: string[] = [];
+  const dayDate = (offset: number): string => (dates[offset] ??= offsetDate(searchDate, offset));
 
   // Pre-filter candidate trips departing from origin poles via index (replaces full network scan)
   const candidateFromTrips: Array<{ trip: TripEntry; fromIdx: number }> = [];
@@ -574,7 +643,7 @@ function searchDayConnections(
 
         for (const isNextDay of [false, true]) {
           const tripDayOfWeek = isNextDay ? (dayOfWeek + 1) % 7 : dayOfWeek;
-          if (!isTripActiveOnDay(trip, tripDayOfWeek, idx.services)) continue;
+          if (!isTripActiveOnDay(trip, tripDayOfWeek, dayDate(isNextDay ? 1 : 0), idx)) continue;
 
           const depSecs = isNextDay ? depStop.dep + 86400 : depStop.dep;
           if (depSecs < afterSecs || depSecs > afterSecs + 86400) continue;
@@ -632,7 +701,7 @@ function searchDayConnections(
 
       for (const isNextDay1 of [false, true]) {
         const trip1DayOfWeek = isNextDay1 ? (dayOfWeek + 1) % 7 : dayOfWeek;
-        if (!isTripActiveOnDay(trip1, trip1DayOfWeek, idx.services)) continue;
+        if (!isTripActiveOnDay(trip1, trip1DayOfWeek, dayDate(isNextDay1 ? 1 : 0), idx)) continue;
 
         const dep1Secs = isNextDay1 ? dep1Raw + 86400 : dep1Raw;
         if (dep1Secs < afterSecs || dep1Secs > afterSecs + 86400) continue;
@@ -697,7 +766,7 @@ function searchDayConnections(
 
                   const trip2DayOffset = Math.floor(dep2Secs / 86400);
                   const trip2DayOfWeek = (dayOfWeek + trip2DayOffset) % 7;
-                  if (!isTripActiveOnDay(trip2, trip2DayOfWeek, idx.services)) continue;
+                  if (!isTripActiveOnDay(trip2, trip2DayOfWeek, dayDate(trip2DayOffset), idx)) continue;
 
                   const waitSecs = dep2Secs - arr1Secs;
                   if (waitSecs < minTransferNeeded) continue;
@@ -787,7 +856,7 @@ function searchDayConnections(
 
           for (const isNextDay1 of [false, true]) {
             const trip1DayOfWeek = isNextDay1 ? (dayOfWeek + 1) % 7 : dayOfWeek;
-            if (!isTripActiveOnDay(trip1, trip1DayOfWeek, idx.services)) continue;
+            if (!isTripActiveOnDay(trip1, trip1DayOfWeek, dayDate(isNextDay1 ? 1 : 0), idx)) continue;
 
             const dep1Secs = isNextDay1 ? dep1Raw + 86400 : dep1Raw;
             if (dep1Secs < afterSecs || dep1Secs > afterSecs + 86400) continue;
@@ -827,7 +896,7 @@ function searchDayConnections(
 
                   const trip2DayOffset = Math.floor(dep2Secs / 86400);
                   const trip2DayOfWeek = (dayOfWeek + trip2DayOffset) % 7;
-                  if (!isTripActiveOnDay(trip2, trip2DayOfWeek, idx.services)) continue;
+                  if (!isTripActiveOnDay(trip2, trip2DayOfWeek, dayDate(trip2DayOffset), idx)) continue;
 
                   const wait1 = dep2Secs - arr1Secs;
                   if (wait1 < minWait1 || wait1 > MAX_LEG_WAIT_SECS) continue;
@@ -880,7 +949,7 @@ function searchDayConnections(
 
                         const trip3DayOffset = Math.floor(dep3Secs / 86400);
                         const trip3DayOfWeek = (dayOfWeek + trip3DayOffset) % 7;
-                        if (!isTripActiveOnDay(trip3, trip3DayOfWeek, idx.services)) continue;
+                        if (!isTripActiveOnDay(trip3, trip3DayOfWeek, dayDate(trip3DayOffset), idx)) continue;
 
                         const wait2 = dep3Secs - arr2Secs;
                         if (wait2 < minWait2 || wait2 > MAX_LEG_WAIT_SECS) continue;
@@ -980,8 +1049,8 @@ export function findConnections(query: RouteQuery): ConnectionItinerary[] {
   const idx = getIndex();
   if (!idx) return [];
 
-  const fromPoles = resolvePoles(query.from, idx);
-  const toPoles = resolvePoles(query.to, idx);
+  const fromPoles = resolveQueryPoles(query.fromIds, query.from, idx);
+  const toPoles = resolveQueryPoles(query.toIds, query.to, idx);
   if (fromPoles.size === 0 || toPoles.size === 0) return [];
 
   const queryDate = query.date || config.todayLocalISO();

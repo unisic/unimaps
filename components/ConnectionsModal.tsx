@@ -484,7 +484,7 @@ function ConnectionsDialog({
         <header className="flex items-center justify-between gap-3 border-b border-hairline py-2.5 pl-4 pr-2.5">
           <div className="min-w-0">
             <h2 className="text-[15px] font-semibold tracking-tight text-text">Wyszukaj połączenie</h2>
-            <p className="text-[12px] text-text-faint">Rozkład jazdy Komunikacji Beskidzkiej</p>
+            <p className="text-[12px] text-text-faint">Rozkład jazdy KB i MZK Bielsko-Biała</p>
           </div>
           <IconButton label="Zamknij" onClick={onClose}>
             <CloseIcon />
@@ -923,7 +923,9 @@ function ConnectionsDialog({
                           </p>
                         </div>
                         <span className="shrink-0 rounded-full bg-white/6 px-2.5 py-1 text-[12px] font-medium text-text-mute">
-                          {isDirect ? "Bezpośredni" : "1 przesiadka"}
+                          {isDirect
+                            ? "Bezpośredni"
+                            : `${conn.transfersCount} ${conn.transfersCount === 1 ? "przesiadka" : "przesiadki"}`}
                         </span>
                       </div>
 
@@ -932,7 +934,7 @@ function ConnectionsDialog({
                         {conn.legs.map((leg, lIdx) => (
                           <div key={lIdx} className="flex min-w-0 items-center gap-1.5">
                             {lIdx > 0 && <CaretRightIcon className="text-[12px] text-text-faint" />}
-                            <LineBadge line={leg.line} />
+                            <LineBadge line={leg.line} operator={leg.operator} />
                             <span className="max-w-[140px] truncate text-[13px] text-text-mute">
                               {displayStopName(leg.headsign)}
                             </span>
@@ -968,7 +970,7 @@ function ConnectionsDialog({
                               <div key={lIdx} className="rounded-xl bg-white/4 p-3">
                                 <div className="flex items-center justify-between gap-2">
                                   <div className="flex min-w-0 items-center gap-2">
-                                    <LineBadge line={leg.line} />
+                                    <LineBadge line={leg.line} operator={leg.operator} />
                                     <span className="truncate text-[13px] font-medium text-text">
                                       Kierunek: {displayStopName(leg.headsign)}
                                     </span>
@@ -1052,7 +1054,7 @@ function ConnectionsDialog({
               </span>
               <p className="mt-3 text-[14px] font-medium text-text">Wybierz przystanek początkowy i docelowy</p>
               <p className="mx-auto mt-1 max-w-sm text-[13px] text-text-mute">
-                Wyszukiwarka znajdzie najszybsze połączenia autobusowe w sieci Komunikacji Beskidzkiej.
+                Wyszukiwarka znajdzie najszybsze połączenia autobusowe w sieciach KB i MZK Bielsko-Biała.
               </p>
             </div>
           )}
