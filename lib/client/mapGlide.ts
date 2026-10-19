@@ -21,11 +21,8 @@ type PathRenderer = L.Renderer & { _update(): void; _onZoomEnd(): void };
 
 /** Farther than this many screens a straight glide smears unloaded tiles: fly out and back in. */
 const FLY_SCREENS = 3;
-/** Vector renderers pre-draw at most this many screens around the view: every straight glide. */
+/** Vector renderers pre-draw at most this many screens around the view: every same-zoom glide. */
 const MAX_PAD = FLY_SCREENS;
-/** During a flyTo vector renderers draw this much around the view, redrawn every REDRAW_MS. */
-const FLY_PAD = 0.5;
-const REDRAW_MS = 80;
 /** px the floating top bar covers (TripLayer pads routes the same) */
 const TOP_BAR = 80;
 /** right edge of the docked desktop panel: left-3 + w-[400px] (BottomSheet) */
@@ -56,12 +53,21 @@ export function isCovered(map: L.Map, desktop: boolean, cover: number, p: L.Poin
  * Replace Leaflet's CSS zoom animation (wheel, double tap, the +/- buttons, keyboard, pinch
  * release, animated setView/fitBounds) with frame-by-frame zooming around the same point. The
  * CSS one scales a stale basemap canvas, blank at the edges when zooming out until it ends; per
- * frame the GL map renders the real view, as during a pinch. Idempotent.
+ * frame the GL map renders the real view, as during a pinch. Routes are redrawn on every zoom
+ * frame too (pinch, flyTo, these): Leaflet only CSS-scales the SVG until zoomend, a blurry,
+ * pixelated route for the whole zoom. Idempotent.
  */
 export function installSmoothZoom(map: L.Map): void {
   if (installed.has(map)) return;
   installed.add(map);
   const m = map as FrameMap;
+  // before Leaflet's own _onZoom or after it: with the renderer's zoom now current, its CSS scale is 1
+  m.on("zoom", () => {
+    for (const l of renderers(m)) {
+      l._onZoomEnd();
+      l._update();
+    }
+  });
   const stop = m._stop;
   m._stop = function () {
     const cur = running.get(m);
@@ -96,8 +102,8 @@ function renderers(m: L.Map): PathRenderer[] {
 
 /**
  * Have every vector renderer (routes, stop dots) draw `pad` screens around the view: Leaflet draws
- * only the view + 10% and redraws on moveend, so a route sliding or zooming into view would show
- * up only after the move. Returns the undo; `redraw` re-fits the renderers to the current view (a
+ * only the view + 10% and redraws on moveend, so a route sliding into view would show up only
+ * after the move. Returns the undo; `redraw` re-fits the renderers to the current view (a
  * cut move, no moveend coming to do it).
  */
 function growPaths(m: L.Map, pad: number): (redraw: boolean) => void {
@@ -137,14 +143,8 @@ function zoomFrames(m: FrameMap, ll: L.LatLng, p0: L.Point, at: L.Point, zoom: n
   const shift = at.subtract(p0);
   // the map centre that puts `ll` at container point `p` at zoom `z`
   const centerFor = (p: L.Point, z: number) => m.unproject(m.project(ll, z).subtract(p).add(half), z);
-  const restore = growPaths(m, padFor(m, end, zoom));
-  running.set(m, {
-    cut: () => {
-      // the GL basemap waits for zoomend to follow pans again
-      m.fire("zoomend");
-      restore(true);
-    },
-  });
+  // the GL basemap waits for zoomend to follow pans again
+  running.set(m, { cut: () => m.fire("zoomend") });
   const t0 = performance.now();
   const frame = (now: number) => {
     const t = Math.min(1, (now - t0) / ms);
@@ -156,7 +156,6 @@ function zoomFrames(m: FrameMap, ll: L.LatLng, p0: L.Point, at: L.Point, zoom: n
       return;
     }
     running.delete(m);
-    restore(false);
     m._move(end, zoom);
     m._moveEnd(true);
   };
@@ -185,26 +184,6 @@ export function glideTo(map: L.Map, target: L.LatLngExpression, zoom: number, at
   }
   if (screens > FLY_SCREENS) {
     m.flyTo(end, zoom, { duration: 0.8 });
-    // the flight zooms out and back in: keep the route drawn for the view along the way, Leaflet
-    // would redraw it only after landing
-    const restore = growPaths(m, FLY_PAD);
-    let last = performance.now();
-    const onZoom = () => {
-      const now = performance.now();
-      if (now - last < REDRAW_MS) return;
-      last = now;
-      for (const l of renderers(m)) {
-        l._onZoomEnd();
-        l._update();
-      }
-    };
-    const done = () => {
-      m.off("zoom", onZoom).off("moveend", done);
-      running.delete(m);
-      restore(true);
-    };
-    m.on("zoom", onZoom).on("moveend", done);
-    running.set(m, { cut: done });
     return;
   }
   const dz = zoom - m.getZoom();
