@@ -526,6 +526,97 @@ describe("fleet-tracker", () => {
     assert.equal(veh.stats.cancelledCoursesToday, 0);
   });
 
+  // OnTime drops a course on arrival (or hands the bus its next one) before the terminus registers
+  it("a late course that leaves the feed on its last leg was run to the end", () => {
+    const tracker = memTracker();
+    tracker.updateFromRunningVehicles([
+      {
+        vehicleId: "230",
+        lineName: "7",
+        courseLoid: 999995,
+        direction: "Zajezdnia MZK",
+        delaySec: 900,
+        latitude: 49.79,
+        longitude: 19.04,
+        orderInCourse: 2,
+        stopPoints: [
+          stop("31", "Szyndzielnia", 0, 0, 1790080000000),
+          stop("22", "Armii Krajowej Karbowa", 1, 739, 1790080100000),
+          stop("44", "Boboli Szpital", 2, 1500, 1790080200000),
+          stop("446", "Zajezdnia MZK", 3, 2300, 1790080300000),
+        ],
+      },
+    ]);
+    tracker.updateFromRunningVehicles([]);
+
+    const veh = tracker.getVehicleDetail("230")!;
+    const c = veh.todayCourses.find((x) => x.courseLoid === 999995)!;
+    assert.equal(c.status, "completed");
+    assert.equal(c.cancelledReason, undefined);
+    assert.equal(c.drivenMeters, c.lengthMeters);
+    assert.equal(veh.stats.cancelledCoursesToday, 0);
+    assert(!veh.lastKnownLocation?.name.includes("Utrata sygnału GPS"));
+  });
+
+  it("a late course that leaves the feed within 300 m of its end was run, stops left or not", () => {
+    const tracker = memTracker();
+    tracker.updateFromRunningVehicles([
+      {
+        vehicleId: "230",
+        lineName: "7",
+        courseLoid: 999996,
+        direction: "Zajezdnia MZK",
+        delaySec: 1200,
+        latitude: 49.79,
+        longitude: 19.04,
+        orderInCourse: 1,
+        reachedMeters: 1560,
+        stopPoints: [
+          stop("31", "Szyndzielnia", 0, 0, 1790080000000),
+          stop("22", "Armii Krajowej Karbowa", 1, 1500, 1790080100000),
+          stop("44", "Boboli Szpital", 2, 120, 1790080200000),
+          stop("45", "Boboli", 3, 100, 1790080250000),
+          stop("446", "Zajezdnia MZK", 4, 80, 1790080300000),
+        ],
+      },
+    ]);
+    tracker.updateFromRunningVehicles([]);
+
+    const c = tracker.getVehicleDetail("230")!.todayCourses.find((x) => x.courseLoid === 999996)!;
+    assert.equal(c.status, "completed");
+    assert.equal(c.drivenMeters, 1800);
+  });
+
+  it("a late bus moved to its next course mid-route: the first one was cut short, not lost", () => {
+    const tracker = memTracker();
+    const course = (courseLoid: number, orderInCourse: number): FleetRunningInput => ({
+      vehicleId: "230",
+      lineName: "7",
+      courseLoid,
+      direction: "Zajezdnia MZK",
+      delaySec: 900,
+      latitude: 49.79,
+      longitude: 19.04,
+      orderInCourse,
+      stopPoints: [
+        stop("31", "Szyndzielnia", 0, 0, 1790080000000),
+        stop("22", "Armii Krajowej Karbowa", 1, 739, 1790080100000),
+        stop("44", "Boboli Szpital", 2, 1500, 1790080200000),
+        stop("446", "Zajezdnia MZK", 3, 2300, 1790080300000),
+      ],
+    });
+    tracker.updateFromRunningVehicles([course(999997, 1)]);
+    tracker.updateFromRunningVehicles([course(999998, 0)]);
+
+    const veh = tracker.getVehicleDetail("230")!;
+    assert.equal(veh.currentCourse?.courseLoid, 999998);
+    const cut = veh.todayCourses.find((x) => x.courseLoid === 999997)!;
+    assert.equal(cut.status, "cancelled");
+    assert.equal(cut.cancelledAtStopName, "Armii Krajowej Karbowa");
+    assert(cut.cancelledReason?.startsWith("Kurs skrócony"), `got: ${cut.cancelledReason}`);
+    assert.equal(cut.drivenMeters, 739);
+  });
+
   it("samples the running fleet into 5-minute punctuality slots (last sample wins)", () => {
     mock.timers.enable({ apis: ["Date"], now: NOON_OCT4_MS + 70_000 }); // 12:01:10
     const tracker = memTracker();
@@ -622,6 +713,59 @@ describe("fleet-tracker persistence", () => {
     assert.equal(veh.status, "depot");
     assert.equal(tracker.getTimeline().length, 1);
     assert.equal(tracker.getStats().seenTodayCount, 1);
+  });
+
+  it("re-judges saved interrupted courses: one that left on its last leg was run", () => {
+    mock.timers.enable({ apis: ["Date"], now: NOON_OCT4_MS });
+    const dir = mkTmp();
+    const base = {
+      lineName: "7",
+      direction: "Zajezdnia MZK",
+      firstStopName: "Szyndzielnia",
+      lastStopName: "Zajezdnia MZK",
+      startTime: "09:00",
+      endTime: "09:30",
+      startSecs: 9 * 3600,
+      endSecs: 9.5 * 3600,
+      delaySec: 1500,
+      stopsCount: 3,
+      status: "cancelled",
+      lengthMeters: 4000,
+      drivenMeters: 2500,
+      cancelledReason: "Kurs przerwany: …",
+      cancelledAtStopName: "Boboli Szpital",
+    };
+    const stops = (current: number) =>
+      ["Szyndzielnia", "Boboli Szpital", "Zajezdnia MZK"].map((name, i) => ({
+        symbol: String(i),
+        name,
+        scheduledTime: "09:00",
+        plannedTime: "09:25",
+        status: i < current ? "passed" : i === current ? "current" : "upcoming",
+      }));
+    fs.writeFileSync(
+      path.join(dir, "fleet-history-2026-10-04.json"),
+      JSON.stringify({
+        _v: 2,
+        "167": {
+          todayCourses: [
+            { ...base, id: "c-1", courseLoid: 1, stops: stops(1) },
+            { ...base, id: "c-2", courseLoid: 2, startSecs: 8 * 3600, drivenMeters: 0, stops: stops(0) },
+          ],
+          lastSeenAt: Math.floor(NOON_OCT4_MS / 1000) - 3600,
+        },
+      }),
+    );
+
+    const veh = new FleetTracker({ historyDir: dir }).getVehicleDetail("167")!;
+    const run = veh.todayCourses.find((c) => c.id === "c-1")!;
+    assert.equal(run.status, "completed");
+    assert.equal(run.cancelledReason, undefined);
+    assert.equal(run.drivenMeters, 4000);
+    assert(run.stops?.every((s) => s.status === "passed"));
+    const cut = veh.todayCourses.find((c) => c.id === "c-2")!;
+    assert.equal(cut.status, "cancelled");
+    assert.equal(veh.stats.cancelledCoursesToday, 1);
   });
 
   it("rolls over at Warsaw midnight: the old day is saved, the new day starts empty", () => {

@@ -145,20 +145,27 @@ export function sortCoursesDesc(a: VehicleCourseRecord, b: VehicleCourseRecord):
   return (b.startTime || "").localeCompare(a.startTime || "");
 }
 
+/** A course this close to its planned length (OnTime's reachedMeters) counts as run to the end. */
+const END_SLACK_M = 300;
+
 /**
  * Whether a course that left the live feed ran to the end or was broken off.
  *
- * OnTime drops a vehicle from the running list when its course ends, often before the last
- * stop registers, so "vanished before the terminus" alone means nothing. Vanishing mid-route
- * while 10+ min late (standing still, typically) is the signature of an interrupted course:
- * breakdown, GPS loss, a course taken off. We cannot tell which, and say so.
+ * OnTime drops a course on arrival, or hands the bus its next course at the terminus, before
+ * the last stop registers: a course that left on its last leg (or within END_SLACK_M of the
+ * end) was run, however late (2026-10-19: 236 of 253 "interrupted" courses had exactly one
+ * stop left, median 41 m). Leaving earlier while 10+ min late (standing still, typically) is
+ * the signature of an interrupted course: breakdown, GPS loss, a course taken off or, when the
+ * bus moved straight on to another course (`switched`), cut short by the dispatcher.
  */
 export function determineCourseOutcome(course: {
   currentStopIndex: number;
   stopsCount: number;
-  progressPct: number;
   delaySec: number;
   currentStopName: string;
+  lengthMeters?: number;
+  drivenMeters?: number;
+  switched?: boolean;
 }): {
   status: "completed" | "cancelled";
   cancelledReason?: string;
@@ -171,19 +178,38 @@ export function determineCourseOutcome(course: {
     return { status: "completed" };
   }
 
-  const reachedLastStop = currentStopIndex >= stopsCount - 1;
+  const onLastLeg = currentStopIndex >= stopsCount - 2;
+  const length = course.lengthMeters ?? 0;
+  const nearEnd = length > 0 && length - (course.drivenMeters ?? 0) <= END_SLACK_M;
   const hasSubstantialDelay = delaySec >= 10 * 60;
 
-  if (!reachedLastStop && hasSubstantialDelay) {
+  if (!onLastLeg && !nearEnd && hasSubstantialDelay) {
     const delayMins = Math.round(delaySec / 60);
     return {
       status: "cancelled",
-      cancelledReason: `Kurs przerwany: pojazd zniknął z systemu na przystanku ${currentStopName} przy opóźnieniu +${delayMins} min (awaria, utrata GPS lub zjazd)`,
+      cancelledReason: course.switched
+        ? `Kurs skrócony: pojazd przeszedł na kolejny kurs po przystanku ${currentStopName} przy opóźnieniu +${delayMins} min`
+        : `Kurs przerwany: pojazd zniknął z systemu na przystanku ${currentStopName} przy opóźnieniu +${delayMins} min (awaria, utrata GPS lub zjazd)`,
       cancelledAtStopName: currentStopName,
     };
   }
 
   return { status: "completed" };
+}
+
+/** A saved "cancelled" course judged again under today's rule: files written before 2026-10-19 flag late arrivals. */
+function rejudgeCancelled(c: VehicleCourseRecord): VehicleCourseRecord {
+  if (c.status !== "cancelled") return c;
+  const outcome = determineCourseOutcome({
+    currentStopIndex: c.stops?.findIndex((s) => s.status === "current") ?? -1,
+    stopsCount: c.stopsCount,
+    delaySec: c.delaySec,
+    currentStopName: c.cancelledAtStopName ?? "",
+    lengthMeters: c.lengthMeters,
+    drivenMeters: c.drivenMeters,
+  });
+  if (outcome.status === "cancelled") return c;
+  return { ...c, status: "completed", cancelledReason: undefined, cancelledAtStopName: undefined, drivenMeters: c.lengthMeters };
 }
 
 /** Planned length of a course: sum of OnTime's per-segment stop distances. */
@@ -404,7 +430,7 @@ export class FleetTracker {
       if (existingLiveIdx !== -1) detail.todayCourses.splice(existingLiveIdx, 1);
 
       if (detail.currentCourse && detail.currentCourse.courseLoid !== v.courseLoid) {
-        this.archiveCourse(detail, detail.currentCourse, nowEpoch);
+        this.archiveCourse(detail, detail.currentCourse, nowEpoch, true);
       }
 
       const direction = v.direction || v.optionalDirection || lastStopName;
@@ -475,10 +501,15 @@ export class FleetTracker {
   }
 
   /** Moves a course that left the live feed to the day's history (a course that never began is not history). */
-  private archiveCourse(detail: FleetVehicleDetail, prev: FleetCurrentCourse, nowEpoch: number): VehicleCourseRecord | null {
+  private archiveCourse(
+    detail: FleetVehicleDetail,
+    prev: FleetCurrentCourse,
+    nowEpoch: number,
+    switched = false,
+  ): VehicleCourseRecord | null {
     if (prev.notStarted) return null;
     if (detail.todayCourses.some((c) => c.courseLoid === prev.courseLoid)) return null;
-    const outcome = determineCourseOutcome(prev);
+    const outcome = determineCourseOutcome({ ...prev, switched });
     const completed = outcome.status === "completed";
     const record: VehicleCourseRecord = {
       id: prev.id,
@@ -840,6 +871,7 @@ export class FleetTracker {
           v.todayCourses = saved.todayCourses
             // files written before 2026-10-04 carry invented "synth-*" courses (back-filled to 05:30): never real
             .filter((c) => c && typeof c.id === "string" && !c.id.startsWith("synth-"))
+            .map(rejudgeCancelled)
             .map((c) => ({
               ...c,
               stops: c.status === "completed" && c.stops ? c.stops.map((s) => ({ ...s, status: "passed" as const })) : c.stops,
