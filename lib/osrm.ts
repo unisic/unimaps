@@ -4,6 +4,7 @@
  * (router.project-osrm.org) is shared and policed: callers must throttle
  * (≤1 req/s), send an identifying User-Agent and stop on block/config errors.
  */
+import { bearing } from "./geo";
 import { decodePolyline, segMeters, type LatLng } from "./shared/polyline";
 
 /** Max waypoints per request (matches the browser fallback in lib/client/api.ts). */
@@ -33,10 +34,32 @@ export function mergeChunkGeometries(parts: readonly LatLng[][]): LatLng[] {
   return out;
 }
 
-export function osrmRouteUrl(base: string, pts: readonly LatLng[], continueStraight: boolean): string {
+/** OSRM snaps a waypoint only to a road heading within ± this of the bus's direction: never the opposite carriageway. */
+const BEARING_RANGE = 90;
+/** Neighbours closer than this give no usable direction. */
+const BEARING_MIN_M = 25;
+
+/** The bus's direction at each waypoint (previous to next waypoint, the ends along their one leg); null = can't tell. */
+export function waypointBearings(wps: readonly LatLng[]): Array<number | null> {
+  return wps.map((_, i) => {
+    const a = wps[Math.max(0, i - 1)];
+    const b = wps[Math.min(wps.length - 1, i + 1)];
+    if (segMeters(a[0], a[1], b[0], b[1]) < BEARING_MIN_M) return null;
+    const deg = bearing(a[0], a[1], b[0], b[1]);
+    return deg === null ? null : Math.round(deg) % 360;
+  });
+}
+
+export function osrmRouteUrl(
+  base: string,
+  pts: readonly LatLng[],
+  continueStraight: boolean,
+  bearings?: ReadonlyArray<number | null>,
+): string {
   const coords = pts.map((p) => `${p[1].toFixed(6)},${p[0].toFixed(6)}`).join(";");
   const cs = continueStraight ? "&continue_straight=true" : "";
-  return `${base.replace(/\/+$/, "")}/${coords}?overview=full&geometries=polyline6&steps=false&alternatives=false${cs}`;
+  const br = bearings ? `&bearings=${bearings.map((b) => (b === null ? "" : `${b},${BEARING_RANGE}`)).join(";")}` : "";
+  return `${base.replace(/\/+$/, "")}/${coords}?overview=full&geometries=polyline6&steps=false&alternatives=false${cs}${br}`;
 }
 
 export type OsrmFailure =
@@ -85,19 +108,33 @@ export function classifyOsrmResponse(status: number, body: unknown, retryAfter?:
   return { ok: true, pts, legs };
 }
 
-/**
- * Indices of implausible legs: a stop-to-stop leg more than 2× the straight
- * distance AND over 400 m longer — the signature of a wrong-carriageway snap
- * sending OSRM around the block.
- */
-export function implausibleLegs(legs: readonly number[], wps: readonly LatLng[]): number[] {
+function longLegs(legs: readonly number[], wps: readonly LatLng[], ratio: number, extraM: number): number[] {
   const bad: number[] = [];
   for (let i = 0; i < legs.length && i + 1 < wps.length; i++) {
     const straight = segMeters(wps[i][0], wps[i][1], wps[i + 1][0], wps[i + 1][1]);
     const d = legs[i];
-    if (Number.isFinite(d) && d > 2 * straight && d - straight > 400) bad.push(i);
+    if (Number.isFinite(d) && d > ratio * straight && d - straight > extraM) bad.push(i);
   }
   return bad;
+}
+
+/**
+ * Indices of implausible legs: a stop-to-stop leg more than 2× the straight
+ * distance AND over 400 m longer — the signature of a wrong-carriageway snap
+ * sending OSRM around the block, so another way of asking is tried. Not proof:
+ * a mountain serpentine (Szczyrk: 934 m apart, 2.4 km by road) looks the same.
+ */
+export function implausibleLegs(legs: readonly number[], wps: readonly LatLng[]): number[] {
+  return longLegs(legs, wps, 2, 400);
+}
+
+/**
+ * Indices of legs too long to draw: over 3× the straight distance AND over 3 km
+ * longer. Anything shorter is drawn on the road, a detour on real streets beats
+ * a straight line through buildings (the longest real one seen is +1.5 km).
+ */
+export function absurdLegs(legs: readonly number[], wps: readonly LatLng[]): number[] {
+  return longLegs(legs, wps, 3, 3000);
 }
 
 export interface OsrmClientOpts {
@@ -109,11 +146,16 @@ export interface OsrmClientOpts {
   timeoutMs?: number;
 }
 
-async function requestRoute(pts: readonly LatLng[], continueStraight: boolean, o: OsrmClientOpts): Promise<OsrmOutcome> {
+async function requestRoute(
+  pts: readonly LatLng[],
+  continueStraight: boolean,
+  o: OsrmClientOpts,
+  bearings?: ReadonlyArray<number | null>,
+): Promise<OsrmOutcome> {
   await o.throttle();
   let res: Response;
   try {
-    res = await o.fetchImpl(osrmRouteUrl(o.base, pts, continueStraight), {
+    res = await o.fetchImpl(osrmRouteUrl(o.base, pts, continueStraight, bearings), {
       headers: { "User-Agent": o.userAgent, Accept: "application/json" },
       signal: AbortSignal.timeout(o.timeoutMs ?? 15_000),
     });
@@ -130,19 +172,38 @@ async function requestRoute(pts: readonly LatLng[], continueStraight: boolean, o
 }
 
 const isHard = (o: OsrmOutcome): boolean => !o.ok && o.kind !== "unroutable";
+const total = (legs: readonly number[]): number => legs.reduce((a, b) => a + (Number.isFinite(b) ? b : 0), 0);
 
-/** Route one chunk: continue_straight first, plain retry when unroutable or implausible. */
-export async function routeChunk(pts: readonly LatLng[], o: OsrmClientOpts): Promise<OsrmOutcome> {
-  const first = await requestRoute(pts, true, o);
-  if (isHard(first)) return first;
-  if (first.ok && implausibleLegs(first.legs, pts).length === 0) return first;
-  const second = await requestRoute(pts, false, o);
-  if (isHard(second)) return second;
-  if (!first.ok) return second;
-  if (!second.ok) return first;
-  const badA = implausibleLegs(first.legs, pts).length;
-  const badB = implausibleLegs(second.legs, pts).length;
-  return badB < badA ? second : first;
+/**
+ * Route one chunk, asking up to three ways until no leg is implausible: continue_straight, then
+ * with the bus's direction at each stop (`bearings`, rules out the wrong carriageway), then
+ * plain. Otherwise the answer with the fewest implausible legs, then the shortest.
+ */
+export async function routeChunk(
+  pts: readonly LatLng[],
+  o: OsrmClientOpts,
+  bearings?: ReadonlyArray<number | null>,
+): Promise<OsrmOutcome> {
+  const tries: Array<[boolean, ReadonlyArray<number | null> | undefined]> = [[true, undefined]];
+  if (bearings?.some((b) => b !== null)) tries.push([true, bearings]);
+  tries.push([false, undefined]);
+  let best: OsrmOutcome | null = null;
+  let bestBad = Infinity;
+  for (const [cs, br] of tries) {
+    const r = await requestRoute(pts, cs, o, br);
+    if (isHard(r)) return r;
+    if (!r.ok) {
+      best ??= r;
+      continue;
+    }
+    const bad = implausibleLegs(r.legs, pts).length;
+    if (bad === 0) return r;
+    if (!best?.ok || bad < bestBad || (bad === bestBad && total(r.legs) < total(best.legs))) {
+      best = r;
+      bestBad = bad;
+    }
+  }
+  return best!;
 }
 
 export type RouteResult =
@@ -151,33 +212,36 @@ export type RouteResult =
 
 /**
  * Road geometry through all waypoints. Hard failures abort the whole build
- * (nothing is committed). Unroutable or still-implausible pieces degrade to
- * straight lines — per chunk, or per stop pair when only some legs are bad.
+ * (nothing is committed). A chunk that is unroutable or has an absurd leg is
+ * routed pair by pair, so one bad stop costs one straight leg, not eleven.
  */
 export async function routeWaypoints(wps: readonly LatLng[], o: OsrmClientOpts): Promise<RouteResult> {
   const parts: LatLng[][] = [];
   let straightLegs = 0;
   const totalLegs = Math.max(0, wps.length - 1);
+  const bearings = waypointBearings(wps);
+  let start = 0;
   for (const chunk of chunkWaypoints(wps)) {
-    const r = await routeChunk(chunk, o);
-    if (!r.ok) {
-      if (r.kind !== "unroutable") return { ok: false, kind: r.kind, detail: r.detail, retryAfterSec: r.retryAfterSec };
-      parts.push(chunk);
-      straightLegs += chunk.length - 1;
-      continue;
-    }
-    if (implausibleLegs(r.legs, chunk).length === 0) {
+    const br = bearings.slice(start, start + chunk.length);
+    start += chunk.length - 1;
+    const r = await routeChunk(chunk, o, br);
+    if (!r.ok && r.kind !== "unroutable") return { ok: false, kind: r.kind, detail: r.detail, retryAfterSec: r.retryAfterSec };
+    if (r.ok && absurdLegs(r.legs, chunk).length === 0) {
       parts.push(r.pts);
       continue;
     }
-    // some legs are bad: route this chunk pair by pair, straight where still bad
+    if (chunk.length === 2) {
+      parts.push(chunk);
+      straightLegs += 1;
+      continue;
+    }
     for (let i = 0; i + 1 < chunk.length; i++) {
       const pair = [chunk[i], chunk[i + 1]];
-      const pr = await routeChunk(pair, o);
+      const pr = await routeChunk(pair, o, [br[i], br[i + 1]]);
       if (!pr.ok && pr.kind !== "unroutable") {
         return { ok: false, kind: pr.kind, detail: pr.detail, retryAfterSec: pr.retryAfterSec };
       }
-      if (pr.ok && implausibleLegs(pr.legs, pair).length === 0) parts.push(pr.pts);
+      if (pr.ok && absurdLegs(pr.legs, pair).length === 0) parts.push(pr.pts);
       else {
         parts.push(pair);
         straightLegs += 1;

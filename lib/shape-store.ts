@@ -39,7 +39,7 @@ import {
 export type ShapeSrc = "osrm" | "partial" | "straight" | "mzk";
 const RANK: Record<ShapeSrc, number> = { straight: 1, partial: 2, osrm: 3, mzk: 3 };
 /** Bump when the build pipeline changes output (entries rebuild gradually). */
-export const ALGO_VERSION = 1;
+export const ALGO_VERSION = 2;
 const FORMAT = "kb-map/route-shapes";
 const FILE_VERSION = 1;
 

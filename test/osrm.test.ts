@@ -8,10 +8,12 @@ import { describe, it } from "node:test";
 import {
   chunkWaypoints,
   classifyOsrmResponse,
+  absurdLegs,
   implausibleLegs,
   mergeChunkGeometries,
   osrmRouteUrl,
   routeWaypoints,
+  waypointBearings,
   type OsrmClientOpts,
 } from "../lib/osrm";
 import { encodePolyline, segMeters, type LatLng } from "../lib/shared/polyline";
@@ -88,6 +90,17 @@ describe("chunkWaypoints / mergeChunkGeometries", () => {
     assert.match(url, /^https:\/\/x\/route\/v1\/driving\/19\.000000,49\.800000;/);
     assert.match(url, /geometries=polyline6/);
     assert.match(url, /continue_straight=true/);
+    assert.doesNotMatch(url, /bearings=/);
+    const withB = osrmRouteUrl("https://x/route/v1/driving", [P(0, 0), P(10, 0), P(20, 0)], true, [90, null, 270]);
+    assert.match(withB, /&bearings=90,90;;270,90$/);
+  });
+});
+
+describe("waypointBearings", () => {
+  it("takes the direction from the previous to the next waypoint, none when they are too close", () => {
+    assert.deepEqual(waypointBearings([P(0, 0), P(100, 0), P(100, 100)]), [90, 45, 0]);
+    assert.deepEqual(waypointBearings([P(0, 0), P(10, 0)]), [null, null]);
+    assert.deepEqual(waypointBearings([P(0, 0)]), [null]);
   });
 });
 
@@ -130,6 +143,13 @@ describe("implausibleLegs", () => {
     // 2.5x but only 300 m extra — tolerated (short legs on winding roads)
     assert.deepEqual(implausibleLegs([500, 200], wps), []);
   });
+
+  it("absurd only past 3x and +3 km: a mountain serpentine is not", () => {
+    const wps = [P(0, 0), P(934, 0)];
+    assert.deepEqual(absurdLegs([2422], wps), []);
+    assert.deepEqual(absurdLegs([4500], wps), [0]);
+    assert.deepEqual(absurdLegs([3100], [P(0, 0), P(1500, 0)]), []); // +1.6 km, 2x
+  });
 });
 
 describe("routeWaypoints", () => {
@@ -157,22 +177,60 @@ describe("routeWaypoints", () => {
     const r = await routeWaypoints([P(0, 0), P(100, 0), P(200, 0)], opts(fetchImpl, { n: 0 }));
     assert.ok(r.ok);
     assert.equal(r.straightLegs, 2);
-    assert.equal(calls.length, 2); // continue_straight + plain retry
+    // continue_straight, bearings, plain: for the chunk, then for each of its two pairs
+    assert.equal(calls.length, 9);
   });
 
-  it("an implausible leg is re-routed pair by pair and goes straight if still bad", async () => {
-    // any request containing the 2nd->3rd pair reports a huge detour on that leg
-    const { fetchImpl } = fakeOsrm((coords) => {
-      if (coords.length < 2) return null;
+  it("one unroutable stop costs its own two legs, not the whole chunk", async () => {
+    const bad = P(200, 0);
+    const { fetchImpl } = fakeOsrm((coords) =>
+      coords.some((c) => Math.abs(c[1] - bad[1]) < 2e-6) ? { status: 400, body: { code: "NoSegment" } } : null,
+    );
+    const r = await routeWaypoints(
+      Array.from({ length: 6 }, (_, i) => P(i * 100, 0)),
+      opts(fetchImpl, { n: 0 }),
+    );
+    assert.ok(r.ok);
+    assert.equal(r.straightLegs, 2);
+    assert.equal(r.totalLegs, 5);
+  });
+
+  /** Fake OSRM where the 2nd->3rd leg is `detour(straight)` long unless `fixed(url)` says otherwise. */
+  const detourOsrm = (detour: (d: number) => number, fixed: (url: string) => boolean = () => false) =>
+    fakeOsrm((coords, url) => {
       const legs = coords.slice(1).map((c, i) => {
         const d = segMeters(coords[i][0], coords[i][1], c[0], c[1]);
-        return { distance: Math.abs(coords[i][1] - LON0 - 100 / KX) < 2e-6 ? d * 5 + 1000 : d };
+        const hit = Math.abs(coords[i][1] - LON0 - 100 / KX) < 2e-6 && !fixed(url);
+        return { distance: hit ? detour(d) : d };
       });
       return { status: 200, body: { code: "Ok", routes: [{ geometry: encodePolyline(coords), legs }] } };
     });
+
+  it("an absurd leg is re-routed pair by pair and goes straight if still bad", async () => {
+    const { fetchImpl } = detourOsrm((d) => d * 5 + 5000);
     const r = await routeWaypoints([P(0, 0), P(100, 0), P(200, 0), P(300, 0)], opts(fetchImpl, { n: 0 }));
     assert.ok(r.ok);
     assert.equal(r.straightLegs, 1);
     assert.equal(r.totalLegs, 3);
+  });
+
+  it("a long but bounded detour stays on the road (a serpentine, a one-way loop)", async () => {
+    const { fetchImpl, calls } = detourOsrm((d) => d * 5 + 1000);
+    const r = await routeWaypoints([P(0, 0), P(100, 0), P(200, 0), P(300, 0)], opts(fetchImpl, { n: 0 }));
+    assert.ok(r.ok);
+    assert.equal(r.straightLegs, 0);
+    assert.equal(calls.length, 3); // every way of asking tried once, the shortest kept
+  });
+
+  it("the stop directions settle a wrong-carriageway detour", async () => {
+    const { fetchImpl, calls } = detourOsrm(
+      (d) => d * 5 + 1000,
+      (url) => url.includes("bearings="),
+    );
+    const r = await routeWaypoints([P(0, 0), P(100, 0), P(200, 0), P(300, 0)], opts(fetchImpl, { n: 0 }));
+    assert.ok(r.ok);
+    assert.equal(r.straightLegs, 0);
+    assert.equal(calls.length, 2);
+    assert.match(calls[1], /&bearings=90,90;90,90;90,90;90,90/);
   });
 });
