@@ -12,6 +12,7 @@ import {
   implausibleLegs,
   mergeChunkGeometries,
   osrmRouteUrl,
+  routeChunk,
   routeWaypoints,
   waypointBearings,
   type OsrmClientOpts,
@@ -92,7 +93,7 @@ describe("chunkWaypoints / mergeChunkGeometries", () => {
     assert.match(url, /continue_straight=true/);
     assert.doesNotMatch(url, /bearings=/);
     const withB = osrmRouteUrl("https://x/route/v1/driving", [P(0, 0), P(10, 0), P(20, 0)], true, [90, null, 270]);
-    assert.match(withB, /&bearings=90,90;;270,90$/);
+    assert.match(withB, /&bearings=90,45;;270,45$/);
   });
 });
 
@@ -161,8 +162,8 @@ describe("routeWaypoints", () => {
     assert.ok(r.ok);
     assert.equal(r.straightLegs, 0);
     assert.equal(r.totalLegs, 26);
-    assert.equal(calls.length, 3);
-    assert.equal(t.n, 3);
+    assert.equal(calls.length, 6); // each chunk with and without the stop directions
+    assert.equal(t.n, 6);
     assert.equal(r.pts.length, 27);
   });
 
@@ -231,6 +232,30 @@ describe("routeWaypoints", () => {
     assert.ok(r.ok);
     assert.equal(r.straightLegs, 0);
     assert.equal(calls.length, 2);
-    assert.match(calls[1], /&bearings=90,90;90,90;90,90;90,90/);
+    assert.match(calls[1], /&bearings=90,45;90,45;90,45;90,45/);
+  });
+
+  it("a plausible answer still loses to a shorter one with the stop directions (a side-street snap)", async () => {
+    const { fetchImpl, calls } = detourOsrm((d) => d + 150, (url) => url.includes("bearings="));
+    const wps = [P(0, 0), P(100, 0), P(200, 0), P(300, 0)];
+    const r = await routeChunk(wps, opts(fetchImpl, { n: 0 }), waypointBearings(wps));
+    assert.ok(r.ok);
+    assert.deepEqual(r.legs.map(Math.round), [100, 100, 100]);
+    assert.equal(calls.length, 2);
+  });
+
+  it("a shorter answer that snaps a stop far off its pole loses (a stop on a bend)", async () => {
+    const { fetchImpl } = fakeOsrm((coords, url) => {
+      const br = url.includes("bearings=");
+      const legs = coords.slice(1).map((c, i) => ({
+        distance: segMeters(coords[i][0], coords[i][1], c[0], c[1]) - (br && i === 1 ? 40 : 0),
+      }));
+      const waypoints = coords.map((_, i) => ({ distance: br && i === 2 ? 59 : 3 }));
+      return { status: 200, body: { code: "Ok", routes: [{ geometry: encodePolyline(coords), legs }], waypoints } };
+    });
+    const wps = [P(0, 0), P(100, 0), P(200, 0), P(300, 0)];
+    const r = await routeChunk(wps, opts(fetchImpl, { n: 0 }), waypointBearings(wps));
+    assert.ok(r.ok);
+    assert.deepEqual(r.legs.map(Math.round), [100, 100, 100]);
   });
 });

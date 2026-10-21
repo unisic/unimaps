@@ -166,7 +166,7 @@ describe("ShapeStore — KB routing", () => {
     while (await h.store.runNext()) {
       /* drain */
     }
-    assert.equal(h.reqAt.length, 4);
+    assert.equal(h.reqAt.length, 8); // 4 chunks, each with and without the stop directions
     for (let i = 1; i < h.reqAt.length; i++) assert.ok(h.reqAt[i] - h.reqAt[i - 1] >= 1000);
   });
 

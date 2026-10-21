@@ -34,8 +34,11 @@ export function mergeChunkGeometries(parts: readonly LatLng[][]): LatLng[] {
   return out;
 }
 
-/** OSRM snaps a waypoint only to a road heading within ± this of the bus's direction: never the opposite carriageway. */
-const BEARING_RANGE = 90;
+/**
+ * OSRM snaps a waypoint only to a road heading within ± this of the bus's direction: never the opposite
+ * carriageway, nor the side street of a junction stop (Buczkowice Żylica: Wczasowa, 10 m away, runs 62° off).
+ */
+const BEARING_RANGE = 45;
 /** Neighbours closer than this give no usable direction. */
 const BEARING_MIN_M = 25;
 
@@ -75,7 +78,8 @@ export type OsrmFailure =
   | "ratelimited";
 
 export type OsrmOutcome =
-  | { ok: true; pts: LatLng[]; legs: number[] }
+  /** snapM: summed distance from each waypoint to where OSRM snapped it */
+  | { ok: true; pts: LatLng[]; legs: number[]; snapM: number }
   | { ok: false; kind: OsrmFailure; detail: string; retryAfterSec?: number };
 
 /** Classify an OSRM HTTP response (status + parsed JSON body or null). */
@@ -105,7 +109,11 @@ export function classifyOsrmResponse(status: number, body: unknown, retryAfter?:
         return typeof d === "number" ? d : NaN;
       })
     : [];
-  return { ok: true, pts, legs };
+  const snapM = (Array.isArray(rec.waypoints) ? rec.waypoints : []).reduce((a: number, w: unknown) => {
+    const d = w && typeof w === "object" ? (w as Record<string, unknown>).distance : NaN;
+    return a + (typeof d === "number" && Number.isFinite(d) ? d : 0);
+  }, 0);
+  return { ok: true, pts, legs, snapM };
 }
 
 function longLegs(legs: readonly number[], wps: readonly LatLng[], ratio: number, extraM: number): number[] {
@@ -175,9 +183,11 @@ const isHard = (o: OsrmOutcome): boolean => !o.ok && o.kind !== "unroutable";
 const total = (legs: readonly number[]): number => legs.reduce((a, b) => a + (Number.isFinite(b) ? b : 0), 0);
 
 /**
- * Route one chunk, asking up to three ways until no leg is implausible: continue_straight, then
- * with the bus's direction at each stop (`bearings`, rules out the wrong carriageway), then
- * plain. Otherwise the answer with the fewest implausible legs, then the shortest.
+ * Route one chunk with continue_straight, once without and once with the bus's direction at each stop
+ * (`bearings`: a stop next to a side street or the opposite carriageway snaps to the bus's road), plain
+ * only when neither is plausible. The answer with the fewest implausible legs wins, then the shortest
+ * counting each stop's way to its snap: a stop on a bend that the directions push 60 m along the road
+ * must not buy a shorter route (Janowice Leśniczówka).
  */
 export async function routeChunk(
   pts: readonly LatLng[],
@@ -190,6 +200,7 @@ export async function routeChunk(
   let best: OsrmOutcome | null = null;
   let bestBad = Infinity;
   for (const [cs, br] of tries) {
+    if (bestBad === 0 && !cs) break;
     const r = await requestRoute(pts, cs, o, br);
     if (isHard(r)) return r;
     if (!r.ok) {
@@ -197,8 +208,7 @@ export async function routeChunk(
       continue;
     }
     const bad = implausibleLegs(r.legs, pts).length;
-    if (bad === 0) return r;
-    if (!best?.ok || bad < bestBad || (bad === bestBad && total(r.legs) < total(best.legs))) {
+    if (!best?.ok || bad < bestBad || (bad === bestBad && total(r.legs) + r.snapM < total(best.legs) + best.snapM)) {
       best = r;
       bestBad = bad;
     }
