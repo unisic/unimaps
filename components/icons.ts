@@ -38,6 +38,7 @@ export { MegaphoneSimpleIcon } from "@phosphor-icons/react/dist/csr/MegaphoneSim
 export { MoonIcon } from "@phosphor-icons/react/dist/csr/Moon";
 export { NavigationArrowIcon } from "@phosphor-icons/react/dist/csr/NavigationArrow";
 export { PathIcon } from "@phosphor-icons/react/dist/csr/Path";
+export { PersonSimpleWalkIcon } from "@phosphor-icons/react/dist/csr/PersonSimpleWalk";
 export { ShareNetworkIcon } from "@phosphor-icons/react/dist/csr/ShareNetwork";
 export { ShieldCheckIcon } from "@phosphor-icons/react/dist/csr/ShieldCheck";
 export { SlidersHorizontalIcon } from "@phosphor-icons/react/dist/csr/SlidersHorizontal";

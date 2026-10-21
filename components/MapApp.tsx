@@ -9,7 +9,7 @@ import { loadShapeLatest } from "@/lib/client/shapes";
 import { projectStopsAlong, slicePolyline } from "@/lib/shared/polyline";
 import { peekVehicleAnimator } from "@/lib/client/vehicleAnimator";
 import { adjustStopRoutePoint, injectDetourPoints } from "@/lib/client/detours";
-import { arrivedSecs, tripTimeMatchesStop, hslColor } from "@/lib/client/format";
+import { arrivedSecs, operatorColor, tripTimeMatchesStop } from "@/lib/client/format";
 import { makeStopPingIcon, makeUserLocationIcon } from "@/lib/client/leafletIcons";
 import { panMotion } from "@/lib/client/motion";
 import { focusPoint, glideTo, installSmoothZoom, isCovered } from "@/lib/client/mapGlide";
@@ -605,7 +605,7 @@ export default function MapApp() {
       const { byId, byDesig } = stopsMapsRef.current;
 
       const legsResolved: JourneyLegResolved[] = conn.legs.map((leg) => {
-        const color = hslColor(leg.line);
+        const color = operatorColor(leg.operator, leg.line);
         if (leg.stops) {
           leg.stops.forEach((st) => {
             if (!st.lat || !st.lon) {

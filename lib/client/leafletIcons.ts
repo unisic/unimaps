@@ -27,6 +27,8 @@ const PH_NAV_ARROW_FILL =
   "M248,121.58a15.76,15.76,0,0,1-11.29,15l-.2.06-78,21.84-21.84,78-.06.2a15.77,15.77,0,0,1-15,11.29h-.3a15.77,15.77,0,0,1-15.07-10.67L41,61.41a1,1,0,0,1-.05-.16A16,16,0,0,1,61.25,40.9l.16.05,175.92,65.26A15.78,15.78,0,0,1,248,121.58Z";
 const PH_CARET_UP_FILL =
   "M215.39,163.06A8,8,0,0,1,208,168H48a8,8,0,0,1-5.66-13.66l80-80a8,8,0,0,1,11.32,0l80,80A8,8,0,0,1,215.39,163.06Z";
+const PH_PERSON_WALK_BOLD =
+  "M152,84a36,36,0,1,0-36-36A36,36,0,0,0,152,84Zm0-48a12,12,0,1,1-12,12A12,12,0,0,1,152,36Zm68,112a12,12,0,0,1-12,12c-37,0-55.27-18.47-70-33.3-1.71-1.72-3.36-3.4-5-5l-8.63,19.85L159,166.23a12,12,0,0,1,5,9.77v56a12,12,0,0,1-24,0V182.17l-25.37-18.12L83,236.78a12,12,0,1,1-22-9.57l50.06-115.13q-10.64.75-25,8.4a159.78,159.78,0,0,0-29.83,21.23,12,12,0,0,1-16.43-17.5c2.61-2.45,64.36-59.67,104.09-25.18,3.94,3.42,7.64,7.16,11.22,10.78C168.43,123.28,181,136,208,136A12,12,0,0,1,220,148Z";
 const PH_ARROWS_LEFT_RIGHT_BOLD =
   "M216.49,184.49l-32,32a12,12,0,0,1-17-17L179,188H48a12,12,0,0,1,0-24H179l-11.52-11.51a12,12,0,0,1,17-17l32,32A12,12,0,0,1,216.49,184.49Zm-145-64a12,12,0,0,0,17-17L77,92H208a12,12,0,0,0,0-24H77L88.49,56.49a12,12,0,0,0-17-17l-32,32a12,12,0,0,0,0,17Z";
 
@@ -132,10 +134,11 @@ export function makeUserLocationIcon(): L.DivIcon {
 }
 
 /** Pin markers for a connection journey (start, transfer points, end). */
-export function makeJourneyPinIcon(type: "start" | "transfer" | "end", text?: string): L.DivIcon {
-  if (type === "transfer") {
+export function makeJourneyPinIcon(type: "start" | "transfer" | "walk" | "end", text?: string): L.DivIcon {
+  if (type === "transfer" || type === "walk") {
     const badgeText = text ? `<span class="journey-trans-text">${escapeHtml(text)}</span>` : "";
-    const transferSvg = `<svg class="journey-trans-icon" viewBox="0 0 256 256" aria-hidden="true"><path d="${PH_ARROWS_LEFT_RIGHT_BOLD}"/></svg>`;
+    const path = type === "walk" ? PH_PERSON_WALK_BOLD : PH_ARROWS_LEFT_RIGHT_BOLD;
+    const transferSvg = `<svg class="journey-trans-icon" viewBox="0 0 256 256" aria-hidden="true"><path d="${path}"/></svg>`;
     return L.divIcon({
       className: "journey-pin-marker",
       html: `<div class="journey-pin-wrap"><div class="journey-trans-pill">${transferSvg}${badgeText}</div></div>`,

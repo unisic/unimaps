@@ -3,7 +3,7 @@
 import { Fragment, memo, useEffect, useMemo } from "react";
 import { CircleMarker, Marker, Polyline, Tooltip, useMap } from "react-leaflet";
 import L from "leaflet";
-import { displayStopName, hslColor } from "@/lib/client/format";
+import { displayStopName } from "@/lib/client/format";
 import { makeJourneyPinIcon } from "@/lib/client/leafletIcons";
 import { prefersReducedMotion } from "@/lib/client/motion";
 import type { JourneyView, LatLng } from "@/lib/client/types";
@@ -63,7 +63,7 @@ function JourneyLayer({ journey, desktop }: Props) {
       {/* Route polylines per leg */}
       {journey.legs.map((legItem, lIdx) => {
         const isLegSelected = selectedIdx === null || selectedIdx === lIdx;
-        const color = legItem.lineColor || hslColor(legItem.leg.line);
+        const color = legItem.lineColor;
         const pts: LatLng[] =
           legItem.routed && legItem.routed.length >= 2
             ? legItem.routed
@@ -99,10 +99,35 @@ function JourneyLayer({ journey, desktop }: Props) {
         );
       })}
 
+      {/* Walks between the alighting pole and the next boarding pole: a straight dotted line (no footpath geometry) */}
+      {journey.legs.slice(1).map(({ leg }, i) => {
+        const from = journey.legs[i].leg.stops?.at(-1);
+        const to = leg.stops?.[0];
+        if (!leg.walkMins || !from?.lat || !from.lon || !to?.lat || !to.lon) return null;
+        const on = selectedIdx === null || selectedIdx === i || selectedIdx === i + 1;
+        const pts: LatLng[] = [
+          [from.lat, from.lon],
+          [to.lat, to.lon],
+        ];
+        return (
+          <Fragment key={`journey-walk-${i}`}>
+            {/* same dash period as the dots, so each dot gets a dark rim */}
+            <Polyline
+              positions={pts}
+              pathOptions={{ color: "#0d1013", weight: 8, opacity: on ? 0.85 : 0.35, dashArray: "1 10", lineCap: "round" }}
+            />
+            <Polyline
+              positions={pts}
+              pathOptions={{ color: "#e8eaed", weight: 5, opacity: on ? 0.95 : 0.4, dashArray: "1 10", lineCap: "round" }}
+            />
+          </Fragment>
+        );
+      })}
+
       {/* Intermediate stops across legs */}
       {journey.legs.map((legItem, lIdx) => {
         const isLegSelected = selectedIdx === null || selectedIdx === lIdx;
-        const color = legItem.lineColor || hslColor(legItem.leg.line);
+        const color = legItem.lineColor;
         const stops = legItem.leg.stops ?? [];
 
         return stops.slice(1, -1).map((st, sIdx) => {
@@ -140,7 +165,8 @@ function JourneyLayer({ journey, desktop }: Props) {
           ? Math.max(1, Math.round((nextLeg.departureSecs - legItem.leg.arrivalSecs) / 60))
           : journey.itinerary.transferWaitMins ?? 5;
 
-        const icon = makeJourneyPinIcon("transfer", `${waitMins} min`);
+        const walk = nextLeg?.walkMins ?? 0;
+        const icon = walk ? makeJourneyPinIcon("walk", `${walk} min`) : makeJourneyPinIcon("transfer", `${waitMins} min`);
 
         return (
           <Marker
@@ -151,6 +177,12 @@ function JourneyLayer({ journey, desktop }: Props) {
           >
             <Tooltip direction="top" sticky className="kb-tooltip">
               <div className="font-medium">Przesiadka: {displayStopName(transStop.stopName)}</div>
+              {walk > 0 && nextLeg && (
+                <div className="text-text-mute">
+                  Pieszo <span className="font-medium tabular-nums text-text">{walk} min</span> do{" "}
+                  {displayStopName(nextLeg.fromStopName)}
+                </div>
+              )}
               <div className="text-text-mute">
                 Czas na przesiadkę: <span className="font-medium tabular-nums text-text">{waitMins} min</span>
               </div>
