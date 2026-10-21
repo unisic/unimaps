@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { parsePhotos, pickVehicle } from "../lib/phototrans";
+import { findVehiclePhotos, parsePhotos, pickVehicle } from "../lib/phototrans";
 
 // fragments of real phototrans.eu pages (2026-10-15)
 const row = (id: number, cells: string[]) =>
@@ -53,5 +53,18 @@ describe("parsePhotos", () => {
 
   it("is empty for a vehicle without photos", () => {
     assert.deepEqual(parsePhotos("<h3>Photos</h3><p>No photos</p>"), []);
+  });
+});
+
+describe("findVehiclePhotos", () => {
+  it("stops asking phototrans once it answers 403", async (t) => {
+    let calls = 0;
+    t.mock.method(globalThis, "fetch", async () => {
+      calls++;
+      return new Response("blocked", { status: 403 });
+    });
+    await assert.rejects(findVehiclePhotos("126"), /HTTP 403/);
+    await assert.rejects(findVehiclePhotos("127"), /backing off/);
+    assert.equal(calls, 1);
   });
 });

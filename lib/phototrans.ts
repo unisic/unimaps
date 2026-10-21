@@ -21,6 +21,11 @@ export const MAX_PHOTOS = 12;
 
 const MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
 
+/** phototrans' Cloudflare answers 403 to an IP it does not trust (a datacenter); asking again
+ *  on every card open only digs the hole deeper */
+const BLOCK_MS = 3600_000;
+let blockedUntil = 0;
+
 const cache = new Map<string, { at: number; photos: VehiclePhoto[] }>();
 const inflight = new Map<string, Promise<VehiclePhoto[]>>();
 
@@ -77,10 +82,12 @@ export function parsePhotos(html: string, max = MAX_PHOTOS): VehiclePhoto[] {
 }
 
 async function page(path: string): Promise<string> {
+  if (Date.now() < blockedUntil) throw new Error("phototrans refused us, backing off");
   const res = await fetch(BASE + path, {
     headers: { "User-Agent": UA, Accept: "text/html" },
     signal: AbortSignal.timeout(TIMEOUT_MS),
   });
+  if (res.status === 403 || res.status === 429) blockedUntil = Date.now() + BLOCK_MS;
   if (!res.ok) throw new Error(`phototrans HTTP ${res.status}`);
   return res.text();
 }
