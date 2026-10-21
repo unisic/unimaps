@@ -42,6 +42,20 @@ describe("findConnections with the MZK timetable", () => {
     assert.ok(!conn.legs[0].tripId.startsWith("mzk:"));
     assert.equal(conn.legs[conn.legs.length - 1].tripId, "mzk:5088899:13002");
     assert.ok(conn.transfersCount >= 1);
+    // it alights at Wałowa Centrum Handlowe and walks to MZK Hotel Prezydent
+    assert.equal(conn.legs[conn.legs.length - 1].walkMins, 5);
+    assert.equal(conn.walkMinutes, 5);
+  });
+
+  it("a KB and an MZK pole of one shelter are one stop, no walk", () => {
+    // KB 10071 and MZK 3 stand on the same spot
+    const res = findConnections({ from: "10031", to: "mzk:456", date: "2026-09-30", afterSecs: 21 * 3600 + 1800 });
+    const conn = res.find((c) => c.legs.length === 2 && c.legs[1].fromStopId === "mzk:3");
+    assert.ok(conn, "expected a transfer at 10071 / mzk:3");
+    assert.equal(conn.legs[0].toStopId, "10071");
+    assert.equal(conn.legs[0].walkMins, undefined);
+    assert.equal(conn.legs[1].walkMins, 0);
+    assert.equal(conn.walkMinutes, 0);
   });
 
   it("resolves the origin from explicit stop ids before the name", () => {

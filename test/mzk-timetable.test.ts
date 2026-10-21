@@ -203,6 +203,18 @@ describe("MZK timetable assembly", () => {
     ]);
   });
 
+  it("wraps calls after midnight even when the course start is wrong", () => {
+    const acc: CourseAccumulator = new Map();
+    addStopSchedule(acc, "a", schedule("RsC", [{ courseId: 9, sec: 86280, order: 0, start: 0 }]), "RsC");
+    addStopSchedule(acc, "b", schedule("RsC", [{ courseId: 9, sec: 86340, order: 1, start: 0 }]), "RsC");
+    addStopSchedule(acc, "c", schedule("RsC", [{ courseId: 9, sec: 60, order: 2, start: 0 }]), "RsC");
+    assert.deepEqual(finishCourses(acc, "RsC")[0].calls, [
+      ["a", 86280],
+      ["b", 86340],
+      ["c", 86460],
+    ]);
+  });
+
   it("appends the terminus from the variant sample with the sample's run time", () => {
     const acc: CourseAccumulator = new Map();
     addStopSchedule(acc, "291", schedule("RsC", [{ courseId: 1, sec: 82260, order: 14 }, { courseId: 2, sec: 30000, order: 14 }]), "RsC");

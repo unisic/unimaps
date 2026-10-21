@@ -94,13 +94,23 @@ export function finishCourses(acc: CourseAccumulator, dayType: string): MzkTimet
   for (const c of acc.values()) {
     if (c.calls.length < 2) continue;
     c.calls.sort((a, b) => a.order - b.order);
-    const start = c.startSec ?? c.calls[0].sec;
+    // a drop of more than 12 h from the previous call (or the course start) is a midnight crossing
+    let prev = c.startSec ?? c.calls[0].sec;
+    let wrap = 0;
     trips.push({
       id: `mzk:${c.courseId}:${c.variantId}`,
       line: c.line,
       headsign: c.headsign,
       dayType,
-      calls: c.calls.map((x) => [x.symbol, x.sec < start - 43200 ? x.sec + 86400 : x.sec]),
+      calls: c.calls.map((x): [string, number] => {
+        let sec = x.sec + wrap;
+        if (sec < prev - 43200) {
+          wrap += 86400;
+          sec += 86400;
+        }
+        prev = sec;
+        return [x.symbol, sec];
+      }),
     });
   }
   return trips;

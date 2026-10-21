@@ -282,6 +282,8 @@ export interface ConnectionLeg {
   durationMins: number;
   stopsCount: number;
   stops?: ConnectionLegStop[];
+  /** walk from the previous leg's last pole to this leg's first, minutes (0 = the same stop) */
+  walkMins?: number;
   /** stored road geometry of the leg's trip (GET /api/shapes) */
   shape_id?: string;
   operator?: "KB" | "MZK";
@@ -297,6 +299,8 @@ export interface ConnectionItinerary {
   transfersCount: number;
   transferWaitMins?: number;
   transferStopName?: string;
+  /** total walking between poles at the transfers, minutes */
+  walkMinutes?: number;
   date?: string;
   dayLabel?: string;
   arrivesNextDay?: boolean;

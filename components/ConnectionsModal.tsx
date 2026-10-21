@@ -24,6 +24,7 @@ import {
   addMinutesToHHMM,
   displayStopName,
   formatDayLabel,
+  hhmmFromSecs,
   normalizeText,
   nowHHMM,
   offsetDateISO,
@@ -335,27 +336,43 @@ function ConnectionsDialog({
     setConnections(null);
   }, [tomorrowStr]);
 
+  /** Re-search from `secs` after midnight of `date` (a list may span midnight, so paging moves the date too). */
+  const searchFrom = useCallback(
+    (date: string, secs: number) => {
+      const [h, m] = hhmmFromSecs(secs).split(":");
+      setSelectedDate(date);
+      setDateMode(date === todayStr ? "today" : date === tomorrowStr ? "tomorrow" : "custom");
+      setHour(h);
+      setMinute(m);
+      setTimeMode("custom");
+      setConnections(null);
+    },
+    [todayStr, tomorrowStr],
+  );
+
+  // departureSecs counts from the searched day's midnight, `date` is the day the journey leaves on
+  const leaves = useCallback(
+    (c: ConnectionItinerary) => ({ date: c.date ?? selectedDate, secs: c.departureSecs % 86400 }),
+    [selectedDate],
+  );
+
   const handleEarlierConnections = useCallback(() => {
     if (!connections || connections.length === 0) return;
-    const firstDep = connections[0].departureTime;
-    const earlier = addMinutesToHHMM(firstDep, -60);
-    const [h, m] = earlier.split(":");
-    setHour(h);
-    setMinute(m);
-    setTimeMode("custom");
-    setConnections(null);
-  }, [connections]);
+    const first = leaves(connections.reduce((a, b) => (b.departureSecs < a.departureSecs ? b : a)));
+    const secs = first.secs - 3600;
+    const prevDay = offsetDateISO(first.date, -1);
+    if (secs >= 0) searchFrom(first.date, secs);
+    else if (prevDay >= todayStr) searchFrom(prevDay, secs + 86400);
+    else searchFrom(first.date, 0);
+  }, [connections, leaves, searchFrom, todayStr]);
 
   const handleLaterConnections = useCallback(() => {
     if (!connections || connections.length === 0) return;
-    const lastDep = connections[connections.length - 1].departureTime;
-    const later = addMinutesToHHMM(lastDep, 15);
-    const [h, m] = later.split(":");
-    setHour(h);
-    setMinute(m);
-    setTimeMode("custom");
-    setConnections(null);
-  }, [connections]);
+    const last = leaves(connections.reduce((a, b) => (b.departureSecs > a.departureSecs ? b : a)));
+    const secs = last.secs + 60;
+    if (secs < 86400) searchFrom(last.date, secs);
+    else searchFrom(offsetDateISO(last.date, 1), secs - 86400);
+  }, [connections, leaves, searchFrom]);
 
   const handleOpenDatePicker = useCallback(() => {
     try {
