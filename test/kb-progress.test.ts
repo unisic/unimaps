@@ -193,6 +193,8 @@ describe("kb-progress pure helpers", () => {
     assert.equal(progressAt(stops, 3050, 1).nextIdx, null, "past the last stop");
     assert.equal(progressAt(stops, 1500, null).stale, false, "no upstream index, nothing to compare");
     assert.equal(progressAt([0, null, 2000], 2010, 1).lastIdx, 2, "unplaced stops are skipped");
+    assert.equal(progressAt([0, null, 2000], 10, 0).nextIdx, 2, "the next stop is the next placed one");
+    assert.equal(progressAt([0, 1000, 2000, null], 2000, 0).nextIdx, null, "past the last placed stop (terminus unresolved)");
   });
 
   it("straightGeom aligns stops with trip.times and tolerates unresolved stops", () => {
@@ -244,6 +246,14 @@ describe("trackAlong", () => {
     assert.ok(Math.abs(nearSchedule.D - 300) < 2, "10:03 fits the outbound pass (10:03) — in-sync candidate");
     const lateEvening = trackAlong(geom, ...P(300, 5), 1000, at(10, 17), plan, 0, 1, null)!;
     assert.ok(Math.abs(lateEvening.D - 1710) < 2, "10:17 fits the return pass (10:17) by far better than the outbound one");
+  });
+
+  it("cold start: a candidate clamped to the stale-index window keeps its real distance from the fix", () => {
+    // bus 100 m before upstream's next stop; nothing beyond next+120 m is within 150 m of it, however well it fits
+    const line = preparePolyline([P(0, 0), P(1000, 0), P(2000, 0), P(3000, 0)])!;
+    const g: ProgressGeom = { pl: line, stops: [0, 1000, 2000, 3000], maxOffM: 150 };
+    const r = trackAlong(g, ...P(900, 0), 1000, at(10, 8, 5), [at(10, 0), at(10, 1), at(11, 0), at(11, 30)], 0, 1, null)!;
+    assert.ok(Math.abs(r.D - 900) < 2, `got ${r.D}`);
   });
 
   it("warm: monotone window keeps the leg even when upstream's index is stale", () => {

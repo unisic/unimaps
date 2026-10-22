@@ -168,7 +168,7 @@ export function vehicleToJson(v: VehiclePos): VehicleJson {
 }
 
 /** Sleep that resolves early (and clears its timer) when the signal aborts. */
-function interruptibleSleep(ms: number, signal: AbortSignal): Promise<void> {
+export function interruptibleSleep(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
     if (signal.aborted) {
       resolve();
@@ -264,7 +264,7 @@ export class LivePoller {
   /** Epoch secs of the last proven upstream contact (any successful position
    *  fetch or departures batch) — served as the feed timestamp, so it goes
    *  stale only when the scraper is actually cut off from the upstream. */
-  private lastGoodRefresh = Math.floor(Date.now() / 1000);
+  lastGoodRefresh = Math.floor(Date.now() / 1000);
   private jsonCache: { key: string; value: VehiclesResponse } | null = null;
   private pbCache: { key: string; value: Uint8Array<ArrayBuffer> } | null = null;
 
@@ -286,6 +286,9 @@ export class LivePoller {
   private patternMemo = new Map<string, KbPattern | null>();
   /** straight stop-to-stop geometry per pattern object (dies with the memo on a stop reload) */
   private straightMemo = new WeakMap<KbPattern, ProgressGeom | null>();
+  /** epoch ms the upstream request behind a position was issued: a reply to an older request (overlapping
+   *  refresh / addCandidates / a viewer's trip_execution) never overwrites a newer position. Dies with the position. */
+  private reqAt = new WeakMap<VehiclePos, number>();
   private routeErrLoggedAt = 0;
   private progressErrLoggedAt = 0;
   private gpsPolls = 0;
@@ -404,13 +407,14 @@ export class LivePoller {
   private async run(signal: AbortSignal): Promise<void> {
     while (!signal.aborted) {
       if (Date.now() / 1000 - this.stopsLoadedAt >= config.STOPS_RELOAD_SEC) {
+        let ok = false;
         try {
-          await this.loadStops();
+          ok = await this.loadStops();
         } catch (err) {
           log.error("rt", `stops reload failed: ${err}`);
-          // keep the old list, retry in 30 min instead of hammering every scan
-          this.stopsLoadedAt = Date.now() / 1000 - config.STOPS_RELOAD_SEC + 1800;
         }
+        // failed or empty: keep the old list, retry in 30 min instead of hammering every scan
+        if (!ok) this.stopsLoadedAt = Date.now() / 1000 - config.STOPS_RELOAD_SEC + 1800;
       }
       try {
         await this.fullScan();
@@ -606,7 +610,8 @@ export class LivePoller {
 
   /** Fetch trip executions for candidates, honoring the 404 cache (port of _fetch_positions). */
   private async fetchPositions(candidates: Array<[string, number]>): Promise<void> {
-    const nowTs = Math.floor(Date.now() / 1000);
+    const reqMs = Date.now();
+    const nowTs = Math.floor(reqMs / 1000);
     const cacheCut = nowTs - this.cache404;
     let fetchOk = 0;
 
@@ -633,6 +638,8 @@ export class LivePoller {
       let changed = false;
       for (const [eid, resp, fetched] of results) {
         if (!fetched) continue; // cached 404 / fetch error: leave existing state untouched
+        const cur = this.positions.get(eid);
+        if (cur && (this.reqAt.get(cur) ?? 0) > reqMs) continue; // a newer request already landed
         if (!pyTruthy(resp)) {
           this.notFound.set(eid, nowTs);
           if (this.positions.delete(eid)) changed = true;
@@ -640,40 +647,14 @@ export class LivePoller {
         }
         const pos = this.parsePosition(eid, asRecord(resp));
         if (pos) {
-          // Carry the movement anchor across refreshes: reset it (and mark "moved
-          // now") only when the vehicle has travelled past the epsilon; otherwise
-          // keep the previous anchor so a slowly-drifting bus still counts as
-          // moving while a bit-frozen feed accrues stale time.
-          const prev = this.positions.get(eid);
-          if (prev) {
-            const moved = metersBetween(pos.lat, pos.lon, prev.anchorLat, prev.anchorLon);
-            if (moved > config.LIVE_STALE_MOVE_EPS_M) {
-              pos.anchorLat = pos.lat;
-              pos.anchorLon = pos.lon;
-              pos.lastMovedAt = pos.updatedAt;
-            } else {
-              pos.anchorLat = prev.anchorLat;
-              pos.anchorLon = prev.anchorLon;
-              pos.lastMovedAt = prev.lastMovedAt;
-            }
-
-            // Heading points in the actual direction the vehicle is moving
-            const stepDist = metersBetween(pos.lat, pos.lon, prev.lat, prev.lon);
-            if (stepDist >= 8) {
-              const moveBrg = bearing(prev.lat, prev.lon, pos.lat, pos.lon);
-              if (moveBrg !== null) {
-                pos.bearing = moveBrg;
-              }
-            } else if (prev.bearing !== null) {
-              // Retain heading while stopped (at a stop, traffic lights, etc.)
-              pos.bearing = prev.bearing;
-            }
-          }
+          const prev = cur;
+          if (prev) this.carryMotion(pos, prev);
           const gpsLast = this.attachProgress(pos, prev, asRecord(resp));
           this.attachRouteInfo(pos, prev, asRecord(resp), "urgent");
-          this.attachArrivals(pos, prev, gpsLast);
+          this.attachArrivals(pos, prev, gpsLast, asRecord(resp));
           pos.schedTripId = this.execTrip.get(eid)?.trip;
           this.positions.set(eid, pos);
+          this.reqAt.set(pos, reqMs);
           this.notFound.delete(eid);
           changed = true;
         }
@@ -685,6 +666,33 @@ export class LivePoller {
       if (fetchOk > 0) this.lastGoodRefresh = nowTs;
     } finally {
       this.pruneDead(Date.now() / 1000);
+    }
+  }
+
+  /**
+   * Carry the movement anchor across refreshes: reset it (and mark "moved now")
+   * only when the vehicle has travelled past the epsilon; otherwise keep the
+   * previous anchor so a slowly-drifting bus still counts as moving while a
+   * bit-frozen feed accrues stale time. Heading follows the actual movement.
+   */
+  private carryMotion(pos: VehiclePos, prev: VehiclePos): void {
+    const moved = metersBetween(pos.lat, pos.lon, prev.anchorLat, prev.anchorLon);
+    if (moved > config.LIVE_STALE_MOVE_EPS_M) {
+      pos.anchorLat = pos.lat;
+      pos.anchorLon = pos.lon;
+      pos.lastMovedAt = pos.updatedAt;
+    } else {
+      pos.anchorLat = prev.anchorLat;
+      pos.anchorLon = prev.anchorLon;
+      pos.lastMovedAt = prev.lastMovedAt;
+    }
+    const stepDist = metersBetween(pos.lat, pos.lon, prev.lat, prev.lon);
+    if (stepDist >= 8) {
+      const moveBrg = bearing(prev.lat, prev.lon, pos.lat, pos.lon);
+      if (moveBrg !== null) pos.bearing = moveBrg;
+    } else if (prev.bearing !== null) {
+      // Retain heading while stopped (at a stop, traffic lights, etc.)
+      pos.bearing = prev.bearing;
     }
   }
 
@@ -967,9 +975,12 @@ export class LivePoller {
   }
 
   /** Stop arrival log (stepArrivals): the further of upstream's index and the GPS one. Bounded by the trip's stop
-   *  count, dropped with the vehicle. */
-  private attachArrivals(pos: VehiclePos, prev: VehiclePos | undefined, gpsLast: number | null): void {
-    const reached = Math.max(pos.currentStopSequence ?? -1, gpsLast ?? -1);
+   *  count (an out-of-range upstream index is ignored), dropped with the vehicle. */
+  private attachArrivals(pos: VehiclePos, prev: VehiclePos | undefined, gpsLast: number | null, resp: Record<string, unknown>): void {
+    const times = asRecord(resp.trip).times;
+    const n = Array.isArray(times) ? times.length : 0;
+    const up = pos.currentStopSequence !== null && pos.currentStopSequence < n ? pos.currentStopSequence : -1;
+    const reached = Math.max(up, gpsLast ?? -1);
     pos.arrivals = stepArrivals(prev?.arrivals, reached, pos.updatedAt, pos.fixAt ?? pos.updatedAt);
   }
 
@@ -1076,36 +1087,21 @@ export class LivePoller {
    * Immediately ingest a trip execution record into live positions,
    * e.g. when a client opens a live trip execution.
    */
-  ingestTripExecution(eid: string, resp: Record<string, unknown>): VehiclePos | null {
+  ingestTripExecution(eid: string, resp: Record<string, unknown>, reqMs = Date.now()): VehiclePos | null {
     if (!pyTruthy(resp)) return null;
+    const prev = this.positions.get(eid);
+    // a newer request already landed: keep it (`reqMs` = when the caller asked upstream)
+    if (prev && (this.reqAt.get(prev) ?? 0) > reqMs) return prev;
     const pos = this.parsePosition(eid, resp);
     if (!pos) return null;
     const nowTs = Math.floor(Date.now() / 1000);
-    const prev = this.positions.get(eid);
-    if (prev) {
-      const moved = metersBetween(pos.lat, pos.lon, prev.anchorLat, prev.anchorLon);
-      if (moved > config.LIVE_STALE_MOVE_EPS_M) {
-        pos.anchorLat = pos.lat;
-        pos.anchorLon = pos.lon;
-        pos.lastMovedAt = pos.updatedAt;
-      } else {
-        pos.anchorLat = prev.anchorLat;
-        pos.anchorLon = prev.anchorLon;
-        pos.lastMovedAt = prev.lastMovedAt;
-      }
-      const stepDist = metersBetween(pos.lat, pos.lon, prev.lat, prev.lon);
-      if (stepDist >= 8) {
-        const moveBrg = bearing(prev.lat, prev.lon, pos.lat, pos.lon);
-        if (moveBrg !== null) pos.bearing = moveBrg;
-      } else if (prev.bearing !== null) {
-        pos.bearing = prev.bearing;
-      }
-    }
+    if (prev) this.carryMotion(pos, prev);
     const gpsLast = this.attachProgress(pos, prev, resp);
     this.attachRouteInfo(pos, prev, resp, "urgent");
-    this.attachArrivals(pos, prev, gpsLast);
+    this.attachArrivals(pos, prev, gpsLast, resp);
     pos.schedTripId = this.execTrip.get(eid)?.trip;
     this.positions.set(eid, pos);
+    this.reqAt.set(pos, reqMs);
     this.notFound.delete(eid);
     this.lastGoodRefresh = nowTs;
     this.snapshotVersion += 1;
@@ -1140,7 +1136,7 @@ export class LivePoller {
 
   /** Cache key: positions version + coarse 5s time bucket (the live filter is
    *  time-dependent, so ghosts still age out between buckets). */
-  private snapshotKey(nowEpoch: number): string {
+  snapshotKey(nowEpoch: number): string {
     return `${this.snapshotVersion}:${Math.floor(nowEpoch / 5)}`;
   }
 

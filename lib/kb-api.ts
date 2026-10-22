@@ -139,15 +139,18 @@ export class KbApi {
   private readonly timeoutMs: number;
   private readonly limit: ReturnType<typeof pLimit>;
   private readonly headers: Record<string, string>;
+  /** New requests are refused once this many wait for a slot (a client-driven flood sheds, never queues unboundedly). */
+  private readonly maxPending: number;
   /** Last successfully scraped stops revision — a transient scrape failure
    *  falls back here instead of the hardcoded cold-start default. */
   private lastGoodRevision: string | null = null;
 
-  constructor(opts: { concurrency?: number; timeout?: number } = {}) {
+  constructor(opts: { concurrency?: number; timeout?: number; maxPending?: number } = {}) {
     this.base = config.BASE_URL;
     this.concurrency = opts.concurrency ?? config.DEFAULT_CONCURRENCY;
     this.timeoutMs = (opts.timeout ?? config.HTTP_TIMEOUT) * 1000;
     this.limit = pLimit(this.concurrency);
+    this.maxPending = opts.maxPending ?? Infinity;
     this.headers = { "User-Agent": config.USER_AGENT, Accept: "application/json" };
   }
 
@@ -161,6 +164,8 @@ export class KbApi {
    */
   private async get(path: string, retries = 2): Promise<unknown> {
     const url = `${this.base}${path}`;
+    // checked once: a retry re-queues an admitted caller, so pending stays <= maxPending + concurrency
+    if (this.limit.pendingCount >= this.maxPending) throw new Error(`KB request queue full (${this.maxPending} pending)`);
     let lastErr: unknown = null;
     for (let attempt = 0; attempt <= retries; attempt++) {
       const res = await this.limit(() => this.attemptGet(url, attempt));
@@ -263,26 +268,35 @@ export class KbApi {
     return data;
   }
 
+  /** True when fetchTripRaw would answer from the cache without an upstream request. */
+  hasCachedTrip(tripId: string, index = 0): boolean {
+    const hit = this.tripCache.get(`${tripId}:${index}`);
+    return hit !== undefined && hit.expiresAt > Date.now();
+  }
+
   /**
    * Batch resolves multiple trips through the in-memory cache and shared p-limit.
+   * `failed` counts ids whose fetch threw (as opposed to 404/empty = no such trip).
    */
-  async fetchTripsBatch(tripIds: readonly string[], index = 0): Promise<Record<string, unknown>> {
+  async fetchTripsBatch(tripIds: readonly string[], index = 0): Promise<{ trips: Record<string, unknown>; failed: number }> {
     const unique = Array.from(new Set(tripIds));
+    let failed = 0;
     const entries = await Promise.all(
       unique.map(async (tid): Promise<[string, unknown]> => {
         try {
           const raw = await this.fetchTripRaw(tid, index);
           return [tid, pyTruthy(raw) ? raw : null];
         } catch {
+          failed += 1;
           return [tid, null];
         }
       }),
     );
-    const out: Record<string, unknown> = {};
+    const trips: Record<string, unknown> = {};
     for (const [id, data] of entries) {
-      if (data !== null) out[id] = data;
+      if (data !== null) trips[id] = data;
     }
-    return out;
+    return { trips, failed };
   }
 
   /** GET /api/departures/<stopUrlId> (raw passthrough). */

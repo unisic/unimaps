@@ -21,7 +21,7 @@
  * Geometry is the straight stop-to-stop polyline of the trip's own stops, so
  * the result never depends on the OSRM shape store being warm.
  */
-import { preparePolyline, projectOnPolyline, projectStopsAlong, type LatLng, type Polyline } from "./shared/polyline";
+import { preparePolyline, projectOnPolyline, projectStopsAlong, segMeters, type LatLng, type Polyline } from "./shared/polyline";
 
 /** A stop counts as passed when the bus is within this many metres before it. */
 export const PASS_TOL_M = 25;
@@ -75,19 +75,13 @@ function wrapSecs(x: number): number {
   return x > 43200 ? x - 86400 : x < -43200 ? x + 86400 : x;
 }
 
-function metresBetween(aLat: number, aLon: number, bLat: number, bLon: number): number {
-  const dy = (bLat - aLat) * M_PER_DEG;
-  const dx = (bLon - aLon) * M_PER_DEG * Math.cos(((aLat + bLat) / 2) * RAD);
-  return Math.hypot(dx, dy);
-}
-
 /** Is the fix within `r` metres of the last placed stop's own coordinates? (true when the coordinates are unknown) */
 function nearLastStop(geom: ProgressGeom, lat: number, lon: number, r: number): boolean {
   if (!geom.pts) return true;
   for (let i = geom.stops.length - 1; i >= 0; i--) {
     if (geom.stops[i] === null || geom.stops[i] === undefined) continue;
     const p = geom.pts[i];
-    return !p || metresBetween(lat, lon, p[0], p[1]) <= r;
+    return !p || segMeters(lat, lon, p[0], p[1]) <= r;
   }
   return true;
 }
@@ -178,7 +172,8 @@ export function progressAt(stops: ReadonlyArray<number | null>, D: number, nextU
     const s = stops[i];
     if (s !== null && s !== undefined && s <= D + PASS_TOL_M) last = i;
   }
-  const nextIdx = last + 1 < stops.length ? last + 1 : null;
+  let nextIdx: number | null = null;
+  for (let i = last + 1; i < stops.length && nextIdx === null; i++) if (stops[i] !== null && stops[i] !== undefined) nextIdx = i;
   let pastM: number | null = null;
   let stale = false;
   if (nextUp !== null) {
@@ -214,6 +209,8 @@ function collectCandidates(pl: Polyline, lat: number, lon: number, sMin: number,
     t = Math.min(1, Math.max(0, t));
     const segLen = pl.cum[i + 1] - pl.cum[i];
     const s = Math.min(sMax, Math.max(sMin, pl.cum[i] + t * segLen));
+    // distance from the clamped point, not the unclamped foot (else a window edge looks closer than it is)
+    if (segLen > 0) t = (s - pl.cum[i]) / segLen;
     const d = Math.hypot(px - t * dx, py - t * dy);
     if (d < bestD) bestD = d;
     raw.push({ s, d });

@@ -52,17 +52,63 @@ describe("Site Performance & Optimization Invariants", () => {
   });
 
   describe("API Client & In-Memory Caching", () => {
-    it("KbApi instance provides fetchTripsBatch method", () => {
+    const json = (body: unknown) =>
+      new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+
+    it("KbApi.fetchTripsBatch dedupes ids, serves repeats from cache and never caches a miss", async (t) => {
+      const urls: string[] = [];
+      t.mock.method(globalThis, "fetch", async (url: string | URL) => {
+        urls.push(String(url));
+        if (String(url).includes("/api/trip/404/")) return new Response("", { status: 404 });
+        return json({ id: String(url) });
+      });
       const api = new KbApi();
-      assert.equal(typeof api.fetchTripsBatch, "function");
-      assert.equal(typeof api.fetchTripRaw, "function");
-      assert.equal(typeof api.fetchTimetable, "function");
+
+      const first = await api.fetchTripsBatch(["1", "1", "2", "404"]);
+      assert.deepEqual(Object.keys(first.trips).sort(), ["1", "2"]);
+      assert.equal(first.failed, 0, "a 404 is a missing trip, not a failed fetch");
+      assert.equal(urls.length, 3, "duplicate ids must share one upstream request");
+
+      const second = await api.fetchTripsBatch(["1", "2", "404"]);
+      assert.deepEqual(second.trips, first.trips);
+      assert.equal(urls.length, 4, "cached trips are not refetched; the 404 is retried");
+      assert.ok(urls[3].includes("/api/trip/404/"));
     });
 
-    it("client api exposes getTripsBatch", async () => {
-      const clientApi = await import("../lib/client/api");
-      assert.equal(typeof clientApi.getTripsBatch, "function");
-      assert.equal(typeof clientApi.getTrip, "function");
+    it("KbApi.fetchTimetable answers a repeat for the same stop and date from cache", async (t) => {
+      let calls = 0;
+      t.mock.method(globalThis, "fetch", async () => {
+        calls++;
+        return json({ departures: [{ trip_id: 1 }] });
+      });
+      const api = new KbApi();
+      const a = await api.fetchTimetable("19117:39660", "2026-10-22");
+      const b = await api.fetchTimetable("19117:39660", "2026-10-22");
+      assert.deepEqual(b, a);
+      assert.equal(calls, 1);
+      await api.fetchTimetable("19117:39660", "2026-10-23");
+      assert.equal(calls, 2, "another date is another cache entry");
+    });
+
+    it("client getTripsBatch resolves missing trips in one request and then from cache", async (t) => {
+      const { getTripsBatch } = await import("../lib/client/api");
+      const urls: string[] = [];
+      t.mock.method(globalThis, "fetch", async (url: string | URL) => {
+        urls.push(String(url));
+        return json({
+          count: 2,
+          trips: { "perf-a": { times: [{}], shape_status: "road" }, "perf-b": { times: [{}], shape_status: "road" } },
+        });
+      });
+
+      const first = await getTripsBatch(["perf-a", "perf-b"]);
+      assert.equal(urls.length, 1);
+      assert.ok(urls[0].startsWith("/api/trips?ids="));
+      assert.deepEqual([...first.keys()], ["perf-a", "perf-b"]);
+
+      const second = await getTripsBatch(["perf-a", "perf-b"]);
+      assert.equal(urls.length, 1, "cached trips must not hit the network again");
+      assert.deepEqual(second, first);
     });
   });
 

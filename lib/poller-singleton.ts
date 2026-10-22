@@ -6,20 +6,22 @@ import fs from "node:fs";
 import path from "node:path";
 
 import * as config from "./config";
+import { getFleetTracker } from "./fleet-tracker";
 import { startGtfsRefresh } from "./gtfs-refresh";
 import { KbApi } from "./kb-api";
 import { log } from "./logger";
 import { createMergedStopsCache, type MergedView } from "./merged-stops";
 import { MzkApi } from "./mzk-api";
-import { MzkPoller } from "./mzk-poller";
+import { MZK_STALE_SEC, MzkPoller } from "./mzk-poller";
 import { LivePoller, vehicleToJson } from "./poller";
 import { vehicleExtras } from "./route-info";
 import { readGtfsPatternSeeds } from "./shape-patterns";
 import { getStopDirections } from "./stop-directions";
 import { getShapeStore as getStoreSingleton, ShapeStore } from "./shape-store";
-import type { LineInfo, Stop, VehicleJson, VehiclesResponse } from "./types";
+import type { LineInfo, VehicleJson, VehiclesResponse } from "./types";
 
 interface SingletonState {
+  /** client for the passthrough routes; the poller owns a separate one, so route traffic never queues in front of its scans */
   api: KbApi;
   poller: LivePoller;
   mzkApi: MzkApi;
@@ -27,6 +29,8 @@ interface SingletonState {
   shapes: ShapeStore;
   /** memoized merged KB+MZK stop list (see getMergedStopsView) */
   merged?: ReturnType<typeof createMergedStopsCache>;
+  /** last /api/vehicles payload per operator filter (at most 3: all, kb, mzk) */
+  vehiclesMemo?: Map<string, { kbKey: string; mzkPositions: unknown; value: VehiclesResponse }>;
   startPromise: Promise<void> | null;
   signalsRegistered: boolean;
   /** Epoch ms of the last failed start — gates the retry cooldown. */
@@ -36,6 +40,11 @@ interface SingletonState {
 /** After a failed start, don't re-attempt loadStops() for this long. */
 const START_RETRY_COOLDOWN_MS = 30_000;
 
+/** Passthrough routes: half the poller's upstream concurrency, and at most this many requests waiting for a slot
+ *  (a flood is refused with a 502 instead of queueing without bound). */
+const routeKbApi = (): KbApi =>
+  new KbApi({ concurrency: Math.max(1, Math.floor(config.DEFAULT_CONCURRENCY / 2)), maxPending: 600 });
+
 const KEY = Symbol.for("kb-gtfs.poller-singleton");
 
 type GlobalWithState = typeof globalThis & { [KEY]?: SingletonState };
@@ -43,10 +52,10 @@ type GlobalWithState = typeof globalThis & { [KEY]?: SingletonState };
 function state(): SingletonState {
   const g = globalThis as GlobalWithState;
   if (!g[KEY]) {
-    const api = new KbApi();
+    const api = routeKbApi();
     const mzkApi = new MzkApi();
     const shapes = getShapeStore(mzkApi);
-    const poller = new LivePoller(api, { shapes });
+    const poller = new LivePoller(new KbApi(), { shapes });
     const mzkPoller = new MzkPoller(mzkApi);
     mzkPoller.shapes = shapes;
     g[KEY] = {
@@ -141,7 +150,7 @@ export function kbShapeRef(
   }
 }
 
-/** The shared KB upstream API client. */
+/** The KB upstream API client for the passthrough routes (not the poller's). */
 export function getApi(): KbApi {
   return state().api;
 }
@@ -206,12 +215,7 @@ export function startPoller(): Promise<void> {
     }
     st.shapes.start();
     st.startPromise = Promise.allSettled([
-      st.poller.start().then(() => {
-        log.info("rt", `KB poller up, ${st.poller.stops.length} stops loaded`);
-        startGtfsRefresh(() => seedShapesFromGtfs(st), st.mzkApi);
-        const t = setTimeout(() => seedShapesFromGtfs(st), 3 * 60_000);
-        t.unref?.();
-      }),
+      startKb(st),
       st.mzkPoller.start().then(() => {
         log.info("rt", `MZK poller up, ${st.mzkPoller.stops.length} stops loaded`);
       }),
@@ -221,6 +225,8 @@ export function startPoller(): Promise<void> {
         const mzkResult = results[1];
         if (kbResult.status === "rejected") {
           log.warn("rt", `KB poller start warning: ${kbResult.reason}`);
+          // MZK up keeps startPromise resolved, so nothing would ever call start() again
+          if (mzkResult.status === "fulfilled") retryKbStart(st);
         }
         if (mzkResult.status === "rejected") {
           log.warn("rt", `MZK poller start warning: ${mzkResult.reason}`);
@@ -240,6 +246,26 @@ export function startPoller(): Promise<void> {
   return st.startPromise;
 }
 
+function startKb(st: SingletonState): Promise<void> {
+  return st.poller.start().then(() => {
+    log.info("rt", `KB poller up, ${st.poller.stops.length} stops loaded`);
+    startGtfsRefresh(() => seedShapesFromGtfs(st), st.mzkApi);
+    const t = setTimeout(() => seedShapesFromGtfs(st), 3 * 60_000);
+    t.unref?.();
+  });
+}
+
+/** Retry a failed KB start every START_RETRY_COOLDOWN_MS until it succeeds (one timer at a time). */
+function retryKbStart(st: SingletonState): void {
+  const t = setTimeout(() => {
+    startKb(st).catch((err: unknown) => {
+      log.warn("rt", `KB poller start retry failed: ${err}`);
+      retryKbStart(st);
+    });
+  }, START_RETRY_COOLDOWN_MS);
+  t.unref?.();
+}
+
 /**
  * Returns combined live vehicles from KB and MZK, optionally filtered by operator.
  */
@@ -247,30 +273,29 @@ export function getCombinedVehicles(operator?: string | null): VehiclesResponse 
   const st = state();
   const nowEpoch = Date.now() / 1000;
   const op = operator?.toLowerCase();
+  // every client polls every 4 s: rebuild only when the KB snapshot (5 s bucket included) or the MZK map changed
+  const memoKey = op === "kb" || op === "mzk" ? op : "";
+  const kbKey = st.poller.snapshotKey(nowEpoch);
+  const memo = (st.vehiclesMemo ??= new Map()).get(memoKey);
+  if (memo && memo.kbKey === kbKey && memo.mzkPositions === st.mzkPoller.positions) return memo.value;
 
   const kbLive = op === "mzk" ? [] : st.poller.liveVehicles(nowEpoch);
-  const mzkLive = op === "kb" ? [] : Array.from(st.mzkPoller.positions.values());
+  const mzkLive = op === "kb" ? [] : Array.from(st.mzkPoller.positions.values()).filter((v) => nowEpoch - v.updatedAt <= MZK_STALE_SEC);
 
   const vehicles: VehicleJson[] = [
     ...kbLive.map((v) => ({ ...vehicleToJson(v), ...vehicleExtras(v, st.shapes, nowEpoch), operator: "KB" as const })),
     ...mzkLive.map((v) => ({ ...vehicleToJson(v), ...vehicleExtras(v, st.shapes, nowEpoch), operator: "MZK" as const })),
   ];
 
-  return {
-    timestamp: Math.max(st.poller.healthSnapshot().lastGoodRefresh, st.mzkPoller.lastGoodRefresh),
+  const value: VehiclesResponse = {
+    timestamp: Math.max(st.poller.lastGoodRefresh, st.mzkPoller.lastGoodRefresh),
     scan_count: st.poller.scanCount + st.mzkPoller.scanCount,
     last_scan: Math.max(st.poller.lastScan, st.mzkPoller.lastScan),
     count: vehicles.length,
     vehicles,
   };
-}
-
-/**
- * Returns combined stops from KB and MZK.
- */
-export function getCombinedStops(): Stop[] {
-  const st = state();
-  return [...st.poller.stops, ...st.mzkPoller.stops];
+  st.vehiclesMemo.set(memoKey, { kbKey, mzkPositions: st.mzkPoller.positions, value });
+  return value;
 }
 
 /**
@@ -291,6 +316,11 @@ function registerSignalHandlers(st: SingletonState): void {
       st.shapes.stop(); // flushes the shape store synchronously
     } catch (err) {
       log.error("shapes", `store stop failed: ${err}`);
+    }
+    try {
+      getFleetTracker().flushSync(); // the debounced save would otherwise drop up to 30 s of history
+    } catch (err) {
+      log.error("fleet", `history flush failed: ${err}`);
     }
     void Promise.allSettled([st.poller.stop(), st.mzkPoller.stop()]).catch((err: unknown) => {
       log.error("rt", `poller stop failed: ${err}`);
