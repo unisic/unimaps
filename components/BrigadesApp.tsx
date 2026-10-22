@@ -3,7 +3,7 @@
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useFleet, type FleetStats } from "@/lib/client/fleet";
+import { localUpdatedAt, useFleet, type FleetStats } from "@/lib/client/fleet";
 import { BackIcon } from "./ui";
 import { DEFAULT_FILTERS, FleetList, type FleetFilters } from "./brygady/FleetList";
 import { FleetStatsView } from "./brygady/FleetStatsView";
@@ -142,7 +142,7 @@ function Brigades() {
 
   return (
     <>
-      <PageFrame inert={side !== null} header={<HeaderBar updatedAt={data?.stats.updatedAt} />} body={body} />
+      <PageFrame inert={side !== null} header={<HeaderBar updatedAt={data ? localUpdatedAt(data) : undefined} />} body={body} />
       {side ? <VehicleSheet key={side} side={side} seed={seed} onClose={closeVehicle} /> : null}
       {side === null ? <ScrollTopButton /> : null}
     </>

@@ -41,7 +41,10 @@ export async function GET(req: Request): Promise<Response> {
       query: url.searchParams.get("q")?.slice(0, 64) ?? undefined,
     });
 
-    return Response.json({ stats: tracker.getStats(), count: vehicles.length, vehicles }, { headers: NO_STORE });
+    return Response.json(
+      { stats: tracker.getStats(), count: vehicles.length, vehicles, serverNow: Date.now() / 1000 },
+      { headers: NO_STORE },
+    );
   } catch (err) {
     return upstreamError("fleet", err);
   }

@@ -431,7 +431,7 @@ function StatusBlock({ v, nowEpoch, onShowOnMap }: { v: FleetVehicleDetail; nowE
         )}
 
         <div className="mt-auto flex flex-wrap items-center justify-between gap-2 pt-3">
-          <span className="text-[12px] text-text-faint">Pozycja {fmtAgo(v.lastSeenAt, nowEpoch)}</span>
+          <span className="text-[12px] text-text-faint">Pozycja {fmtAgo(c.fixAt ?? v.lastSeenAt, nowEpoch)}</span>
           {exec ? (
             <a
               href={`/?exec=${encodeURIComponent(exec)}`}

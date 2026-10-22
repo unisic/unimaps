@@ -99,6 +99,9 @@ export const GTFS_BUILD_HOUR = envInt("KB_GTFS_BUILD_HOUR", 3, 0);
 /** Upstream concurrency for the in-process rebuild — politer than the CLI's
  *  default 40 because the server keeps scanning while it builds. */
 export const GTFS_BUILD_CONCURRENCY = envInt("KB_GTFS_BUILD_CONCURRENCY", 10);
+/** Days of output/fleet-history-<day>.json kept on disk; older day files are
+ *  deleted at the midnight rollover. Only today's file is ever read. */
+export const FLEET_HISTORY_DAYS = envInt("KB_FLEET_HISTORY_DAYS", 365);
 
 /**
  * Server-side road routing for the shape store (lib/shape-store.ts). The

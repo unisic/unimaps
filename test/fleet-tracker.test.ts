@@ -161,6 +161,10 @@ describe("fleet-tracker", () => {
     veh = tracker.getVehicleDetail("250")!;
     assert.equal(veh.currentCourse?.drivenMeters, 900);
 
+    // the card's "Pozycja X temu" reads the GPS fix time, not the poll time
+    tracker.updateFromRunningVehicles([run({ reachedMeters: 900, lastPingDate: 1790080150500 })]);
+    assert.equal(tracker.getVehicleDetail("250")!.currentCourse?.fixAt, 1790080150);
+
     // a reading past the next stop is capped at it
     tracker.updateFromRunningVehicles([run({ reachedMeters: 5000 })]);
     assert.equal(tracker.getVehicleDetail("250")!.currentCourse?.drivenMeters, 1200);
@@ -802,6 +806,40 @@ describe("fleet-tracker persistence", () => {
     >;
     assert.equal(saved["250"]?.todayCourses?.[0]?.courseLoid, 4242);
   });
+
+  it("flushSync writes a pending debounced save at once (graceful shutdown)", () => {
+    mock.timers.enable({ apis: ["Date"], now: Date.UTC(2026, 9, 4, 10, 0, 0) });
+    const dir = mkTmp();
+    const tracker = new FleetTracker({ historyDir: dir });
+    tracker.updateFromRunningVehicles([
+      { vehicleId: "251", lineName: "1", courseLoid: 4243, direction: "B", delaySec: 0, latitude: 49.8, longitude: 19.0, orderInCourse: 1, stopPoints: [] },
+    ]);
+    const file = path.join(dir, "fleet-history-2026-10-04.json");
+    assert.equal(fs.existsSync(file), false, "the save is still pending");
+    tracker.flushSync();
+    assert.equal(fs.existsSync(file), true);
+  });
+
+  it("the rollover deletes day files past the retention window and nothing else", () => {
+    mock.timers.enable({ apis: ["Date"], now: Date.UTC(2026, 9, 4, 21, 50, 0) }); // 23:50 Warsaw
+    const dir = mkTmp();
+    const names = [
+      "fleet-history-2025-10-04.json", // 366 days before 2026-10-05: dropped
+      "fleet-history-2025-10-05.json", // 365 days: kept
+      "fleet-history-2020-01-01.json.tmp",
+      "fleet-history-old.json",
+      "route-shapes.v1.json",
+    ];
+    for (const n of names) fs.writeFileSync(path.join(dir, n), "{}");
+    const tracker = new FleetTracker({ historyDir: dir });
+    tracker.updateFromRunningVehicles([]);
+    mock.timers.setTime(Date.UTC(2026, 9, 4, 22, 5, 0)); // 00:05 Warsaw, 2026-10-05
+    tracker.updateFromRunningVehicles([]);
+    const left = fs.readdirSync(dir);
+    assert.ok(!left.includes(names[0]));
+    for (const n of names.slice(1)) assert.ok(left.includes(n), n);
+    assert.ok(left.includes("fleet-history-2026-10-04.json"));
+  });
 });
 
 describe("shared fleet helpers", () => {
@@ -842,6 +880,7 @@ describe("shared fleet helpers", () => {
     };
     assert.equal(matchesFleetQuery(v, ""), true);
     assert.equal(matchesFleetQuery(v, "#12"), true);
+    assert.equal(matchesFleetQuery(v, "#"), true); // a bare "#" while typing matches everything
     assert.equal(matchesFleetQuery(v, "123"), true);
     assert.equal(matchesFleetQuery(v, "1"), false, "line 1 must match neither side 123 nor model Urbino 12");
     assert.equal(matchesFleetQuery(v, "urbino 12"), true);

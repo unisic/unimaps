@@ -471,6 +471,8 @@ export interface GanttCourse {
 }
 
 const GT_H = 64;
+/** End of a course on the chart axis: a course across midnight ends past 86400 (the server wraps it to 00:xx). */
+const ganttEnd = ({ course: c }: GanttCourse) => Math.max(c.endSecs < c.startSecs ? c.endSecs + 86400 : c.endSecs, c.startSecs + 60);
 const GT_BAR_Y = 20;
 const GT_BAR_H = 20;
 
@@ -490,7 +492,7 @@ export const CourseGantt = memo(function CourseGantt({
   const geo = useMemo(() => {
     if (width <= 0 || courses.length === 0) return null;
     const starts = courses.map((c) => c.course.startSecs);
-    const ends = courses.map((c) => Math.max(c.course.endSecs, c.course.startSecs + 60));
+    const ends = courses.map(ganttEnd);
     let x0 = Math.floor(Math.min(...starts) / 3600) * 3600;
     const x1 = Math.min(86400 + 3 * 3600, Math.ceil(Math.max(...ends, nowSecs) / 3600) * 3600);
     if (x1 - x0 < 2 * 3600) x0 = Math.max(0, x1 - 2 * 3600);
@@ -504,7 +506,7 @@ export const CourseGantt = memo(function CourseGantt({
     let labelEnd = -Infinity;
     const bars = sorted.map((c) => {
       const xa = sx(c.course.startSecs);
-      const xb = Math.max(xa + 3, sx(Math.max(c.course.endSecs, c.course.startSecs + 60)));
+      const xb = Math.max(xa + 3, sx(ganttEnd(c)));
       const cx = (xa + xb) / 2;
       const label = c.course.lineName;
       const lw = label.length * 7 + 4;
@@ -512,7 +514,9 @@ export const CourseGantt = memo(function CourseGantt({
       if (showLabel) labelEnd = cx + lw / 2;
       return { c, xa, xb, cx, showLabel };
     });
-    return { sx, ticks, bars, x0, x1 };
+    // after midnight "now" sits on the axis past 86400 when a course runs there
+    const nowT = nowSecs < x0 && nowSecs + 86400 <= x1 ? nowSecs + 86400 : nowSecs;
+    return { sx, ticks, bars, x0, x1, nowT };
   }, [courses, width, nowSecs]);
 
   const hovered = geo?.bars.find((b) => b.c.course.id === hover) ?? null;
@@ -561,10 +565,10 @@ export const CourseGantt = memo(function CourseGantt({
               </g>
             );
           })}
-          {nowSecs >= geo.x0 && nowSecs <= geo.x1 ? (
+          {geo.nowT >= geo.x0 && geo.nowT <= geo.x1 ? (
             <line
-              x1={geo.sx(nowSecs)}
-              x2={geo.sx(nowSecs)}
+              x1={geo.sx(geo.nowT)}
+              x2={geo.sx(geo.nowT)}
               y1={GT_BAR_Y - 6}
               y2={GT_BAR_Y + GT_BAR_H + 6}
               stroke="#ee7583"

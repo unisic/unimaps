@@ -68,6 +68,8 @@ export interface FleetCurrentCourse extends VehicleCourseRecord {
   lat: number;
   lon: number;
   bearing: number | null;
+  /** epoch s of the GPS fix; lastSeenAt is only the poll time */
+  fixAt?: number;
   /** by distance driven when OnTime sent stop distances, else by stop index */
   progressPct: number;
 }
@@ -275,6 +277,8 @@ export function matchesFleetQuery(
   if (!q) return true;
   const hash = q.startsWith("#");
   const bare = hash ? q.slice(1).trim() : q;
+  // a lone "#" is the start of a side number being typed: keep the list until a digit narrows it
+  if (hash && !bare) return true;
   if (/^\d+$/.test(bare) && (hash || bare.length >= 3) && v.sideNumber.startsWith(bare)) return true;
   if (hash) return false;
   if (v.lineName && foldText(v.lineName) === q) return true;

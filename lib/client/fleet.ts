@@ -13,6 +13,16 @@ export interface FleetApiResponse {
   stats: FleetStats;
   count: number;
   vehicles: FleetSummaryItem[];
+  /** server epoch s when the body was built */
+  serverNow?: number;
+  /** client-only: local epoch s when the body arrived (stamped by fleetFetcher) */
+  receivedAt?: number;
+}
+
+/** `stats.updatedAt` on this device's clock, so a skewed device clock cannot fake a stale feed. */
+export function localUpdatedAt(d: FleetApiResponse): number {
+  const { updatedAt } = d.stats;
+  return updatedAt > 0 && d.serverNow && d.receivedAt ? updatedAt + (d.receivedAt - d.serverNow) : updatedAt;
 }
 
 export interface VehicleDetailApiResponse {
@@ -33,6 +43,8 @@ const REQUEST_TIMEOUT_MS = 12_000;
  */
 const fetcher = <T>(url: string): Promise<T> =>
   fetchJSON<T>(url, { cache: "no-cache", signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+const fleetFetcher = (url: string): Promise<FleetApiResponse> =>
+  fetcher<FleetApiResponse>(url).then((d) => ({ ...d, receivedAt: Date.now() / 1000 }));
 
 /**
  * The whole fleet (~150 rows, filtered on the client so typing never waits for the network).
@@ -41,7 +53,7 @@ const fetcher = <T>(url: string): Promise<T> =>
  * header clock stays under its 90 s "stale" mark) and catches up the moment the card closes.
  */
 export function useFleet(background = false) {
-  const swr = useSWR<FleetApiResponse>("/api/fleet", fetcher, {
+  const swr = useSWR<FleetApiResponse>("/api/fleet", fleetFetcher, {
     refreshInterval: background ? 60_000 : 10_000,
     dedupingInterval: 4_000,
     revalidateOnFocus: true,

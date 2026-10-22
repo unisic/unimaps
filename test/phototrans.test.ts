@@ -57,14 +57,19 @@ describe("parsePhotos", () => {
 });
 
 describe("findVehiclePhotos", () => {
-  it("stops asking phototrans once it answers 403", async (t) => {
-    let calls = 0;
-    t.mock.method(globalThis, "fetch", async () => {
-      calls++;
-      return new Response("blocked", { status: 403 });
+  const t0 = Date.now();
+  for (const [i, status] of [403, 429].entries()) {
+    it(`stops asking phototrans once it answers ${status}`, async (t) => {
+      // each case starts after the previous case's one-hour block has lapsed
+      t.mock.timers.enable({ apis: ["Date"], now: t0 + i * 2 * 3600_000 });
+      let calls = 0;
+      t.mock.method(globalThis, "fetch", async () => {
+        calls++;
+        return new Response("blocked", { status });
+      });
+      await assert.rejects(findVehiclePhotos(`${126 + 2 * i}`), new RegExp(`HTTP ${status}`));
+      await assert.rejects(findVehiclePhotos(`${127 + 2 * i}`), /backing off/);
+      assert.equal(calls, 1);
     });
-    await assert.rejects(findVehiclePhotos("126"), /HTTP 403/);
-    await assert.rejects(findVehiclePhotos("127"), /backing off/);
-    assert.equal(calls, 1);
-  });
+  }
 });

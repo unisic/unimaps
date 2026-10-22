@@ -15,7 +15,7 @@ import { type MzkApi } from "./mzk-api";
 import { getAllFleetVehicles, getFleetDetails, type MzkVehicleStatic } from "./mzk-fleet";
 import { isMzkNotStarted } from "./mzk-state";
 import { mzkStopIndices } from "./mzk-shape";
-import { AGENCY_TIMEZONE, OUTPUT_DIR } from "./config";
+import { AGENCY_TIMEZONE, FLEET_HISTORY_DAYS as HISTORY_KEEP_DAYS, OUTPUT_DIR } from "./config";
 import {
   classifyDelay,
   compareLineNames,
@@ -58,6 +58,8 @@ export interface FleetRunningInput {
   latitude: number;
   longitude: number;
   angle?: number;
+  /** epoch ms of the GPS fix (OnTime lastPingDate) */
+  lastPingDate?: number;
   orderInCourse?: number;
   lastStopOrderNo?: number | null;
   reachedMeters?: number;
@@ -324,6 +326,23 @@ export class FleetTracker {
     this.currentDay = today;
     this.initFromStaticFleet();
     this.loadHistoryFromDisk();
+    this.pruneHistory();
+  }
+
+  /** Deletes day files older than HISTORY_KEEP_DAYS (exact name pattern only), once per rollover. */
+  private pruneHistory(): void {
+    if (!this.historyDir) return;
+    try {
+      const cutoff = new Date(Date.parse(`${this.currentDay}T00:00:00Z`) - HISTORY_KEEP_DAYS * 86_400_000)
+        .toISOString()
+        .slice(0, 10);
+      for (const f of fs.readdirSync(this.historyDir)) {
+        const day = /^fleet-history-(\d{4}-\d{2}-\d{2})\.json$/.exec(f)?.[1];
+        if (day && day < cutoff) fs.unlinkSync(path.join(this.historyDir, f));
+      }
+    } catch (err) {
+      log.warn("fleet-tracker", `Failed pruning old history files: ${err}`);
+    }
   }
 
   /**
@@ -457,6 +476,7 @@ export class FleetTracker {
         lat: v.latitude,
         lon: v.longitude,
         bearing: typeof v.angle === "number" && Number.isFinite(v.angle) ? v.angle : null,
+        ...(v.lastPingDate ? { fixAt: Math.floor(v.lastPingDate / 1000) } : {}),
         progressPct,
         lengthMeters,
         drivenMeters,
@@ -817,6 +837,14 @@ export class FleetTracker {
     }, wait);
     // a pending save must never keep the process (or a test run) alive
     this.saveTimeout.unref?.();
+  }
+
+  /** Writes a pending debounced save now (graceful shutdown); a no-op when nothing is pending. */
+  flushSync(): void {
+    if (!this.saveTimeout) return;
+    clearTimeout(this.saveTimeout);
+    this.saveTimeout = null;
+    this.saveHistoryToDisk();
   }
 
   private historyFile(day: string): string | null {
