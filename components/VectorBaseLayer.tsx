@@ -3,8 +3,14 @@
 import { useEffect } from "react";
 import { useMap } from "react-leaflet";
 import L from "leaflet";
+import { setWorkerUrl } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import "@maplibre/maplibre-gl-leaflet";
+
+/* maplibre-gl 6 looks for its worker next to its own module (import.meta.url), a file
+   the bundler never emits: every map failed with "Worker failed to load" and fell back
+   to raster tiles. new URL(…, import.meta.url) makes the bundler ship it as an asset. */
+setWorkerUrl(new URL("../node_modules/maplibre-gl/dist/maplibre-gl-worker.mjs", import.meta.url).href);
 
 /**
  * Renders an OpenFreeMap vector style (MapLibre GL) as the Leaflet base layer —
