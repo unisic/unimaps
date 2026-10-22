@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 env:
   NEXT_TELEMETRY_DISABLED: 1
 
@@ -31,4 +34,12 @@ jobs:
         with:
           node-version: 24
           cache: npm
-      - run: npm audit --audit-level=high
+      - run: npm audit --omit=dev --audit-level=high
+
+  # The production deploy path (Dockerfile COPY stages, .dockerignore). Build
+  # only: running the image would start the poller against the live upstream.
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: docker build -t kb-gtfs:ci .

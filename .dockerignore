@@ -11,6 +11,9 @@ yarn-error.log*
 # generated GTFS output
 output
 
+# tests and their fixtures never belong in the image
+test
+
 # legacy python (before and after the move to legacy-python/)
 legacy-python
 kb_gtfs

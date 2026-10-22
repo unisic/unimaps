@@ -52,6 +52,8 @@ docker compose up -d --build
 
 The app is served at `http://localhost:8080`.
 
+The healthcheck marks the container `unhealthy` when the scan loop stalls or the upstream goes stale (`/api/health` answers 503). Docker does not restart a container for that, `restart: unless-stopped` acts only on process exit, so point an uptime monitor at `/api/health` to get alerted.
+
 ## API & Feeds
 
 | Endpoint | Description |

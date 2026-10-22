@@ -16,6 +16,9 @@ services:
       # built GTFS feed (stop-direction arrows, line catalog) + logs — survives
       # redeploys; populated by the in-process nightly build (KB_GTFS_AUTOBUILD)
       - kb-output:/app/output
+    # Marks the container (unhealthy) on a stalled scan loop or stale upstream;
+    # Docker itself never restarts on that (restart only acts on process exit).
+    # Watch it from outside, e.g. an uptime monitor on /api/health.
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/api/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
