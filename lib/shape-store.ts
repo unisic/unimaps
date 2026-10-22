@@ -155,7 +155,7 @@ export function pickRefreshCandidate(
     if (nowMs - e.seenAt > SEEN_WINDOW_MS) continue;
     const age = nowMs - e.builtAt;
     const due =
-      e.algo < ALGO_VERSION ||
+      (e.algo < ALGO_VERSION && nowMs >= e.retryAt) ||
       (e.src === "osrm" && age > maxAgeDays * DAY_MS) ||
       (e.src === "partial" && age > PARTIAL_MAX_AGE_MS) ||
       (e.src === "straight" && !e.unroutable && nowMs >= e.retryAt) ||
@@ -226,6 +226,8 @@ export class ShapeStore {
   private mzkNextSlot = 0;
   private pausedUntil = 0;
   private backoffMs = 60_000;
+  /** pausedUntil a wake-up timer is already armed for (one per pause, not one per idle pump) */
+  private wakeAt = 0;
   private osrmState: OsrmState;
   private lastError: string | null = null;
   private lastBuildAt = 0;
@@ -284,6 +286,7 @@ export class ShapeStore {
   stop(): void {
     for (const t of this.timers) clearTimeout(t);
     this.timers.clear();
+    this.wakeAt = 0;
     if (this.flushTimer) clearTimeout(this.flushTimer);
     this.flushTimer = null;
     this.flush(true);
@@ -384,11 +387,15 @@ export class ShapeStore {
         e.seenAt = now;
         this.seenDirty = true;
       }
-      if (now - e.builtAt > MZK_MAX_AGE_MS) this.enqueue(key, "background");
-      return;
+      if (now - e.builtAt <= MZK_MAX_AGE_MS) return;
     }
-    if ((this.mzkNeg.get(variantId) ?? 0) > now) return;
-    this.enqueue(key, prio);
+    if (this.mzkBackedOff(variantId, now)) return;
+    this.enqueue(key, e ? "background" : prio);
+  }
+
+  /** A recent fetch of this variant failed (a failed refresh keeps builtAt, so this is its only backoff). */
+  private mzkBackedOff(variantId: number, now: number): boolean {
+    return (this.mzkNeg.get(variantId) ?? 0) > now;
   }
 
   /** Decoded MZK variant polyline (fetched on demand, deduped). For trip views. */
@@ -562,7 +569,8 @@ export class ShapeStore {
     const key = pick(this.urgent) ?? pick(this.background);
     if (!key) {
       // paused with work left: wake up when the pause ends
-      if (this.o.timers && this.queued.size && this.pausedUntil > this.now()) {
+      if (this.o.timers && this.queued.size && this.pausedUntil > this.now() && this.wakeAt !== this.pausedUntil) {
+        this.wakeAt = this.pausedUntil;
         this.later(this.pausedUntil - this.now() + 50, () => this.kick());
       }
       return false;
@@ -658,7 +666,7 @@ export class ShapeStore {
     if (!fetcher) return Promise.resolve(null);
     const now = this.now();
     const existing = this.entries.get(`mzk:${variantId}`);
-    if (!existing && (this.mzkNeg.get(variantId) ?? 0) > now) return Promise.resolve(null);
+    if (this.mzkBackedOff(variantId, now)) return Promise.resolve(existing ?? null);
     const p = (async (): Promise<ShapeEntry | null> => {
       try {
         const raw = await fetcher(variantId);
@@ -705,7 +713,12 @@ export class ShapeStore {
     // MZK variants: re-fetch the oldest stale one that's still running
     const now = this.now();
     for (const [k, e] of this.entries) {
-      if (k.startsWith("mzk:") && now - e.builtAt > MZK_MAX_AGE_MS && now - e.seenAt < SEEN_WINDOW_MS) {
+      if (
+        k.startsWith("mzk:") &&
+        now - e.builtAt > MZK_MAX_AGE_MS &&
+        now - e.seenAt < SEEN_WINDOW_MS &&
+        !this.mzkBackedOff(Number(k.slice(4)), now)
+      ) {
         this.enqueue(k, "background");
         break;
       }
@@ -853,13 +866,18 @@ export class ShapeStore {
 
   private lockOwner(): { pid?: number; host?: string; mtimeMs: number } | null {
     const lock = `${this.o.file}.lock`;
+    let mtimeMs: number;
     try {
-      const st = fs.statSync(/*turbopackIgnore: true*/ lock);
-      const cur = JSON.parse(fs.readFileSync(/*turbopackIgnore: true*/ lock, "utf-8")) as { pid?: number; host?: string };
-      return { pid: cur.pid, host: cur.host, mtimeMs: st.mtimeMs };
+      mtimeMs = fs.statSync(/*turbopackIgnore: true*/ lock).mtimeMs;
     } catch (err) {
-      // exists but unreadable/half-written: treat as held (fresh) by someone else
       return (err as NodeJS.ErrnoException).code === "ENOENT" ? null : { mtimeMs: Date.now() };
+    }
+    try {
+      const cur = JSON.parse(fs.readFileSync(/*turbopackIgnore: true*/ lock, "utf-8")) as { pid?: number; host?: string };
+      return { pid: cur.pid, host: cur.host, mtimeMs };
+    } catch {
+      // half-written by a racing peer, or left empty by a crash: held until it goes stale
+      return { mtimeMs };
     }
   }
 

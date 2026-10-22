@@ -147,6 +147,22 @@ describe("ShapeStore — KB routing", () => {
     assert.equal(e.rev, rev);
   });
 
+  it("a rebuild under a new algo that would downgrade backs off instead of re-routing every tick", async () => {
+    const h = harness();
+    const p = pattern();
+    h.store.touchKb(p, "urgent");
+    await h.store.runNext();
+    const e = h.store.getEntry(p.key)!;
+    e.algo = ALGO_VERSION - 1; // stored by the previous pipeline
+    h.state.mode = "noroute";
+    (h.store as unknown as { refreshTick(): void }).refreshTick();
+    assert.equal(await h.store.runNext(), true);
+    assert.equal(e.src, "osrm"); // kept
+    assert.equal(pickRefreshCandidate([[p.key, e]], h.now(), 14), null);
+    h.advance(e.retryAt - h.now());
+    assert.equal(pickRefreshCandidate([[p.key, e]], h.now(), 14), p.key);
+  });
+
   it("all legs unroutable → straight, marked unroutable, status none", async () => {
     const h = harness();
     const p = pattern();
@@ -240,6 +256,29 @@ describe("ShapeStore — MZK", () => {
     assert.equal(calls, 1);
     await h.store.getMzkShape(7);
     assert.equal(calls, 1);
+  });
+
+  it("a stale variant whose refresh fails is not re-fetched on every poll", async () => {
+    let calls = 0;
+    let fail = false;
+    const h = harness({
+      mzkFetch: async () => {
+        calls += 1;
+        if (fail) throw new Error("boom");
+        return course;
+      },
+    });
+    h.store.touchMzk(13954);
+    await h.store.runNext();
+    fail = true;
+    h.advance(8 * 86_400_000);
+    for (let i = 0; i < 10; i++) {
+      h.store.touchMzk(13954);
+      await h.store.runNext();
+      h.advance(5_000);
+    }
+    assert.equal(calls, 2);
+    assert.equal(h.store.getEntry("mzk:13954")?.src, "mzk"); // old shape still served
   });
 });
 
@@ -338,6 +377,34 @@ describe("ShapeStore — persistence", () => {
     assert.equal(h.store.health().read_only, true);
     h.store.stop();
     assert.ok(fs.existsSync(`${file}.lock`)); // the new owner's lock survives
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("a stale lock (no heartbeat for 5 min) is taken over", () => {
+    const dir = tmp();
+    const file = path.join(dir, "route-shapes.v1.json");
+    fs.writeFileSync(`${file}.lock`, JSON.stringify({ pid: process.pid + 1, host: "elsewhere" }));
+    const old = new Date(Date.now() - 10 * 60_000);
+    fs.utimesSync(`${file}.lock`, old, old);
+    const h = harness({ file });
+    assert.equal(h.store.health().read_only, false);
+    assert.equal(JSON.parse(fs.readFileSync(`${file}.lock`, "utf-8")).pid, process.pid);
+    h.store.stop();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("an empty lock left by a crash is held while fresh, taken over once stale", () => {
+    const dir = tmp();
+    const file = path.join(dir, "route-shapes.v1.json");
+    fs.writeFileSync(`${file}.lock`, "");
+    const fresh = harness({ file });
+    assert.equal(fresh.store.health().read_only, true); // a peer may be mid-write
+    fresh.store.stop();
+    const old = new Date(Date.now() - 10 * 60_000);
+    fs.utimesSync(`${file}.lock`, old, old);
+    const h = harness({ file });
+    assert.equal(h.store.health().read_only, false);
+    h.store.stop();
     fs.rmSync(dir, { recursive: true, force: true });
   });
 

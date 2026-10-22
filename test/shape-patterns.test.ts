@@ -37,8 +37,8 @@ describe("buildKbPattern", () => {
   it("different lines on the same stops share a key; an applied detour splits it", () => {
     const plain = buildKbPattern(times(1, 2, 3), "103", "X", resolve)!;
     assert.equal(plain.key, buildKbPattern(times(1, 2, 3), "999", "Y", resolve)!.key);
-    const viaArea = buildKbPattern(times(1, 10, 11), "999", "Y", resolve)!;
-    const detoured = buildKbPattern(times(1, 10, 11), "121", "HULANKA", resolve)!;
+    const viaArea = buildKbPattern(times(11, 10, 1), "999", "Y", resolve)!;
+    const detoured = buildKbPattern(times(11, 10, 1), "121", "HULANKA", resolve)!;
     assert.notEqual(viaArea.key, detoured.key);
     assert.ok(detoured.waypoints.length > viaArea.waypoints.length);
   });

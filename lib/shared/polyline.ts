@@ -122,12 +122,6 @@ export function preparePolyline(pts: ReadonlyArray<readonly [number, number]>): 
   return { n, lat, lon, cum, length: cum[n - 1] };
 }
 
-export function polylineToLatLngs(pl: Polyline): LatLng[] {
-  const out: LatLng[] = new Array(pl.n);
-  for (let i = 0; i < pl.n; i++) out[i] = [pl.lat[i], pl.lon[i]];
-  return out;
-}
-
 /** Index of the segment containing along-distance s (clamped to [0, n-2]). */
 export function segmentAt(pl: Polyline, s: number, hint = -1): number {
   const last = pl.n - 2;
