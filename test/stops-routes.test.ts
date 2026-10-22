@@ -39,6 +39,7 @@ interface Fake {
   kbRows: Record<string, unknown[]>;
   mzkRows: Record<string, Array<Record<string, unknown>>>;
   mzkFail?: boolean;
+  mzkFailSyms?: string[];
   kbFail?: boolean;
   schedFail?: boolean;
   mzkCalls: string[];
@@ -57,7 +58,7 @@ beforeEach(() => {
   fake = { kbRows: {}, mzkRows: {}, mzkCalls: [], kbCalls: [] };
   state = {
     poller: { stops: KB_STOPS, addCandidates: () => undefined },
-    mzkPoller: { stops: MZK_STOPS, staticVehicles: new Map(), courseMetaMap: new Map(), runningVehiclesMap: new Map(), stopsBySymbol: new Map(), stopDirs: new MzkStopDirs() },
+    mzkPoller: { stops: MZK_STOPS, staticVehicles: new Map(), courseMetaMap: new Map(), noteCourse: () => undefined, runningVehiclesMap: new Map(), stopsBySymbol: new Map(), stopDirs: new MzkStopDirs() },
   };
   (globalThis as Record<symbol, unknown>)[KEY] = {
     api: {
@@ -71,7 +72,7 @@ beforeEach(() => {
     mzkApi: {
       fetchRealtime: async (s: string) => {
         fake.mzkCalls.push(s);
-        if (fake.mzkFail) throw new Error("OnTime unavailable");
+        if (fake.mzkFail || fake.mzkFailSyms?.includes(s)) throw new Error("OnTime unavailable");
         return { departures: fake.mzkRows[s] ?? [] };
       },
       fetchAtomicSchedule: async (s: string) => {
@@ -167,6 +168,21 @@ describe("GET /api/stop/[designator]/departures", () => {
     assert.equal(new Set(mzkRows.map((r) => r.trip_execution_id)).size, 3);
   });
 
+  it("hub: KB down + one of two MZK symbols down still serves the other symbol's rows (not a 502)", async () => {
+    fake.kbFail = true;
+    fake.mzkFailSyms = ["2367"];
+    fake.mzkRows["2366"] = [mzkDep(11, "50", 54060), mzkDep(12, "50", 54120)];
+    const res = await getDepartures(new Request("http://x/api/stop/19185/departures"), { params: Promise.resolve({ designator: "19185" }) });
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as { rows: Array<{ operator: string }>; warnings?: string[] };
+    assert.equal(body.rows.length, 2);
+    assert.deepEqual(body.warnings?.sort(), ["kb", "mzk"]);
+    fake.mzkFailSyms = ["2366", "2367"];
+    departuresBoardCache.clear();
+    const all = await getDepartures(new Request("http://x/api/stop/19185/departures"), { params: Promise.resolve({ designator: "19185" }) });
+    assert.equal(all.status, 502); // every leg failed
+  });
+
   it("a hub's extra MZK symbol has no stop of its own: mzk:2367 opens the station board", async () => {
     await departures("mzk:2367");
     assert.deepEqual(fake.mzkCalls.sort(), ["2366", "2367"]);
@@ -223,12 +239,13 @@ describe("departures: MZK stops outside a hub are stops of their own", () => {
 describe("GET /api/stop/[designator]/timetable", () => {
   const timetable = async (designator: string) => {
     const res = await getTimetable(new Request(`http://x/api/stop/${designator}/timetable?date=2026-10-02`), { params: Promise.resolve({ designator }) });
-    return { res, body: (await res.json()) as { departures: Array<{ operator: string }>; warnings?: string[] } };
+    return { res, body: (await res.json()) as { departures: Array<{ operator: string; trip_id: string }>; warnings?: string[] } };
   };
 
   it("BOTH stop: both operators, cacheable for 15 min", async () => {
     const { res, body } = await timetable("19146:39714");
-    assert.deepEqual(body.departures.map((d) => d.operator).sort(), ["KB", "MZK"]);
+    // the route merges MZK first, then must sort by time: KB 15:00 before MZK 15:01
+    assert.deepEqual(body.departures.map((d) => [d.operator, d.trip_id]), [["KB", "kbt1"], ["MZK", "mzk:1:1"]]);
     assert.equal(body.warnings, undefined);
     assert.equal(res.headers.get("cache-control"), "public, max-age=900");
   });
@@ -238,6 +255,13 @@ describe("GET /api/stop/[designator]/timetable", () => {
     const { res, body } = await timetable("19146:39714");
     assert.deepEqual(body.departures.map((d) => d.operator), ["KB"]);
     assert.deepEqual(body.warnings, ["mzk"]);
+    assert.equal(res.headers.get("cache-control"), "no-store");
+  });
+
+  it("while the MZK stop list is still missing the (KB-only) answer is NOT cacheable", async () => {
+    state.mzkPoller.stops = [];
+    const { res, body } = await timetable("19146:39714");
+    assert.deepEqual(body.departures.map((d) => d.operator), ["KB"]);
     assert.equal(res.headers.get("cache-control"), "no-store");
   });
 

@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { hhmmFromSecs, secsFromHHMM } from "../lib/client/format";
-import type { TimetableDeparture } from "../lib/client/types";
 import { bearing, metersBetween } from "../lib/geo";
 import type { MzkAtomicScheduleResponse } from "../lib/mzk-api";
 import { mzkAngleToCompassBearing } from "../lib/mzk-poller";
@@ -27,76 +26,6 @@ describe("mzk-timetable and schedule logic", () => {
     assert.equal(secsFromHHMM("06:30"), 6 * 3600 + 30 * 60);
     assert.equal(secsFromHHMM("14:45"), 14 * 3600 + 45 * 60);
     assert.equal(secsFromHHMM("23:59"), 23 * 3600 + 59 * 60);
-  });
-
-  it("sorts combined KB and MZK departures in chronological order", () => {
-    const kbDepartures: TimetableDeparture[] = [
-      {
-        departure: 7 * 3600 + 15 * 60,
-        trip_id: "kb:101",
-        line: "101",
-        direction: "Szczyrk",
-        operator: "KB",
-      },
-      {
-        departure: 7 * 3600 + 45 * 60,
-        trip_id: "kb:102",
-        line: "101",
-        direction: "Szczyrk",
-        operator: "KB",
-      },
-    ];
-
-    const mzkDepartures: TimetableDeparture[] = [
-      {
-        departure: 7 * 3600 + 10 * 60,
-        trip_id: "mzk:5001:100",
-        line: "1",
-        direction: "Cygański Las",
-        operator: "MZK",
-      },
-      {
-        departure: 7 * 3600 + 30 * 60,
-        trip_id: "mzk:5002:100",
-        line: "8",
-        direction: "Kamienica",
-        operator: "MZK",
-      },
-      {
-        departure: 8 * 3600,
-        trip_id: "mzk:5003:100",
-        line: "1",
-        direction: "Cygański Las",
-        operator: "MZK",
-      },
-    ];
-
-    const combined = [...kbDepartures, ...mzkDepartures].sort(
-      (a, b) => a.departure - b.departure,
-    );
-
-    assert.equal(combined.length, 5);
-    assert.deepEqual(
-      combined.map((d) => ({ line: d.line, op: d.operator, time: hhmmFromSecs(d.departure) })),
-      [
-        { line: "1", op: "MZK", time: "07:10" },
-        { line: "101", op: "KB", time: "07:15" },
-        { line: "8", op: "MZK", time: "07:30" },
-        { line: "101", op: "KB", time: "07:45" },
-        { line: "1", op: "MZK", time: "08:00" },
-      ],
-    );
-  });
-
-  it("properly constructs MZK trip_id identifiers with course and variant", () => {
-    const courseId = 5055448;
-    const variantId = 14767;
-    const tripId = `mzk:${courseId}:${variantId}`;
-
-    assert(tripId.startsWith("mzk:"));
-    const parts = tripId.split(":");
-    assert.equal(parts[1], "5055448");
-    assert.equal(parts[2], "14767");
   });
 
   it("converts OnTime Cartesian angles to standard navigation compass bearings", () => {

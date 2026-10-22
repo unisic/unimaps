@@ -94,11 +94,11 @@ export class MzkStopDirs {
 
   /**
    * Learn from one variant's ordered stop list (null = unknown stop, e.g. the depot "00").
-   * Each variant counts once. Returns true when something was learned.
+   * Each variant counts once it taught something (one whose stops are all still unknown, e.g. before the stop
+   * list loaded, is retried). Returns true when something was learned.
    */
   learn(variantId: number, stops: ReadonlyArray<{ symbol: string; at: StopCoord | null }>): boolean {
     if (!Number.isFinite(variantId) || variantId <= 0 || this.seen.has(variantId)) return false;
-    this.seen.add(variantId);
     let added = false;
     for (let i = 0; i < stops.length; i++) {
       const cur = stops[i].at;
@@ -117,7 +117,10 @@ export class MzkStopDirs {
       if (!this.at.has(sym)) this.at.set(sym, [cur.lat, cur.lon]);
       added = true;
     }
-    if (added) this.dirty = true;
+    if (added) {
+      this.seen.add(variantId);
+      this.dirty = true;
+    }
     return added;
   }
 

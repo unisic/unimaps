@@ -5,7 +5,7 @@ import { describe, it } from "node:test";
 import {
   cleanStopName,
   directionDiff,
-  getMergedStop,
+  indexMergedStops,
   mergeStops,
   stopDistanceMeters,
   type FormattedStop,
@@ -127,11 +127,11 @@ describe("mergeStops", () => {
   });
 
   it("allows lookup of merged stop by any of its IDs or designators", () => {
-    mergeStops(sampleKb, sampleMzk);
+    const index = indexMergedStops(mergeStops(sampleKb, sampleMzk));
 
-    assert.equal(getMergedStop("10021")?.id, "10021");
-    assert.equal(getMergedStop("mzk:2")?.id, "10021");
-    assert.equal(getMergedStop("2")?.id, "10021");
+    assert.equal(index.get("10021")?.id, "10021");
+    assert.equal(index.get("mzk:2")?.id, "10021");
+    assert.equal(index.get("2")?.id, "10021");
   });
 });
 
@@ -254,6 +254,7 @@ describe("mergeStops is direction aware", () => {
     const strip = (s: FormattedStop): FormattedStop => ({ ...s, dirs: undefined });
     const p1 = pairing(mergeStops(kbs.map(strip), [mE, mW].map(strip)));
     const p2 = pairing(mergeStops(kbs.map(strip), [mW, mE].map(strip)));
+    assert.deepEqual(p1, { E: ["mW"], W: ["mE"] }); // nearest pairs: 36 m + 21 m beat 73 m + 55 m
     assert.deepEqual(p1, p2);
   });
 
@@ -335,7 +336,8 @@ describe("mergeStops: bus station hub (fan-out, no absorption)", () => {
     const out = mergeStops([da], [...hub, railway]);
     assert.deepEqual(pairing(out), {});
     assert.equal(out.find((s) => s.id === "DA")?.operator, "KB");
-    for (const sym of ["343", "341", "264", "2"]) assert.equal(getMergedStop(`mzk:${sym}`)?.id, `mzk:${sym}`);
+    const index = indexMergedStops(out);
+    for (const sym of ["343", "341", "264", "2"]) assert.equal(index.get(`mzk:${sym}`)?.id, `mzk:${sym}`);
   });
 
   it("lists every same-name MZK stop on its premises (primary first) and folds the extras into the station", () => {
@@ -352,11 +354,12 @@ describe("mergeStops: bus station hub (fan-out, no absorption)", () => {
     assert.equal(out.length, 1);
   });
 
-  it("is order independent; the registry resolves every symbol of the hub to the hub", () => {
+  it("is order independent; the index resolves every symbol of the hub to the hub", () => {
     const a = mergeStops([cz], poles);
     const b = mergeStops([cz], [...poles].reverse());
     assert.deepEqual(pairing(a), pairing(b));
-    for (const key of ["2366", "mzk:2366", "2367", "mzk:2367"]) assert.equal(getMergedStop(key)?.id, "CZ", key);
+    const index = indexMergedStops(a);
+    for (const key of ["2366", "mzk:2366", "2367", "mzk:2367"]) assert.equal(index.get(key)?.id, "CZ", key);
   });
 
   it("a normal (non-station) stop never fans out to several MZK stops", () => {
@@ -404,7 +407,9 @@ describe("mergeStops: learned MZK bearings steer the pairing but never reach the
   });
 
   it("without them the pairing is distance based and still order independent", () => {
-    assert.deepEqual(pairing(mergeStops(kbs, [mE, mW])), pairing(mergeStops(kbs, [mW, mE])));
+    const p1 = pairing(mergeStops(kbs, [mE, mW]));
+    assert.deepEqual(p1, { E: ["mW"], W: ["mE"] }); // nearest pairs: 36 m + 21 m beat 73 m + 55 m
+    assert.deepEqual(p1, pairing(mergeStops(kbs, [mW, mE])));
   });
 
   it("merged and MZK-only stops carry exactly the arrows they had before (KB's own, none for MZK-only)", () => {

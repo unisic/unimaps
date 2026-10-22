@@ -2,6 +2,7 @@
  * Resolution of MZK trips, courses, and high-precision route shapes.
  */
 import type { MzkRunningVehicle } from "./mzk-api";
+import { MZK_STALE_SEC } from "./mzk-poller";
 import { clampPlannedMonotone, isMzkNotStarted } from "./mzk-state";
 import { getMzkApi, getMzkPoller, getShapes } from "./poller-singleton";
 
@@ -88,10 +89,13 @@ export async function resolveMzkTrip(
     vehicleId = parts[2];
   }
 
+  // a failing OnTime feed leaves the last running list in place: a frozen bus must not look live
+  const feedFresh = Date.now() / 1000 - mzkPoller.lastGoodRefresh <= MZK_STALE_SEC;
   const cached =
-    (vehicleId ? mzkPoller.runningVehiclesMap.get(`mzk:${courseIdStr}:${vehicleId}`) : null) ||
+    feedFresh &&
+    ((vehicleId ? mzkPoller.runningVehiclesMap.get(`mzk:${courseIdStr}:${vehicleId}`) : null) ||
     mzkPoller.runningVehiclesMap.get(courseIdStr) ||
-    mzkPoller.runningVehiclesMap.get(identifier);
+    mzkPoller.runningVehiclesMap.get(identifier));
 
   if (cached && cached.stopPoints?.length) {
     const first = mzkPoller.stopsBySymbol.get(cached.stopPoints[0].symbol);

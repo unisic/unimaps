@@ -1,6 +1,7 @@
 /**
  * HTTP client for the MZK Bielsko-Biała OnTime API (https://rozklady.bielsko.pl).
  */
+import { todayLocalISO } from "./config";
 import { log } from "./logger";
 import type { MzkVehicleStatic } from "./mzk-fleet";
 
@@ -32,7 +33,8 @@ export interface MzkRunningVehicle {
   nearestSymbol: string;
   nearestSymbolOrderNo: number;
   operator: string;
-  onStopPoint: boolean | null;
+  /** on the wire: the symbol of the stop being served ("247"), or null */
+  onStopPoint: string | boolean | null;
   orderInCourse: number;
   direction: string;
   lastStopSymbol: string;
@@ -279,12 +281,11 @@ export class MzkApi {
     let dateParam: string | number;
     if (typeof date === "number") {
       dateParam = date;
-    } else if (typeof date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
-      const [y, m, d] = date.split("-").map(Number);
-      dateParam = Date.UTC(y, m - 1, d, 12, 0, 0);
     } else {
-      const now = new Date();
-      dateParam = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate(), 12, 0, 0);
+      // no/odd date: today in Warsaw, not the server's (UTC) calendar day
+      const iso = typeof date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : todayLocalISO();
+      const [y, m, d] = iso.split("-").map(Number);
+      dateParam = Date.UTC(y, m - 1, d, 12, 0, 0);
     }
     const load = () =>
       this.requestJson<MzkAtomicScheduleResponse>(

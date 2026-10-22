@@ -185,3 +185,17 @@ describe("trip_execution + static trip routes", () => {
     }
   });
 });
+
+describe("frozen OnTime feed", () => {
+  it("a running course is not served as live once the feed stopped refreshing", async () => {
+    const mzkPoller = ((globalThis as Record<symbol, unknown>)[SINGLETON] as { mzkPoller: MzkPollerType }).mzkPoller;
+    const good = mzkPoller.lastGoodRefresh;
+    try {
+      assert.ok(Array.isArray((await liveTrip(V.running)).trip?.times), "fresh feed: live trip");
+      mzkPoller.lastGoodRefresh = NOW / 1000 - 120;
+      assert.equal((await liveTrip(V.running)).trip, undefined, "stale feed: no frozen live trip");
+    } finally {
+      mzkPoller.lastGoodRefresh = good;
+    }
+  });
+});

@@ -45,17 +45,6 @@ export function indexMergedStops(stops: readonly FormattedStop[]): Map<string, F
   return index;
 }
 
-/** Process-wide lookup of the most recent mergeStops() result (kept for callers/tests that merge directly). */
-let registryByDesignator = new Map<string, FormattedStop>();
-
-export function registerMergedStops(stops: FormattedStop[]): void {
-  registryByDesignator = indexMergedStops(stops);
-}
-
-export function getMergedStop(designatorOrId: string): FormattedStop | undefined {
-  return registryByDesignator.get(designatorOrId);
-}
-
 /* ------------------------------------------------------------------------- */
 /* matching                                                                  */
 /* ------------------------------------------------------------------------- */
@@ -336,6 +325,5 @@ export function mergeStops(
     });
   });
 
-  registerMergedStops(merged);
   return merged;
 }

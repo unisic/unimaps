@@ -11,7 +11,8 @@ import { createHash } from "node:crypto";
 import type { Stop, StopsResponse } from "./types";
 import { indexMergedStops, mergeStops, type FormattedStop } from "./stop-merge";
 
-const STATION_NAME_RE = /(?:^|[\s(])(?:D\.A\.?|DWORZEC\s+AUTOBUSOWY)(?:$|[\s)])/i;
+/** a bus station by name (KB and MZK classify with the same rule, see MERGE_HUB_M) */
+export const STATION_NAME_RE = /(?:^|[\s(])(?:D\.A\.?|DWORZEC\s+AUTOBUSOWY)(?:$|[\s)])/i;
 
 export function formatKbStops(stops: readonly Stop[], dirs: ReadonlyMap<string, number[]>): FormattedStop[] {
   return stops.map((s) => {

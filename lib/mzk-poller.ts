@@ -7,8 +7,10 @@ import { log } from "./logger";
 import { MzkApi, type MzkRunningVehicle, type MzkStopPoint, type MzkLine } from "./mzk-api";
 import { getFleetDetails, type MzkVehicleStatic } from "./mzk-fleet";
 import { getFleetTracker } from "./fleet-tracker";
+import { STATION_NAME_RE } from "./merged-stops";
 import { hasPlannedDip, isMzkNotStarted } from "./mzk-state";
 import { mzkRemapDist, mzkStopIndices } from "./mzk-shape";
+import { interruptibleSleep } from "./poller";
 import { nextSpeed } from "./route-info";
 import { loadMzkStopDirs, MzkStopDirs, saveMzkStopDirs } from "./mzk-stop-dirs";
 import type { ShapeGeometry } from "./shape-store";
@@ -28,6 +30,12 @@ export function mzkAngleToCompassBearing(angle: number): number {
   const b = (90 - angle) % 360;
   return b < 0 ? b + 360 : b;
 }
+
+/** courseLoids are per-day instances: without a cap every day's courses (and every ?date= a client asks for) stay forever */
+const COURSE_META_MAX = 20_000;
+
+/** MZK positions are swapped wholesale on every successful 5 s poll; older than this = the OnTime feed is failing. */
+export const MZK_STALE_SEC = 60;
 
 export class MzkPoller {
   readonly api: MzkApi;
@@ -51,7 +59,8 @@ export class MzkPoller {
   private stopDirsSaveTimer: ReturnType<typeof setTimeout> | null = null;
   lines: LineInfo[] = [];
   staticVehicles = new Map<string, MzkVehicleStatic>();
-  courseMetaMap = new Map<number, { lineName: string; variantId?: number; direction?: string }>();
+  /** courseLoid -> line/variant/direction for trip resolution; insertion-ordered, capped by noteCourse() */
+  readonly courseMetaMap = new Map<number, { lineName: string; variantId?: number; direction?: string }>();
 
   lastScan = 0;
   scanCount = 0;
@@ -123,7 +132,7 @@ export class MzkPoller {
       return false;
     }
     const stops: Stop[] = rawStops.map((s: MzkStopPoint) => {
-      const isStation = /(?:^|[\s(])(?:D\.A\.?|DWORZEC\s+AUTOBUSOWY)(?:$|[\s)])/i.test(s.name);
+      const isStation = STATION_NAME_RE.test(s.name);
       return {
         urlId: `mzk:${s.symbol}`,
         internalId: s.id,
@@ -174,19 +183,24 @@ export class MzkPoller {
     this.unknownHandled = new Set(unknownSymbols);
     try {
       if (stale) log.warn("mzk-poller", `unknown stop symbols on running courses (${[...unknownSymbols].slice(0, 5).join(",")}), reloading stops`);
-      if (!(await this.loadStops())) this.unknownHandled.clear(); // empty list: nothing was resolved, try again later
+      if (await this.loadStops()) {
+        // lines and fleet change with the timetable too; a failure keeps the old ones until the next day
+        if (due) await Promise.all([this.loadLines(), this.loadStaticVehicles()]).catch((err) => log.warn("mzk-poller", `lines/vehicles reload failed: ${err}`));
+        return;
+      }
     } catch (err) {
       log.warn("mzk-poller", `stops reload failed: ${err}`);
-      this.unknownHandled.clear();
-      // keep the old list; a due reload is retried in 30 min, not every 5 s
-      if (due) this.stopsLoadedAt = nowMs / 1000 - config.STOPS_RELOAD_SEC + 1800;
     } finally {
       this.stopsReloadInFlight = false;
     }
+    // failed or empty: keep the old list, forget what was tried; a due reload is retried in 30 min, not every 5 s
+    this.unknownHandled.clear();
+    if (due) this.stopsLoadedAt = nowMs / 1000 - config.STOPS_RELOAD_SEC + 1800;
   }
 
   async loadLines(): Promise<void> {
     const rawLines = await this.api.fetchLines();
+    if (rawLines.length === 0) return; // keep the previous lines, retried while they are empty
     this.lines = rawLines.map((l: MzkLine) => ({
       id: `mzk:${l.id}`,
       name: l.name,
@@ -197,9 +211,19 @@ export class MzkPoller {
 
   async loadStaticVehicles(): Promise<void> {
     const rawVehs = await this.api.fetchVehicles();
-    this.staticVehicles.clear();
-    for (const v of rawVehs) {
-      this.staticVehicles.set(v.sideNumber, v);
+    if (rawVehs.length === 0) return; // keep the previous fleet, retried while it is empty
+    const next = new Map<string, MzkVehicleStatic>();
+    for (const v of rawVehs) next.set(v.sideNumber, v);
+    this.staticVehicles = next;
+  }
+
+  /** Remember a course's metadata; a re-noted course moves to the young end, the oldest is evicted past COURSE_META_MAX. */
+  noteCourse(courseId: number, meta: { lineName: string; variantId?: number; direction?: string }): void {
+    this.courseMetaMap.delete(courseId);
+    this.courseMetaMap.set(courseId, meta);
+    if (this.courseMetaMap.size > COURSE_META_MAX) {
+      const oldest = this.courseMetaMap.keys().next().value;
+      if (oldest !== undefined) this.courseMetaMap.delete(oldest);
     }
   }
 
@@ -249,14 +273,13 @@ export class MzkPoller {
   }
 
   async pollOnce(): Promise<void> {
-    if (this.stops.length === 0 || this.lines.length === 0) {
-      try {
-        if (this.stops.length === 0) await this.loadStops();
-        if (this.lines.length === 0) await this.loadLines();
-        if (this.staticVehicles.size === 0) await this.loadStaticVehicles();
-      } catch (err) {
-        log.warn("mzk-poller", `Reload static metadata failed: ${err}`);
-      }
+    // each missing piece on its own: a failed getVehicles must not wait for stops/lines to be missing too
+    const loads: Promise<unknown>[] = [];
+    if (this.stops.length === 0) loads.push(this.loadStops());
+    if (this.lines.length === 0) loads.push(this.loadLines());
+    if (this.staticVehicles.size === 0) loads.push(this.loadStaticVehicles());
+    for (const r of await Promise.allSettled(loads)) {
+      if (r.status === "rejected") log.warn("mzk-poller", `Reload static metadata failed: ${r.reason}`);
     }
 
     const running = await this.api.fetchRunningVehicles();
@@ -274,7 +297,7 @@ export class MzkPoller {
       }
 
       if (v.courseLoid) {
-        this.courseMetaMap.set(v.courseLoid, {
+        this.noteCourse(v.courseLoid, {
           lineName: v.lineName,
           variantId: v.variantLoid,
           direction: v.direction || v.optionalDirection || "",
@@ -517,14 +540,7 @@ export class MzkPoller {
   private async runLoop(signal: AbortSignal): Promise<void> {
     while (!signal.aborted) {
       try {
-        await new Promise((resolve) => {
-          if (signal.aborted) return resolve(undefined);
-          const t = setTimeout(resolve, this.refreshIntervalMs);
-          signal.addEventListener("abort", () => {
-            clearTimeout(t);
-            resolve(undefined);
-          }, { once: true });
-        });
+        await interruptibleSleep(this.refreshIntervalMs, signal);
 
         if (signal.aborted) break;
         await this.pollOnce();

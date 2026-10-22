@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { getEventListeners } from "node:events";
 import fs from "node:fs";
 import { describe, it, beforeEach } from "node:test";
 import "./support/tmp-output"; // first: redirects KB_OUTPUT_DIR before lib/config is evaluated
@@ -16,8 +17,11 @@ class FakeApi {
   stopsFail = false;
   running: Partial<MzkRunningVehicle>[] = [];
   async fetchStops() { this.stopsCalls++; if (this.stopsFail) throw new Error("boom"); return this.stopsReply; }
-  async fetchLines() { return []; }
-  async fetchVehicles() { return []; }
+  linesReply: unknown[] = [];
+  vehiclesReply: unknown[] = [];
+  vehiclesFail = false;
+  async fetchLines() { return this.linesReply; }
+  async fetchVehicles() { if (this.vehiclesFail) throw new Error("timeout"); return this.vehiclesReply; }
   async fetchRunningVehicles() { return this.running as MzkRunningVehicle[]; }
 }
 const veh = (variant: number, symbols: string[]): Partial<MzkRunningVehicle> => ({
@@ -99,6 +103,66 @@ describe("MzkPoller stop-list lifecycle (patched)", () => {
     await p.pollOnce();
     await settle();
     assert.equal(api.stopsCalls, calls0 + 1); // backed off
+  });
+
+  it("a day-old reload that gets an EMPTY list backs off 30 min too (not a getStops every 5 s poll)", async () => {
+    const api = new FakeApi();
+    api.stopsReply = [sp("1", 49.80, 19.0), sp("2", 49.81, 19.0)];
+    const p = new MzkPoller(api as unknown as MzkApi);
+    await p.loadStops();
+    p.stopsLoadedAt = Date.now() / 1000 - 90_000;
+    api.stopsReply = [];
+    api.running = [veh(7, ["1", "2"])];
+    const calls0 = api.stopsCalls;
+    await p.pollOnce();
+    await settle();
+    assert.equal(api.stopsCalls, calls0 + 1);
+    assert.equal(p.stops.length, 2);
+    await p.pollOnce();
+    await settle();
+    assert.equal(api.stopsCalls, calls0 + 1);
+  });
+
+  it("a course seen before the stop list loaded still teaches directions once it does", async () => {
+    const api = new FakeApi();
+    const p = new MzkPoller(api as unknown as MzkApi);
+    api.running = [veh(9, ["A", "B", "C"])];
+    await p.pollOnce(); // getStops returned nothing: every stop of variant 9 is unknown
+    assert.equal(p.stopDirs.size, 0);
+    api.stopsReply = [sp("A", 49.80, 19.0), sp("B", 49.81, 19.0), sp("C", 49.82, 19.0)];
+    await p.pollOnce();
+    assert.deepEqual(p.stopDirs.dirs().get("B"), [0]);
+    p.flushStopDirs();
+    try { fs.unlinkSync(DIRS_FILE); } catch { /* none */ }
+  });
+
+  it("a failed getVehicles is retried even though stops and lines loaded", async () => {
+    const api = new FakeApi();
+    api.stopsReply = [sp("1", 49.80, 19.0)];
+    api.linesReply = [{ id: 1, name: "1", longName: "x" }];
+    api.vehiclesFail = true;
+    const p = new MzkPoller(api as unknown as MzkApi);
+    await p.pollOnce();
+    assert.equal(p.lines.length, 1);
+    assert.equal(p.staticVehicles.size, 0);
+    api.vehiclesFail = false;
+    api.vehiclesReply = [{ sideNumber: "100" }];
+    await p.pollOnce();
+    assert.equal(p.staticVehicles.has("100"), true);
+  });
+
+  it("courseMetaMap is capped: the oldest course goes, a re-noted (still running) one stays", () => {
+    const p = new MzkPoller(new FakeApi() as unknown as MzkApi);
+    const meta = { lineName: "1" };
+    p.noteCourse(1, meta);
+    p.noteCourse(2, meta);
+    for (let id = 3; id <= 25_000; id++) {
+      if (id % 1000 === 0) p.noteCourse(1, meta); // course 1 keeps running, the poller re-notes it
+      p.noteCourse(id, meta);
+    }
+    assert.equal(p.courseMetaMap.size, 20_000);
+    assert.equal(p.courseMetaMap.has(1), true);
+    assert.equal(p.courseMetaMap.has(2), false);
   });
 
   it("learns stop directions from running courses and persists them", async () => {
@@ -186,5 +250,18 @@ describe("MzkPoller stop-list lifecycle (patched)", () => {
     p.flushStopDirs();
     assert.deepEqual(JSON.parse(fs.readFileSync(DIRS_FILE, "utf8")).variants.sort(), [10, 9]);
     fs.unlinkSync(DIRS_FILE);
+  });
+});
+
+describe("MzkPoller run loop", () => {
+  it("does not pile up abort listeners on the loop signal", async () => {
+    const api = new FakeApi();
+    const p = new MzkPoller(api as unknown as MzkApi, 1);
+    await p.start();
+    await settle(); // ~20 loop iterations at 1 ms
+    const signal = (p as unknown as { stopCtl: AbortController }).stopCtl.signal;
+    const listeners = getEventListeners(signal, "abort").length;
+    await p.stop();
+    assert.ok(listeners <= 1, `abort listeners: ${listeners}`);
   });
 });
