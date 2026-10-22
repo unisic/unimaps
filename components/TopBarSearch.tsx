@@ -540,14 +540,16 @@ function TopBarSearch({
 
   // Flat array of items for keyboard navigation index
   const flatItems = useMemo(() => sections.flatMap((s) => s.items), [sections]);
+  // the live vehicle hits can shrink under the highlight between polls: clamp at use
+  const hiIdx = Math.min(hi, Math.max(0, flatItems.length - 1));
 
 
   // Scroll active item into view
   useEffect(() => {
     if (!showDropdown || flatItems.length === 0) return;
-    const activeEl = document.getElementById(`${listId}-opt-${hi}`);
+    const activeEl = document.getElementById(`${listId}-opt-${hiIdx}`);
     activeEl?.scrollIntoView({ block: "nearest" });
-  }, [hi, showDropdown, flatItems.length, listId]);
+  }, [hiIdx, showDropdown, flatItems.length, listId]);
 
   // Pick / execute item
   const pick = useCallback(
@@ -590,13 +592,13 @@ function TopBarSearch({
 
     if (e.key === "ArrowDown") {
       e.preventDefault();
-      setHi((prev) => (prev + 1) % flatItems.length);
+      setHi((hiIdx + 1) % flatItems.length);
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
-      setHi((prev) => (prev - 1 + flatItems.length) % flatItems.length);
+      setHi((hiIdx - 1 + flatItems.length) % flatItems.length);
     } else if (e.key === "Enter") {
       e.preventDefault();
-      const current = flatItems[hi];
+      const current = flatItems[hiIdx];
       if (current) pick(current);
     }
   };
@@ -615,7 +617,7 @@ function TopBarSearch({
           role="combobox"
           aria-expanded={showDropdown}
           aria-controls={showDropdown ? listId : undefined}
-          aria-activedescendant={showDropdown && flatItems.length > 0 ? optionId(hi) : undefined}
+          aria-activedescendant={showDropdown && flatItems.length > 0 ? optionId(hiIdx) : undefined}
           aria-autocomplete="list"
           aria-label="Szukaj przystanku, linii lub taboru"
           placeholder="Szukaj przystanku, linii lub taboru (#230, Solaris)…"
@@ -670,7 +672,7 @@ function TopBarSearch({
                     <ul className="flex flex-col gap-0.5">
                       {section.items.map((it) => {
                         const itemIndex = globalIdx++;
-                        const isSelected = itemIndex === hi;
+                        const isSelected = itemIndex === hiIdx;
                         return (
                           <li
                             key={itemKey(it)}

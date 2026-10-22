@@ -73,9 +73,13 @@ export async function refreshAnnouncements(): Promise<void> {
     emit({ status: "ready", items, hash: typeof resp.hash === "string" ? resp.hash : null });
   } catch {
     if (ac.signal.aborted) return;
-    emit({ status: "error" });
+    // stale-while-error: a failed refresh keeps a loaded list (and its unread dot)
+    if (snapshot.status !== "ready") emit({ status: "error" });
   }
 }
+
+export const getAnnouncementsSnapshot = (): AnnouncementsSnapshot => snapshot;
+const refresh = (): void => void refreshAnnouncements();
 
 /** Refresh only when the data is older than the sheet-open staleness window. */
 export function refreshAnnouncementsIfStale(): void {
@@ -132,7 +136,7 @@ export function useAnnouncements(): {
   refresh: () => void;
   markSeen: () => void;
 } {
-  const snap = useSyncExternalStore(subscribe, () => snapshot, () => INITIAL);
+  const snap = useSyncExternalStore(subscribe, getAnnouncementsSnapshot, () => INITIAL);
   const unseen =
     snap.status === "ready" && snap.items.length > 0 && snap.hash !== null && snap.hash !== snap.seenHash;
   // module-level functions → stable identities, memo()-safe without useCallback
@@ -140,7 +144,7 @@ export function useAnnouncements(): {
     status: snap.status,
     items: snap.items,
     unseen,
-    refresh: () => void refreshAnnouncements(),
+    refresh,
     markSeen: markAnnouncementsSeen,
   };
 }

@@ -14,19 +14,6 @@ export function haversineMeters(aLat: number, aLon: number, bLat: number, bLon: 
   return 6371000 * 2 * Math.atan2(Math.sqrt(s), Math.sqrt(1 - s));
 }
 
-/** Initial great-circle bearing from point 1 to point 2, degrees [0, 360). */
-export function bearing(lat1: number, lon1: number, lat2: number, lon2: number): number | null {
-  if (lat1 === lat2 && lon1 === lon2) return null;
-  const rad = Math.PI / 180;
-  const phi1 = lat1 * rad;
-  const phi2 = lat2 * rad;
-  const dlon = (lon2 - lon1) * rad;
-  const x = Math.sin(dlon) * Math.cos(phi2);
-  const y = Math.cos(phi1) * Math.sin(phi2) - Math.sin(phi1) * Math.cos(phi2) * Math.cos(dlon);
-  const b = Math.atan2(x, y) / rad;
-  return (b + 360.0) % 360.0;
-}
-
 /** "230 m" below 1 km, then "1,4 km" (Polish decimal comma). */
 export function formatDistance(m: number): string {
   if (m < 1000) return `${Math.round(m / 10) * 10} m`;

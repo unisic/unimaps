@@ -16,7 +16,6 @@ import {
   hhmmFromSecs,
   isBusStation,
   offsetDateISO,
-  todayISO,
 } from "@/lib/client/format";
 import type {
   DepartureRow,
@@ -39,6 +38,7 @@ import {
   nextLaterHorizon,
   resolveTiming,
   schedTiming,
+  schedTripKey,
   schedVehicle,
   sortBoard,
   uniqueKeys,
@@ -421,10 +421,19 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
     return () => clearTimeout(t);
   }, [hasRows]);
 
-  /* the stop's timetable per date: today (the date the sheet opened) feeds the "Rozkład dziś" tab and the
-     earlier/later rows of the live board, tomorrow only once "later" runs past today's last departure.
-     Loads live for the whole sheet (one AbortController), so switching tabs never drops a fetch half way. */
-  const [day0] = useState(todayISO);
+  /* the timetable tab has no 5 s tick: keep "now" (and so today's date) moving past midnight there too */
+  useEffect(() => {
+    if (tab === "live") return;
+    const id = setInterval(() => setNowTs(Date.now() / 1000 + skewRef.current), 60_000);
+    return () => clearInterval(id);
+  }, [tab]);
+
+  /* the stop's timetable per date: today (Warsaw date on the server clock, so a sheet left open rolls over
+     at midnight) feeds the "Rozkład dziś" tab and the earlier/later rows of the live board, tomorrow only
+     once "later" runs past today's last departure. Loads live for the whole sheet (one AbortController),
+     so switching tabs never drops a fetch half way. */
+  const todayNow = useMemo(() => warsawDateISO(nowTs), [nowTs]);
+  const day0 = todayNow;
   const day1 = offsetDateISO(day0, 1);
   const [days, setDays] = useState<ReadonlyMap<string, DayLoad>>(() => new Map());
   const daysRef = useRef(days);
@@ -528,7 +537,6 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
   /* nothing left to reveal: the earliest/latest timetable row is already on screen (or there is none) */
   const earliestTs = ext.earlier.length ? ext.earlier[0].planTs : null;
   const latestTs = ext.later.length ? ext.later[ext.later.length - 1].planTs : null;
-  const todayNow = useMemo(() => warsawDateISO(nowTs), [nowTs]);
   const dayLabel = (date: string) => (date === todayNow ? null : formatDayLabel(date, todayNow));
 
   /* ONE canonical ETA per row (lib/shared/departures): the countdown on screen and the order of the
@@ -541,7 +549,7 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
     const items: Entry[] = (liveRows ?? []).map((row) => {
       const veh =
         (row.trip_execution_id ? vehByExec.get(row.trip_execution_id) : null) ??
-        (row.trip_id != null ? vehByTrip.get(String(row.trip_id)) : null) ??
+        (row.trip_id != null ? (vehByTrip.get(String(row.trip_id)) ?? vehBySched.get(schedTripKey(row.trip_id))) : null) ??
         null;
       return { row, veh, timing: resolveTiming(row, veh), sched: null };
     });
@@ -662,7 +670,7 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
       header={header}
     >
       <div key={tab} className="kb-scroll h-full overflow-y-auto pb-4 animate-fade">
-        {(tab === "live" ? liveWarn : ttWarn).length > 0 && !liveErr && (
+        {(tab === "live" ? liveWarn.length > 0 && !liveErr : ttWarn.length > 0) && (
           <SourceWarning sources={tab === "live" ? liveWarn : ttWarn} />
         )}
         {tab === "live" ? (

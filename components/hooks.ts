@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import useSWR from "swr";
 import { fetchJSON, vehiclesFetcher } from "@/lib/client/api";
 import { nowSecs } from "@/lib/client/format";
@@ -17,7 +17,8 @@ export function useVehicles() {
     keepPreviousData: true,
     revalidateOnFocus: true,
     revalidateOnReconnect: true,
-    refreshWhenHidden: true,
+    // a background tab stops downloading the fleet; focus/visibility revalidation catches up at once
+    refreshWhenHidden: false,
   });
 }
 
@@ -133,7 +134,8 @@ export function useGeolocation() {
     [],
   );
 
-  return { pos, status, locate, stop };
+  // stable while nothing changes: callers' useCallback([geo]) props stay memo()-safe across polls
+  return useMemo(() => ({ pos, status, locate, stop }), [pos, status, locate, stop]);
 }
 
 /** Seconds since midnight, refreshed every `intervalMs` — keeps countdowns fresh. */

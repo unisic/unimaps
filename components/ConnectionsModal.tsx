@@ -206,7 +206,8 @@ function ConnectionsDialog({
     return m;
   }, [stops]);
 
-  // Close on Escape
+  // Close on Escape. On document, so it runs before the stop sheet's window
+  // listener, which then sees defaultPrevented and stays open.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -214,18 +215,19 @@ function ConnectionsDialog({
         onClose();
       }
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  // Derived effective time parameter (HH:MM in 24h format)
+  // Derived effective time parameter (HH:MM in 24h format); null while the
+  // typed time is incomplete or out of range, so no search fires per keystroke
+  // (the blur handler pads and clamps it into a valid one).
   const effectiveTimeParam = useMemo(() => {
     if (timeMode === "now" && dateMode === "today") {
       return undefined; // live search from current second
     }
-    const h = hour.padStart(2, "0");
-    const m = minute.padStart(2, "0");
-    return `${h}:${m}`;
+    if (!/^\d\d$/.test(hour) || !/^\d\d$/.test(minute) || +hour > 23 || +minute > 59) return null;
+    return `${hour}:${minute}`;
   }, [timeMode, dateMode, hour, minute]);
 
   const effectiveDayLabel = useMemo(() => {
@@ -236,7 +238,7 @@ function ConnectionsDialog({
 
   // Async connection fetcher
   useEffect(() => {
-    if (!fromStop || !toStop) return;
+    if (!fromStop || !toStop || effectiveTimeParam === null) return;
     const ac = new AbortController();
     let cancelled = false;
     const fromParam = fromStop.id || fromStop.name;
@@ -245,7 +247,7 @@ function ConnectionsDialog({
     (async () => {
       try {
         const list = await getConnections(fromParam, toParam, {
-          time: effectiveTimeParam,
+          time: effectiveTimeParam ?? undefined,
           date: selectedDate,
           dayLabel: effectiveDayLabel,
           directOnly,
@@ -682,6 +684,7 @@ function ConnectionsDialog({
                   setHour(h);
                   setMinute(m);
                   setTimeMode("custom");
+                  setConnections(null);
                 }}
                 onBlur={handleTimeBlur}
               />
@@ -856,7 +859,9 @@ function ConnectionsDialog({
                     {directOnly
                       ? "W rozkładzie nie ma bezpośredniego autobusu na wybraną godzinę. Spróbuj wyłączyć filtr, aby zobaczyć połączenia z przesiadką."
                       : dateMode === "today"
-                        ? `Brak dalszych kursów na dziś od godziny ${hour}:${minute}. Sprawdź połączenia na jutro.`
+                        ? timeMode === "now"
+                          ? "Brak dalszych kursów na dziś. Sprawdź połączenia na jutro."
+                          : `Brak dalszych kursów na dziś od godziny ${hour}:${minute}. Sprawdź połączenia na jutro.`
                         : "Brak kursów w rozkładzie jazdy na wybrany dzień i godzinę."}
                   </p>
                 </div>

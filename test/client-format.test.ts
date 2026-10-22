@@ -42,6 +42,10 @@ describe("secsFromHHMM / hhmmFromSecs", () => {
     assert.equal(hhmmFromSecs(0), "00:00");
     assert.equal(hhmmFromSecs(null), "");
   });
+
+  it("folds negative seconds onto the previous day", () => {
+    assert.equal(hhmmFromSecs(-60), "23:59"); // planned 00:00, 1 min early
+  });
 });
 
 describe("delayTxt", () => {
@@ -184,6 +188,13 @@ describe("isMzk & operatorColor", () => {
     assert.equal(isMzk(null, "N1"), true);
     assert.equal(isMzk(null, "120"), false);
     assert.equal(isMzk(null, "102"), false);
+  });
+
+  it("two-digit MZK lines 10-14 and suffixed ones are not KB", () => {
+    assert.equal(isMzk(null, "10"), true);
+    assert.equal(isMzk(null, "14"), true);
+    assert.equal(isMzk(null, "13W"), true);
+    assert.equal(isMzk(null, "141"), false);
   });
 
   it("returns constant red for KB and characteristic blue for MZK", () => {

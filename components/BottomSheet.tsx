@@ -70,25 +70,8 @@ export default function BottomSheet({
   const [mounted, setMounted] = useState(false);
 
   const sheetRef = useRef<HTMLElement>(null);
-  const headerRef = useRef<HTMLDivElement>(null);
-  const [_headerHeight, setHeaderHeight] = useState(160);
   const restoreRef = useRef<HTMLElement | null>(null);
   const snapRef = useRef<Snap>(initialSnap);
-  const isDraggingRef = useRef(false);
-
-  // Measure header height dynamically to bound content container precisely within viewport
-  useEffect(() => {
-    if (!headerRef.current) return;
-    const el = headerRef.current;
-    const update = () => {
-      const h = el.offsetHeight;
-      if (h > 0) setHeaderHeight(h);
-    };
-    update();
-    const observer = new ResizeObserver(update);
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
 
   const startRef = useRef<{
     id: number;
@@ -149,7 +132,6 @@ export default function BottomSheet({
         target: e.target as HTMLElement,
       };
       movesRef.current = [{ y: e.clientY, t: e.timeStamp }];
-      isDraggingRef.current = true;
       setIsDragging(true);
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     },
@@ -193,7 +175,6 @@ export default function BottomSheet({
       const st = startRef.current;
       if (!st || e.pointerId !== st.id) return;
       startRef.current = null;
-      isDraggingRef.current = false;
       setIsDragging(false);
 
       const moved = Math.abs(e.clientY - st.y);
@@ -274,7 +255,6 @@ export default function BottomSheet({
       const st = startRef.current;
       if (!st || e.pointerId !== st.id) return;
       startRef.current = null;
-      isDraggingRef.current = false;
       setIsDragging(false);
       if (sheetRef.current) {
         sheetRef.current.style.removeProperty("--sheet-height");
@@ -329,7 +309,6 @@ export default function BottomSheet({
       }}
     >
       <div
-        ref={headerRef}
         className="shrink-0 cursor-grab active:cursor-grabbing select-none"
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}

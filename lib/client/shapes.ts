@@ -25,6 +25,8 @@ const MAX_CACHE = 300;
 const BATCH = 40;
 const MAX_INFLIGHT = 2;
 const MISSING_RETRY_MS = 60_000;
+/** a hung request would hold one of the MAX_INFLIGHT slots (and the fleet queue) until the browser gives up */
+const FETCH_TIMEOUT_MS = 15_000;
 
 const cache = new Map<string, ClientShape>();
 const negative = new Map<string, number>();
@@ -47,6 +49,13 @@ export function parseShapePayload(reqId: string, raw: unknown, precision = 6): C
     ? p.stops.map((s) => (typeof s === "number" && Number.isFinite(s) ? s : null))
     : [];
   return { id: reqId, pts, pl, stops };
+}
+
+/** Capped like the cache: an evicted entry only allows an earlier retry. */
+function markMissing(id: string, until: number): void {
+  negative.delete(id);
+  negative.set(id, until);
+  if (negative.size > MAX_CACHE) negative.delete(negative.keys().next().value!);
 }
 
 function remember(s: ClientShape): void {
@@ -75,7 +84,9 @@ async function fetchBatch(ids: string[]): Promise<void> {
   running += 1;
   const p = (async () => {
     try {
-      const res = await fetch(`/api/shapes?ids=${ids.map(encodeURIComponent).join(",")}`);
+      const res = await fetch(`/api/shapes?ids=${ids.map(encodeURIComponent).join(",")}`, {
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const body = (await res.json()) as { precision?: number; shapes?: Record<string, unknown>; missing?: unknown };
       const precision = typeof body.precision === "number" ? body.precision : 6;
@@ -89,12 +100,12 @@ async function fetchBatch(ids: string[]): Promise<void> {
         const cur = raw && typeof (raw as { id?: unknown }).id === "string" ? (raw as { id: string }).id : id;
         const s = parseShapePayload(cur, raw, precision);
         if (s) remember(s);
-        if (!s || cur !== id) negative.set(id, now + MISSING_RETRY_MS);
+        if (!s || cur !== id) markMissing(id, now + MISSING_RETRY_MS);
       }
     } catch {
       const until = Date.now() + netBackoffMs;
       netBackoffMs = Math.min(netBackoffMs * 2, 5 * 60_000);
-      for (const id of ids) negative.set(id, until);
+      for (const id of ids) markMissing(id, until);
     }
   })();
   for (const id of ids) inflight.set(id, p.then(() => cache.get(id) ?? null));
@@ -118,6 +129,7 @@ function pump(): void {
 function wanted(id: string, now: number): boolean {
   if (!id || cache.has(id) || inflight.has(id) || queue.has(id)) return false;
   const neg = negative.get(id);
+  if (neg !== undefined && neg <= now) negative.delete(id);
   return !(neg !== undefined && neg > now);
 }
 

@@ -221,6 +221,14 @@ describe("shapes", () => {
     assert.ok(Math.abs(east(o.lat, o.lon) - 700) < 0.5);
   });
 
+  it("override shape set before the track is ingested applies when it appears", () => {
+    const m = createMotionStore();
+    m.setShape(makeMotionShape("trip:1", preparePolyline([P(0, 5), P(2500, 5)])!, STOPS));
+    m.overrideShape("bus", "trip:1");
+    m.ingest([V(700, { shape: undefined, dist_m: undefined })], 0, 0);
+    assert.equal(m.inspect("bus")?.shape, "trip:1");
+  });
+
   it("heading follows the road round a corner without stepping", () => {
     const m = createMotionStore();
     const l = makeMotionShape(KEY, preparePolyline([P(0, 0), P(500, 0), P(500, 500)])!, [0, 1000]);

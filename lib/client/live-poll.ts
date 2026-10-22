@@ -105,6 +105,8 @@ export function createLivePoll<T>(d: LivePollDeps<T>): LivePoll {
   let timer: unknown = null;
   let dueAt: number | null = null;
   let ac: AbortController | null = null;
+  /** bumped by stop(): a request started before it settles silently */
+  let gen = 0;
 
   const disarm = (): void => {
     if (timer != null) clearTimer(timer);
@@ -129,27 +131,30 @@ export function createLivePoll<T>(d: LivePollDeps<T>): LivePoll {
     }
     disarm();
     inflight = true;
+    const g = gen;
     const ctl = new AbortController();
     ac = ctl;
     const to = setTimer(() => ctl.abort(), timeoutMs);
     d.onStart?.();
     try {
       const payload = await d.load(ctl.signal);
-      if (running) {
+      if (running && g === gen) {
         failures = 0;
         lastOk = now();
         d.onOk(payload, lastOk);
       }
     } catch (err) {
-      if (running) {
+      if (running && g === gen) {
         failures++;
         d.onFail(err, now());
       }
     } finally {
       clearTimer(to);
-      inflight = false;
-      ac = null;
-      if (running) arm(nextPollDelayMs(failures, d.rnd));
+      if (g === gen) {
+        inflight = false;
+        ac = null;
+        if (running) arm(nextPollDelayMs(failures, d.rnd));
+      }
     }
   }
 
@@ -164,6 +169,9 @@ export function createLivePoll<T>(d: LivePollDeps<T>): LivePoll {
       running = false;
       disarm();
       ac?.abort();
+      ac = null;
+      inflight = false;
+      gen++;
     },
     kick() {
       if (!running || !isVisible()) return;

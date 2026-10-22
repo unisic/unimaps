@@ -63,18 +63,10 @@ export function isMzk(operator?: string | null, line?: string | null): boolean {
   if (operator === "KB") return false;
   if (!line || line === "…") return false;
   const s = String(line).trim();
-  // KB lines: 100-140
-  if (
-    s.startsWith("10") ||
-    s.startsWith("11") ||
-    s.startsWith("12") ||
-    s.startsWith("13") ||
-    s.startsWith("14")
-  ) {
-    return false;
-  }
-  // MZK lines: 1-57, N1, N2, P1, P2
-  return s.length <= 2 || s.startsWith("N") || s.startsWith("P");
+  // KB lines: 101-157 (three digits)
+  if (/^1\d\d$/.test(s)) return false;
+  // MZK lines: 1-57 (also with a letter, e.g. 13W), N1, N2, P1, P2
+  return s.length <= 2 || /^\d{1,2}[A-Z]$/i.test(s) || s.startsWith("N") || s.startsWith("P");
 }
 
 /** Constant brand color: red for KB, characteristic blue for MZK. */
@@ -105,8 +97,9 @@ export function secsFromHHMM(hhmm: string | null | undefined): number | null {
 
 export function hhmmFromSecs(s: number | null | undefined): string {
   if (s == null) return "";
-  const h = Math.floor(s / 3600) % 24;
-  const m = Math.floor(s / 60) % 60;
+  const t = ((Math.floor(s) % 86400) + 86400) % 86400;
+  const h = Math.floor(t / 3600);
+  const m = Math.floor(t / 60) % 60;
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 

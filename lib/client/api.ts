@@ -12,9 +12,6 @@ export async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> 
   return (await r.json()) as T;
 }
 
-/** SWR fetcher — always bypass the HTTP cache. */
-export const swrFetcher = <T>(url: string): Promise<T> => fetchJSON<T>(url, { cache: "no-store" });
-
 /**
  * Receive time (performance.now) and server clock (X-Server-Time, epoch ms) of
  * each /api/vehicles payload, keyed by its `vehicles` array — the motion
@@ -86,7 +83,8 @@ interface TripsBatchResponse {
 
 /**
  * Resolves multiple trips in a single network round-trip via /api/trips,
- * falling back to individual getTrip on transient errors.
+ * falling back to individual getTrip on network/5xx errors (not on abort or 429:
+ * ids left unresolved are simply absent from the map).
  */
 export async function getTripsBatch(
   tripIds: Array<string | number>,
@@ -121,7 +119,9 @@ export async function getTripsBatch(
         if (tr && tr.shape_status !== "pending") tripCache.set(id, Promise.resolve(tr));
         result.set(id, tr);
       }
-    } catch {
+    } catch (err) {
+      // abort: the caller is gone; 429: one getTrip per id would multiply the throttled requests
+      if (signal?.aborted || (err instanceof HttpError && err.status === 429)) break;
       await Promise.all(
         chunk.map(async (id) => {
           const tr = await getTrip(id, signal);
@@ -140,6 +140,8 @@ export async function getTripsBatch(
 const OSRM = "https://router.project-osrm.org/route/v1/driving";
 const routeCache = new Map<string, Promise<LatLng[] | null>>();
 const ROUTE_CACHE_MAX = 200;
+/** the public demo host can accept a socket and never answer; the cached promise must settle */
+const OSRM_TIMEOUT_MS = 8_000;
 
 interface OsrmResponse {
   routes?: Array<{ geometry?: { coordinates?: Array<[number, number]> } }>;
@@ -162,6 +164,7 @@ async function fetchChunkRoute(points: LatLng[]): Promise<LatLng[]> {
     try {
       const d = await fetchJSON<OsrmResponse>(
         `${OSRM}/${coords}?overview=full&geometries=geojson&continue_straight=true`,
+        { signal: AbortSignal.timeout(OSRM_TIMEOUT_MS) },
       );
       const line = d.routes?.[0]?.geometry?.coordinates;
       if (line && line.length) return line.map((c): LatLng => [c[1], c[0]]);
@@ -171,7 +174,9 @@ async function fetchChunkRoute(points: LatLng[]): Promise<LatLng[]> {
 
     // Fallback: standard OSRM call
     try {
-      const d = await fetchJSON<OsrmResponse>(`${OSRM}/${coords}?overview=full&geometries=geojson`);
+      const d = await fetchJSON<OsrmResponse>(`${OSRM}/${coords}?overview=full&geometries=geojson`, {
+        signal: AbortSignal.timeout(OSRM_TIMEOUT_MS),
+      });
       const line = d.routes?.[0]?.geometry?.coordinates;
       if (line && line.length) return line.map((c): LatLng => [c[1], c[0]]);
     } catch {
@@ -259,14 +264,11 @@ export async function getConnections(
     if (optionsOrTime.signal) signal = optionsOrTime.signal;
   }
 
-  try {
-    const res = await fetchJSON<ConnectionsResponse>(`/api/connections?${p.toString()}`, {
-      signal,
-      cache: "no-store",
-    });
-    return res?.connections ?? [];
-  } catch {
-    return [];
-  }
+  // Throws on HTTP/network errors and aborts: a failed search is not "no connections".
+  const res = await fetchJSON<ConnectionsResponse>(`/api/connections?${p.toString()}`, {
+    signal,
+    cache: "no-store",
+  });
+  return res?.connections ?? [];
 }
 

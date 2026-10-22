@@ -210,10 +210,10 @@ export function makeMotionShape(key: string, pl: Polyline, stops: ReadonlyArray<
 
 export interface MotionStore {
   setShape(shape: MotionShape): void;
-  hasShape(key: string): boolean;
   /** wire shape keys referenced by tracks that aren't loaded yet */
   missingShapes(): string[];
-  /** force a track onto another shape (TripLayer's drawn route); null clears */
+  /** force a track onto another shape (TripLayer's drawn route); null clears. A track not
+   *  ingested yet takes it when it appears (TripLayer's effect runs before the poll's ingest). */
   overrideShape(trackId: string, key: string | null): void;
   /** feed one /api/vehicles poll; recvMs on the local clock, serverNowMs = server epoch ms at send */
   ingest(vehicles: readonly MotionInput[], recvMs: number, serverNowMs?: number | null): void;
@@ -251,6 +251,8 @@ export function createMotionStore(cfgIn: Partial<MotionConfig> = {}): MotionStor
   const cfg: MotionConfig = { ...DEFAULT_MOTION_CONFIG, ...cfgIn };
   const tracks = new Map<string, Track>();
   const shapes = new Map<string, MotionShape>();
+  /** overrides for tracks not ingested yet; cleared with overrideShape(id, null) */
+  const pendingOverride = new Map<string, string>();
   /** local − server (ms) */
   let offset: number | null = null;
   const pa: PointAt = { lat: 0, lon: 0, seg: 0 };
@@ -431,7 +433,7 @@ export function createMotionStore(cfgIn: Partial<MotionConfig> = {}): MotionStor
         moveN: 0,
         gapEma: 12_000,
         wireKey: null,
-        overrideKey: null,
+        overrideKey: pendingOverride.get(v.id) ?? null,
         shape: null,
         mode: "static",
         hold: true,
@@ -455,6 +457,7 @@ export function createMotionStore(cfgIn: Partial<MotionConfig> = {}): MotionStor
         segHint: -1,
       };
       tracks.set(v.id, tr);
+      pendingOverride.delete(v.id);
     }
     tr.input = v;
     tr.lastSeen = recvMs;
@@ -553,9 +556,6 @@ export function createMotionStore(cfgIn: Partial<MotionConfig> = {}): MotionStor
         if ((tr.overrideKey ?? tr.wireKey) === shape.key && tr.shape !== shape) attachShape(tr);
       }
     },
-    hasShape(key) {
-      return shapes.has(key);
-    },
     missingShapes() {
       const miss = new Set<string>();
       for (const tr of tracks.values()) {
@@ -565,7 +565,12 @@ export function createMotionStore(cfgIn: Partial<MotionConfig> = {}): MotionStor
     },
     overrideShape(trackId, key) {
       const tr = tracks.get(trackId);
-      if (!tr || tr.overrideKey === key) return;
+      if (!tr) {
+        if (key === null) pendingOverride.delete(trackId);
+        else pendingOverride.set(trackId, key);
+        return;
+      }
+      if (tr.overrideKey === key) return;
       tr.overrideKey = key;
       // drop the old geometry: the override (or the wire shape) replaces it
       tr.shape = null;
@@ -592,6 +597,7 @@ export function createMotionStore(cfgIn: Partial<MotionConfig> = {}): MotionStor
           if (tr.wireKey) used.add(tr.wireKey);
           if (tr.overrideKey) used.add(tr.overrideKey);
         }
+        for (const k of pendingOverride.values()) used.add(k);
         for (const k of shapes.keys()) if (!used.has(k)) shapes.delete(k);
       }
     },

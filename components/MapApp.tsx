@@ -14,6 +14,7 @@ import { makeStopPingIcon, makeUserLocationIcon } from "@/lib/client/leafletIcon
 import { panMotion } from "@/lib/client/motion";
 import { focusPoint, glideTo, installSmoothZoom, isCovered } from "@/lib/client/mapGlide";
 import { buildSearch, parseUrlState, type UrlState } from "@/lib/client/urlState";
+import { schedTripKey, vehicleTripKey } from "@/lib/shared/departures";
 import type {
   ConnectionItinerary,
   JourneyLegResolved,
@@ -386,7 +387,7 @@ export default function MapApp() {
     healedGenRef.current = t.gen;
     void buildTrip(
       t.gen,
-      { times: t.rawTimes, line: { name: t.line }, direction: t.direction },
+      { times: t.rawTimes, line: { name: t.line }, direction: t.direction, operator: t.operator },
       t.vehicle,
       t.vti,
       t.stop,
@@ -744,17 +745,41 @@ export default function MapApp() {
   /* state -> URL. One writer; refs carry everything the popstate/moveend
      listeners need so they stay mount-once and render-free. */
   const urlStateRef = useRef<UrlState>(initialUrl);
-  const urlSyncRef = useRef({ pushed: 0, expectPop: 0, fromPop: false, prevDepth: 0 });
+  const urlSyncRef = useRef({
+    pushed: 0,
+    expectPop: 0,
+    fromPop: false,
+    prevDepth: 0,
+    prevOverlays: 0,
+    // sheets with no URL param of their own: back closes them via onPop
+    journey: false,
+    ann: false,
+    modal: false,
+  });
   const tripOpen = trip != null;
-  const tripExecId = trip?.isLive ? trip.execId : null;
-  const tripIsStatic = tripOpen && !trip.isLive;
+  // a live-opened trip keeps exec= even when buildTrip downgrades it to isLive=false
+  // (no position yet): the course is still the one the URL must reopen
+  const tripExecId = trip?.execId ?? null;
+  const tripIsStatic = tripOpen && !tripExecId;
+  const journeyOpen = journey != null;
   useEffect(() => {
     const st = urlSyncRef.current;
-    const depth = tripOpen ? 2 : selectedStop ? 1 : 0;
+    // journey replaces stop/trip as the base sheet; the announcements sheet and
+    // the connections modal stack on top, each with a same-URL history entry
+    const overlays = (annOpen ? 1 : 0) + (connModalOpen ? 1 : 0);
+    const depth = (tripOpen ? 2 : selectedStop || journeyOpen ? 1 : 0) + overlays;
     const prev = st.prevDepth;
+    const prevOverlays = st.prevOverlays;
     st.prevDepth = depth;
+    st.prevOverlays = overlays;
+    st.journey = journeyOpen;
+    st.ann = annOpen;
+    st.modal = connModalOpen;
     const fromPop = st.fromPop;
     st.fromPop = false;
+    // a deep link not hydrated yet (waits for /api/stops) stays in the URL:
+    // urlStateRef keeps initialUrl, so a reload or a copied link still has it
+    if (!dlConsumedRef.current) return;
     const staticId =
       tripIsStatic && lastReqRef.current?.kind === "static" ? String(lastReqRef.current.tripId) : null;
     const m = mapRef.current;
@@ -769,7 +794,8 @@ export default function MapApp() {
     const search = buildSearch(urlStateRef.current);
     if (depth > prev && !fromPop) {
       // sheet appeared/deepened → its own history entry, so back closes it
-      if (search !== window.location.search) {
+      // (a same-URL overlay pushes too; landing on a deep link does not)
+      if (search !== window.location.search || overlays > prevOverlays) {
         window.history.pushState({ kb: true }, "", search || window.location.pathname);
         st.pushed++;
       }
@@ -784,7 +810,7 @@ export default function MapApp() {
       // same-level change (stop→stop, filter, trip kind) → replace in place
       window.history.replaceState({ kb: true }, "", search || window.location.pathname);
     }
-  }, [selectedStop, tripOpen, tripExecId, tripIsStatic, filterLines]);
+  }, [selectedStop, tripOpen, tripExecId, tripIsStatic, filterLines, journeyOpen, annOpen, connModalOpen]);
 
   const openVehicleCard = useCallback((side: string) => {
     if (cardRef.current) return;
@@ -831,6 +857,14 @@ export default function MapApp() {
         }
         return;
       }
+      // topmost first: the modal, then the announcements sheet, each one level
+      if (st.modal || st.ann) {
+        st.fromPop = true;
+        st.pushed = Math.max(0, st.pushed - 1);
+        if (st.modal) closeConnModal();
+        else closeAnnouncements();
+        return;
+      }
       const dl = parseUrlState(window.location.search);
       const cur = urlStateRef.current;
       const wantsTrip = !!(dl.exec || dl.trip);
@@ -838,8 +872,7 @@ export default function MapApp() {
       if (!wantsTrip && haveTrip) {
         st.fromPop = true;
         st.pushed = Math.max(0, st.pushed - 1);
-        closeTrip();
-        closeJourney();
+        closeTrip(); // a journey under it has its own entry
         if (!dl.stop) setSelectedStop(null);
         return;
       }
@@ -850,6 +883,12 @@ export default function MapApp() {
         closeJourney();
         return;
       }
+      if (st.journey) {
+        st.fromPop = true;
+        st.pushed = Math.max(0, st.pushed - 1);
+        closeJourney();
+        return;
+      }
       const want = buildSearch(cur);
       if (window.location.search !== want) {
         window.history.replaceState({ kb: true }, "", want || window.location.pathname);
@@ -857,7 +896,7 @@ export default function MapApp() {
     };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
-  }, [closeTrip, closeJourney]);
+  }, [closeTrip, closeJourney, closeConnModal, closeAnnouncements]);
 
   /* "Wyczyść widok": close every sheet and drop the line filter */
   const handleClearView = useCallback(() => {
@@ -1029,7 +1068,11 @@ export default function MapApp() {
       if (byExec) return byExec;
     }
     if (trip.tripId) {
-      const byTrip = vehicles.find((v) => v.trip_id && String(v.trip_id) === String(trip.tripId));
+      // static trip ids and live trip_ids are different spaces (MZK "mzk:<course>:<variant>"
+      // vs the bare course): match on the shared timetable key, raw trip_id as before
+      const key = schedTripKey(trip.tripId);
+      const tid = String(trip.tripId);
+      const byTrip = vehicles.find((v) => vehicleTripKey(v) === key || (v.trip_id && String(v.trip_id) === tid));
       if (byTrip) return byTrip;
     }
     return null;

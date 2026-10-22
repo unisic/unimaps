@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useEffect, useId, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useId, useRef, useState } from "react";
 import TopBarSearch, { type TopBarSearchHandle } from "@/components/TopBarSearch";
 import {
   ArrowRightIcon,
@@ -228,6 +228,9 @@ function TopBar({
   onShowToast,
 }: TopBarProps) {
   const [menu, setMenu] = useState(false);
+  const closeMenuOnDropdown = useCallback((isOpen: boolean) => {
+    if (isOpen) setMenu(false);
+  }, []);
   const rootRef = useRef<HTMLDivElement>(null);
   /* per-browser preference; only this component re-renders on toggle */
   const [smoothMotion, setSmoothMotion] = useSmoothMotion();
@@ -268,9 +271,7 @@ function TopBar({
           onOpenConnections={onOpenConnections}
           searchRef={searchRef}
           onShowToast={onShowToast}
-          onDropdownChange={(isOpen) => {
-            if (isOpen) setMenu(false);
-          }}
+          onDropdownChange={closeMenuOnDropdown}
         />
 
         {/* Active operator filter: visible only while it hides part of the fleet */}

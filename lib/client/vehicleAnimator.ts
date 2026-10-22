@@ -227,19 +227,6 @@ export class VehicleAnimator {
     }
   }
 
-  /** Point an existing view at another track (TripLayer's live match changed). */
-  rebindView(viewId: string, trackId: string): void {
-    const view = this.views.get(viewId);
-    if (!view || view.trackId === trackId) return;
-    this.unpin(view);
-    view.trackId = trackId;
-    view.arrowEl = null;
-    view.arrowDeg = null;
-    this.pin(view);
-    if (this.enabled) this.renderView(view, performance.now(), true);
-    else this.writeRaw(view);
-  }
-
   /** After setIcon(): the arrow element was replaced — re-find it and re-apply the heading. */
   refreshViewDom(viewId: string): void {
     const view = this.views.get(viewId);

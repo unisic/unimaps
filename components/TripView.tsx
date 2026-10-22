@@ -223,14 +223,29 @@ function TripView({
       }
     }
 
-    // Scheduled / no live GPS fix -> calculate from Europe/Warsaw schedule time
+    // Scheduled / no live GPS fix -> calculate from Europe/Warsaw schedule time.
+    // A course across midnight: its times run on past 86400 (00:05 after 23:52) and "now" is
+    // placed on the course's side of midnight (±12 h around its first stop).
+    let carry = 0;
+    let last: number | null = null;
+    const schedU: Array<number | null> = [];
+    for (const t of times) {
+      const s = secsFromHHMM(t.departure_time);
+      if (s != null) {
+        if (last != null && s + carry < last - 43200) carry += 86400;
+        last = s + carry;
+      }
+      schedU.push(s == null ? null : last);
+    }
+    const first = schedU.find((s) => s != null) ?? null;
+    const nowU = carry > 0 && first != null ? first + wrapDay(now - first) : now;
     for (let i = 0; i < times.length; i++) {
-      const sched = secsFromHHMM(times[i].departure_time);
-      if (sched != null && sched > now) {
+      const sched = schedU[i];
+      if (sched != null && sched > nowU) {
         if (i === 0) return { index: 0, isAtStop: true, progress: 0 };
-        const prevSched = secsFromHHMM(times[i - 1].departure_time);
+        const prevSched = schedU[i - 1];
         const progress =
-          prevSched != null ? Math.min(1, Math.max(0, (now - prevSched) / (sched - prevSched))) : 0;
+          prevSched != null ? Math.min(1, Math.max(0, (nowU - prevSched) / (sched - prevSched))) : 0;
         return { index: i, isAtStop: false, progress };
       }
     }

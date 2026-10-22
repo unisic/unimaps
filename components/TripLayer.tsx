@@ -6,6 +6,7 @@ import L from "leaflet";
 import { displayStopName, formatPlatform, isBusStation, isMzk, operatorColor } from "@/lib/client/format";
 import { makeVehicleIcon } from "@/lib/client/leafletIcons";
 import { prefersReducedMotion } from "@/lib/client/motion";
+import { useSmoothMotion } from "@/lib/client/smoothMotion";
 import type { LatLng, TripView, Vehicle } from "@/lib/client/types";
 import { acquireVehicleAnimator, releaseVehicleAnimator, type VehicleAnimator } from "@/lib/client/vehicleAnimator";
 
@@ -26,6 +27,7 @@ interface Props {
 
 function TripLayer({ trip, desktop, vehMeta, liveVehicle }: Props) {
   const map = useMap();
+  const [smoothMotion] = useSmoothMotion();
 
   /* last non-null live fix — if the vehicle drops off the poll mid-view
    * (finished/pruned) the marker holds there instead of teleporting back to
@@ -55,7 +57,8 @@ function TripLayer({ trip, desktop, vehMeta, liveVehicle }: Props) {
   if (trip) {
     if (lastLive) {
       iconLine = trip.line;
-      iconHeading = lastLive.bearing != null || lastLive.shape != null;
+      // a shape gives a heading only through the motion engine (smooth motion off = raw bearing)
+      iconHeading = lastLive.bearing != null || (smoothMotion && lastLive.shape != null);
     } else if (trip.vehicle) {
       iconLine = trip.line;
     } else if (trip.isLive && vehMeta) {

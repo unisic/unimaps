@@ -3,6 +3,8 @@ import { describe, it } from "node:test";
 
 import { LIVE_FETCH_TIMEOUT_MS } from "../lib/client/live-poll";
 import { createLivePoll } from "../lib/client/live-poll";
+import { getConnections, getTripsBatch, HttpError } from "../lib/client/api";
+import { getAnnouncementsSnapshot, refreshAnnouncements } from "../lib/client/announcements";
 
 /** Deterministic clock: timers fire in order as `advance` moves time; microtasks are flushed between them. */
 class FakeClock {
@@ -225,5 +227,72 @@ describe("createLivePoll — watchdog and stop", () => {
     assert.equal(h.oks.length, 0);
     assert.equal(h.calls.length, 1);
     assert.equal(h.clock.timers.size, 0);
+  });
+
+  it("stop() then start() mid-request: the aborted request is not a failure and the restart polls at once", async () => {
+    const h = harness({ load: (s, n) => (n === 1 ? abortable(s) : Promise.resolve("ok")) });
+    await boot(h);
+    h.poll.stop();
+    h.poll.start();
+    await h.clock.flush();
+    assert.equal(h.fails.length, 0);
+    assert.equal(h.calls.length, 2);
+    assert.equal(h.oks.length, 1);
+    assert.equal(h.poll.stats().failures, 0);
+    await h.clock.advance(10_001); // healthy 10 s cadence, not a 20 s backoff
+    assert.equal(h.calls.length, 3);
+    h.poll.stop();
+  });
+});
+
+describe("getConnections — a failed search is not an empty result", () => {
+  it("rejects on HTTP 502 instead of resolving [] (the modal shows its error/retry state)", async () => {
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async () => new Response("bad gateway", { status: 502 });
+    try {
+      await assert.rejects(getConnections("1", "2"), (e: unknown) => e instanceof HttpError && e.status === 502);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+});
+
+describe("announcements — stale-while-error", () => {
+  it("a failed refresh after a successful one keeps status 'ready' and the items (the unread dot stays)", async () => {
+    const realFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async () =>
+        Response.json({ hash: "h1", announcements: [{ content_markdown: "Objazd" }] });
+      await refreshAnnouncements();
+      assert.equal(getAnnouncementsSnapshot().status, "ready");
+      globalThis.fetch = async () => {
+        throw new TypeError("network down");
+      };
+      await refreshAnnouncements();
+      const snap = getAnnouncementsSnapshot();
+      assert.equal(snap.status, "ready");
+      assert.equal(snap.items.length, 1);
+      assert.equal(snap.hash, "h1");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+});
+
+describe("getTripsBatch — throttled batch", () => {
+  it("a 429 on /api/trips does not fan out into one /api/trip request per id", async () => {
+    const realFetch = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = async () => {
+      calls++;
+      return new Response("slow down", { status: 429 });
+    };
+    try {
+      const res = await getTripsBatch(["t429-a", "t429-b"]);
+      assert.equal(calls, 1);
+      assert.equal(res.size, 0);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
   });
 });

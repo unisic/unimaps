@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, memo, useEffect, useMemo } from "react";
+import { Fragment, memo, useEffect, useMemo, useRef } from "react";
 import { CircleMarker, Marker, Polyline, Tooltip, useMap } from "react-leaflet";
 import L from "leaflet";
 import { displayStopName } from "@/lib/client/format";
@@ -35,9 +35,14 @@ function JourneyLayer({ journey, desktop }: Props) {
     return pts;
   }, [journey, selectedIdx]);
 
-  // Fit bounds whenever journey or selected leg changes
+  // Fit bounds once per journey and selected leg: the routed legs replace the journey object
+  // ~1 s later and must not yank back a map the user has started moving
+  const fittedRef = useRef<string | null>(null);
   useEffect(() => {
     if (!allPoints.length) return;
+    const fitKey = `${journey?.gen}:${selectedIdx}`;
+    if (fittedRef.current === fitKey) return;
+    fittedRef.current = fitKey;
     const opts: L.FitBoundsOptions = desktop
       ? { paddingTopLeft: [440, 60], paddingBottomRight: [60, 40] }
       : { paddingTopLeft: [24, 80], paddingBottomRight: [24, Math.round(window.innerHeight * 0.35)] };
