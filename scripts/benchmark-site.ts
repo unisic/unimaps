@@ -15,6 +15,8 @@
 
 import { performance } from "node:perf_hooks";
 
+import { todayLocalISO } from "../lib/config";
+
 const host = process.argv[2] || process.env.BENCHMARK_HOST || "http://127.0.0.1:8080";
 
 interface Metric {
@@ -200,8 +202,9 @@ async function runBenchmark() {
   // --- 4. Timetable & Trip Optimization Comparison ---
   console.log(`[4/4] Comparing Timetable Loading & Trip Resolution...`);
   try {
+    const date = todayLocalISO();
     // 1. First Timetable request
-    const tt1 = await timedFetch(`${host}/api/stop/19117:39660/timetable?date=2026-09-14`);
+    const tt1 = await timedFetch(`${host}/api/stop/19117:39660/timetable?date=${date}`);
     metrics.push({
       name: "GET /api/stop/.../timetable (1st / warm-up)",
       category: "Timetable",
@@ -213,7 +216,7 @@ async function runBenchmark() {
     });
 
     // 2. Second Timetable request (Cached)
-    const tt2 = await timedFetch(`${host}/api/stop/19117:39660/timetable?date=2026-09-14`);
+    const tt2 = await timedFetch(`${host}/api/stop/19117:39660/timetable?date=${date}`);
     metrics.push({
       name: "GET /api/stop/.../timetable (2nd / cache hit)",
       category: "Timetable",
@@ -273,6 +276,8 @@ async function runBenchmark() {
         cached: true,
         notes: `Instant resolution in ${(tBatchCached1 - tBatchCached0).toFixed(1)}ms!`,
       });
+    } else {
+      console.log(`No trips in the ${date} timetable, trip/batch section skipped.`);
     }
   } catch (err: unknown) {
     console.error(`Error benchmarking timetables: ${err}`);
@@ -296,15 +301,13 @@ async function runBenchmark() {
   }
   console.log(`-------------------------------------------------------------------------------------------------------\n`);
 
-  console.log(`Optimization Summary:`);
-  console.log(`  ✓ Instant Vector Basemap Paint: Veil removed on first style paint, no longer waiting for 100% tiles.`);
-  console.log(`  ✓ Cold Startup Network Reduction: Initial basemap padding tuned to 0.08, reducing cold requests.`);
-  console.log(`  ✓ Timetable Batching: Replaced N individual HTTP calls with 1 batch /api/trips request.`);
-  console.log(`  ✓ Server-Side Caching: In-memory LRU cache for trips (4h) & timetables (15m) active.`);
-  console.log(`  ✓ Client-Side Row Caching: Reopening a stop timetable is 0ms.`);
-  console.log(`  ✓ iOS PWA Fullscreen: Added apple-touch-fullscreen and manifest fullscreen override.`);
-  console.log(`  ✓ iOS PWA TopBar Spacing: TopBar top offset includes 0.75rem clearance below safe-area blur.`);
-  console.log(`\nBenchmark completed successfully.\n`);
+  // External tile hosts (Map) are informational; our own endpoints must answer.
+  const failed = metrics.filter((m) => m.category !== "Map" && (m.status === 0 || m.status >= 500));
+  if (failed.length > 0) {
+    console.error(`Benchmark FAILED: ${failed.map((m) => `${m.name} (HTTP ${m.status})`).join(", ")}\n`);
+    process.exit(1);
+  }
+  console.log(`Benchmark finished: ${metrics.length} metrics, no HTTP failures.\n`);
 }
 
 runBenchmark().catch((err) => {

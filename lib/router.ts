@@ -264,14 +264,7 @@ function sameCalls(a: TripStopEntry[], b: TripStopEntry[]): boolean {
 }
 
 function loadIndex(): RouterIndex | null {
-  let dir = config.GTFS_DIR;
-  if (!fs.existsSync(path.join(dir, "stops.txt"))) {
-    const fixtureDir = path.join(process.cwd(), "test", "fixtures", "gtfs");
-    if (fs.existsSync(path.join(fixtureDir, "stops.txt"))) {
-      dir = fixtureDir;
-    }
-  }
-
+  const dir = config.GTFS_DIR;
   let stopsTxt: string;
   let tripsTxt: string;
   let timesTxt: string;
@@ -354,7 +347,7 @@ function loadIndex(): RouterIndex | null {
         serviceId: iServiceId >= 0 ? f[iServiceId] || "" : "",
         routeId: iRouteId >= 0 ? f[iRouteId] || "" : "",
         headsign: iHeadsign >= 0 ? f[iHeadsign] || "" : "",
-        line: (iShortName >= 0 ? f[iShortName] : "") || (iRouteId >= 0 ? f[iRouteId] : "") || "—",
+        line: (iShortName >= 0 ? f[iShortName] : "") || (iRouteId >= 0 ? (f[iRouteId] ?? "").replace(/^L_/, "") : "") || "—",
         stops: [],
         nums: new Int32Array(0),
         pattern: "",
@@ -517,6 +510,7 @@ function resolvePoles(input: string, idx: RouterIndex): Set<string> {
 
   // 3. Normalized cleanKey match (punctuation & diacritics stripped)
   const clean = cleanText(trimmed);
+  if (!clean) return new Set(); // only punctuation: "" would match every key below
   const byClean = idx.polesByCleanKey.get(clean);
   if (byClean && byClean.size > 0) return byClean;
 
@@ -554,7 +548,8 @@ function resolvePoles(input: string, idx: RouterIndex): Set<string> {
   }
   if (combined.size > 0) return combined;
 
-  // 7. Substring search on clean keys
+  // 7. Substring search on clean keys (a 1-2 letter fragment would match half the network)
+  if (clean.length < 3) return combined;
   for (const [k, poles] of idx.polesByCleanKey) {
     if (k.includes(clean)) {
       for (const p of poles) combined.add(p);
@@ -957,7 +952,7 @@ function searchDay(
 ): ConnectionItinerary[] {
   const table = dayTable(idx, date);
   const rides = query.directOnly ? 1 : MAX_RIDES;
-  const change = query.minTransferSecs ?? DEFAULT_CHANGE_SECS;
+  const change = Number.isFinite(query.minTransferSecs) ? query.minTransferSecs! : DEFAULT_CHANGE_SECS;
   const maxWait = query.maxTransferSecs ?? Infinity;
   for (let w = FIRST_WINDOW_SECS; ; w *= 2) {
     const span = Math.min(w, 86400);
@@ -985,7 +980,7 @@ export function findConnections(query: RouteQuery): ConnectionItinerary[] {
 
   // If searching for a future date without explicit time, start from the morning (00:00)
   const afterSecs = query.afterSecs ?? (isTodaySearch ? nowSecs() : 0);
-  const limit = Math.max(1, Math.min(query.limit ?? 5, 20));
+  const limit = Number.isFinite(query.limit) ? Math.max(1, Math.min(query.limit!, 20)) : 5;
 
   const origins = [...fromPoles].flatMap((id) => idx.stopNum.get(id) ?? []);
   const isTarget = new Uint8Array(idx.stopIds.length);

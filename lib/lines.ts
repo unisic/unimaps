@@ -21,7 +21,10 @@ export interface LineInfo {
   terminus: string;
 }
 
-let cache: LineInfo[] | null = null;
+// on globalThis, not in a module variable: Next bundles instrumentation (whose nightly rebuild
+// invalidates) and each route with its own copy of this module
+const CACHE_KEY = Symbol.for("kb-gtfs.lines-cache");
+const g = globalThis as typeof globalThis & { [CACHE_KEY]?: LineInfo[] | null };
 
 function compute(): LineInfo[] {
   let text: string;
@@ -49,11 +52,10 @@ function compute(): LineInfo[] {
 
 /** Lazily computed, process-lifetime cache of the GTFS line catalog. */
 export function getLines(): LineInfo[] {
-  if (!cache) cache = compute();
-  return cache;
+  return (g[CACHE_KEY] ??= compute());
 }
 
 /** Drop the cache after a GTFS rebuild so the next read sees the new feed. */
 export function invalidateLines(): void {
-  cache = null;
+  g[CACHE_KEY] = null;
 }

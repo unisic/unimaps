@@ -1,16 +1,30 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import path from "node:path";
+import { before, describe, it } from "node:test";
 
-import { findConnections } from "../lib/router";
+// lib/config.ts reads env at module load and node --test runs every file in its own process:
+// pin the fixture feed (not the developer's output/gtfs) and no MZK timetable, the same data as CI
+process.env.KB_GTFS_DIR = path.join(process.cwd(), "test", "fixtures", "gtfs");
+process.env.KB_MZK_TIMETABLE_FILE = path.join(process.cwd(), "test", "fixtures", "no-mzk-timetable.json");
+
+let findConnections: typeof import("../lib/router").findConnections;
+
+before(async () => {
+  ({ findConnections } = await import("../lib/router"));
+});
+
+// pinned weekday (Wed): without it the search used today's service day, so the suite went red on Saturdays/Sundays
+const DATE = "2026-09-30";
 
 describe("findConnections", () => {
   it("returns empty array for non-existent stops", () => {
-    const res = findConnections({ from: "NON_EXISTENT_STOP_XYZ", to: "ANOTHER_NON_EXISTENT" });
+    const res = findConnections({ from: "NON_EXISTENT_STOP_XYZ", to: "ANOTHER_NON_EXISTENT", date: DATE });
     assert.deepEqual(res, []);
   });
 
   it("finds direct connections between Bielsko-Biała D.A. and Szczyrk", () => {
     const res = findConnections({
+      date: DATE,
       from: "BIELSKO-BIAŁA D.A.",
       to: "SZCZYRK SKALITE",
       afterSecs: 14 * 3600,
@@ -29,6 +43,7 @@ describe("findConnections", () => {
 
   it("finds transfer connections when no direct line exists", () => {
     const res = findConnections({
+      date: DATE,
       from: "BIELSKO-BIAŁA WAPIENICA CENTRUM",
       to: "SZCZYRK SKALITE",
       afterSecs: 14 * 3600,
@@ -36,17 +51,17 @@ describe("findConnections", () => {
     });
     assert.ok(res.length > 0);
     const transfer = res.find((r) => r.type === "transfer");
-    if (transfer) {
-      assert.equal(transfer.transfersCount, 1);
-      assert.equal(transfer.legs.length, 2);
-      assert.ok((transfer.transferWaitMins ?? 0) >= 3);
-      assert.ok(transfer.legs[0].arrivalSecs <= transfer.legs[1].departureSecs);
-    }
+    assert.ok(transfer, "expected a transfer itinerary");
+    assert.equal(transfer.transfersCount, 1);
+    assert.equal(transfer.legs.length, 2);
+    assert.ok((transfer.transferWaitMins ?? 0) >= 3);
+    assert.ok(transfer.legs[0].arrivalSecs <= transfer.legs[1].departureSecs);
   });
 
   it("resolves stops by numeric ID as well as name", () => {
     // 10000 is Bielsko-Biała D.A.
     const res = findConnections({
+      date: DATE,
       from: "10000",
       to: "SZCZYRK SKALITE",
       afterSecs: 14 * 3600,
@@ -59,6 +74,7 @@ describe("findConnections", () => {
   it("filters strictly direct connections when directOnly: true", () => {
     // Direct search between D.A. and Szczyrk should return only direct itineraries
     const res = findConnections({
+      date: DATE,
       from: "BIELSKO-BIAŁA D.A.",
       to: "SZCZYRK SKALITE",
       afterSecs: 14 * 3600,
@@ -76,6 +92,7 @@ describe("findConnections", () => {
   it("returns empty when no direct connection exists and directOnly: true", () => {
     // Wapienica Centrum to Szczyrk Skalite has no direct connection
     const res = findConnections({
+      date: DATE,
       from: "BIELSKO-BIAŁA WAPIENICA CENTRUM",
       to: "SZCZYRK SKALITE",
       afterSecs: 14 * 3600,
@@ -101,6 +118,7 @@ describe("findConnections", () => {
 
   it("sorts by duration when sortBy: 'duration'", () => {
     const res = findConnections({
+      date: DATE,
       from: "BIELSKO-BIAŁA D.A.",
       to: "SZCZYRK SKALITE",
       afterSecs: 10 * 3600,
@@ -115,6 +133,7 @@ describe("findConnections", () => {
 
   it("resolves city name to main hub when searching connections", () => {
     const res = findConnections({
+      date: DATE,
       from: "SZCZYRK CENTRUM",
       to: "KĘTY",
       afterSecs: 12 * 3600,
@@ -126,6 +145,7 @@ describe("findConnections", () => {
 
   it("finds evening and next-morning connections without returning empty list", () => {
     const res = findConnections({
+      date: DATE,
       from: "SZCZYRK CENTRUM",
       to: "KĘTY",
       afterSecs: 20 * 3600 + 52 * 60,
@@ -217,5 +237,17 @@ describe("findConnections", () => {
       limit: 3,
     });
     assert.ok(res.length > 0, "should resolve KĘTY, D.A. UL. SIENKIEWICZA and find itineraries");
+  });
+
+  it("resolves no stop from input without letters or digits", () => {
+    // cleanText("-") is "", and an empty key is a substring of every stop name: every pole became an origin
+    assert.deepEqual(findConnections({ from: "-", to: "SZCZYRK SKALITE", date: DATE, afterSecs: 14 * 3600 }), []);
+  });
+
+  it("treats a NaN limit and minimum transfer as unset", () => {
+    const q = { from: "BIELSKO-BIAŁA WAPIENICA CENTRUM", to: "SZCZYRK SKALITE", date: DATE, afterSecs: 14 * 3600 };
+    const res = findConnections({ ...q, limit: NaN, minTransferSecs: NaN });
+    assert.deepEqual(res, findConnections(q));
+    assert.ok(res.length > 0);
   });
 });

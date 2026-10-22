@@ -1,7 +1,19 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import path from "node:path";
+import { before, describe, it } from "node:test";
 
-import { findConnections, ConnectionItinerary } from "../lib/router";
+import type { ConnectionItinerary } from "../lib/router";
+
+// lib/config.ts reads env at module load: pin the fixture feed (not the developer's output/gtfs)
+// and no MZK timetable, the same data as CI
+process.env.KB_GTFS_DIR = path.join(process.cwd(), "test", "fixtures", "gtfs");
+process.env.KB_MZK_TIMETABLE_FILE = path.join(process.cwd(), "test", "fixtures", "no-mzk-timetable.json");
+
+let findConnections: typeof import("../lib/router").findConnections;
+
+before(async () => {
+  ({ findConnections } = await import("../lib/router"));
+});
 
 function validateItinerary(it: ConnectionItinerary): void {
   assert.ok(it.departureSecs < it.arrivalSecs, `departure (${it.departureTime}) must be before arrival (${it.arrivalTime})`);
@@ -17,7 +29,9 @@ function validateItinerary(it: ConnectionItinerary): void {
     if (i < it.legs.length - 1) {
       const nextLeg = it.legs[i + 1];
       assert.ok(nextLeg.departureSecs >= leg.arrivalSecs, `transfer leg ${i + 2} departure >= leg ${i + 1} arrival`);
-      const minRequired = (it.walkMinutes ?? 0) > 0 ? (it.walkMinutes! * 60) + 90 : 180;
+      // per transfer, the router needs max(change, walk + 90 s); walkMins is rounded, so the walk is >= walkMins - 0.5 min
+      const walk = nextLeg.walkMins ?? 0;
+      const minRequired = Math.max(180, walk > 0 ? walk * 60 + 60 : 0);
       assert.ok(nextLeg.departureSecs - leg.arrivalSecs >= minRequired, "transfer wait time satisfies buffer");
     }
   }

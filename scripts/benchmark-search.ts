@@ -18,6 +18,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 
 import * as config from "../lib/config";
+import { col, parseCsvLine, splitLines } from "../lib/gtfs-csv";
 import { findConnections, RouteQuery, ConnectionItinerary } from "../lib/router";
 
 interface TestResult {
@@ -38,7 +39,7 @@ function parseTimeSecs(hhmmss: string): number {
 /**
  * Rigorously validates all physical and transit invariants of a connection itinerary.
  */
-function validateItineraryInvariants(it: ConnectionItinerary): string[] {
+function validateItineraryInvariants(it: ConnectionItinerary, query: RouteQuery): string[] {
   const issues: string[] = [];
 
   // 1. Overall trip times
@@ -113,7 +114,9 @@ function validateItineraryInvariants(it: ConnectionItinerary): string[] {
       if (waitSecs < 0) {
         issues.push(`Transfer from leg ${lIdx + 1} to ${lIdx + 2} has negative wait time: ${waitSecs}s`);
       }
-      const minRequired = (it.walkMinutes ?? 0) > 0 ? (it.walkMinutes! * 60) + 90 : 180;
+      // the router's rule per transfer: max(change, walk + 90 s); walkMins is rounded, hence 60 s slack
+      const walk = nextLeg.walkMins ?? 0;
+      const minRequired = Math.max(query.minTransferSecs ?? 180, walk > 0 ? walk * 60 + 60 : 0);
       if (waitSecs < minRequired) {
         issues.push(`Transfer from leg ${lIdx + 1} to ${lIdx + 2} wait time (${waitSecs}s) is less than required (${minRequired}s)`);
       }
@@ -200,7 +203,7 @@ async function runBenchmark(): Promise<void> {
       // Check invariants on all returned itineraries
       const allIssues: string[] = [];
       for (let i = 0; i < res.length; i++) {
-        const issues = validateItineraryInvariants(res[i]);
+        const issues = validateItineraryInvariants(res[i], query);
         if (issues.length > 0) {
           allIssues.push(`[Option ${i + 1}] ${issues.join("; ")}`);
         }
@@ -470,11 +473,12 @@ async function runBenchmark(): Promise<void> {
 
   // Collect candidate stops with departures
   const stopsContent = fs.readFileSync(path.join(dir, "stops.txt"), "utf-8");
-  const stopLines = stopsContent.trim().split("\n");
+  const stopLines = splitLines(stopsContent);
+  const iStopName = col(parseCsvLine(stopLines[0] ?? ""), "stop_name");
   const stopList: string[] = [];
   for (let i = 1; i < stopLines.length; i++) {
-    const parts = stopLines[i].split(",");
-    const name = parts[1]?.replace(/^"|"$/g, "").trim();
+    if (!stopLines[i]) continue;
+    const name = parseCsvLine(stopLines[i])[iStopName]?.trim();
     if (name && name.length > 2 && !stopList.includes(name)) {
       stopList.push(name);
     }

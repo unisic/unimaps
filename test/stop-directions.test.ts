@@ -1,12 +1,20 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import path from "node:path";
+import { before, describe, it } from "node:test";
 
-import { getStopDirections, invalidateStopDirections } from "@/lib/stop-directions";
+// lib/config.ts reads env at module load: pin the fixture feed, never the developer's output/gtfs
+process.env.KB_GTFS_DIR = path.join(process.cwd(), "test", "fixtures", "gtfs");
+
+let sd: typeof import("@/lib/stop-directions");
+
+before(async () => {
+  sd = await import("@/lib/stop-directions");
+});
 
 describe("stop-directions", () => {
   it("computes road directions and strips them from bus stations (D.A.)", () => {
-    invalidateStopDirections();
-    const dirs = getStopDirections();
+    sd.invalidateStopDirections();
+    const dirs = sd.getStopDirections();
     assert.ok(dirs.size > 0, "should compute directions from GTFS feed");
 
     // Bus stations (D.A.) must have NO direction arrows

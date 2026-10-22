@@ -19,7 +19,10 @@ export interface GtfsTripMeta {
   headsign: string;
 }
 
-let cache: Map<string, GtfsTripMeta> | null = null;
+// on globalThis, not in a module variable: Next bundles instrumentation (whose nightly rebuild
+// invalidates) and each route with its own copy of this module
+const CACHE_KEY = Symbol.for("kb-gtfs.gtfs-trips-cache");
+const g = globalThis as typeof globalThis & { [CACHE_KEY]?: Map<string, GtfsTripMeta> | null };
 
 function compute(): Map<string, GtfsTripMeta> {
   const out = new Map<string, GtfsTripMeta>();
@@ -56,11 +59,10 @@ function compute(): Map<string, GtfsTripMeta> {
 
 /** Line + headsign of an upstream KB trip id; null when the feed doesn't know it (new trip, no feed yet). */
 export function gtfsTripMeta(tripId: string | number): GtfsTripMeta | null {
-  if (!cache) cache = compute();
-  return cache.get(String(tripId)) ?? null;
+  return (g[CACHE_KEY] ??= compute()).get(String(tripId)) ?? null;
 }
 
 /** Drop the cache after a GTFS rebuild so the next read sees the new feed. */
 export function invalidateGtfsTrips(): void {
-  cache = null;
+  g[CACHE_KEY] = null;
 }

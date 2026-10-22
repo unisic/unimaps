@@ -84,16 +84,13 @@ function clusterRoadDirections(bearings: number[]): number[] {
   return result;
 }
 
-let cache: Map<string, number[]> | null = null;
+// on globalThis, not in a module variable: Next bundles instrumentation (whose nightly rebuild
+// invalidates) and each route with its own copy of this module
+const CACHE_KEY = Symbol.for("kb-gtfs.stop-directions-cache");
+const g = globalThis as typeof globalThis & { [CACHE_KEY]?: Map<string, number[]> | null };
 
 function compute(): Map<string, number[]> {
-  let dir = config.GTFS_DIR;
-  if (!fs.existsSync(path.join(dir, "stops.txt"))) {
-    const fixtureDir = path.join(process.cwd(), "test", "fixtures", "gtfs");
-    if (fs.existsSync(path.join(fixtureDir, "stops.txt"))) {
-      dir = fixtureDir;
-    }
-  }
+  const dir = config.GTFS_DIR;
   const result = new Map<string, number[]>();
   let stopsTxt: string;
   let timesTxt: string;
@@ -196,11 +193,10 @@ function compute(): Map<string, number[]> {
 
 /** Lazily computed, process-lifetime cache of stop_id → up to two bearings. */
 export function getStopDirections(): Map<string, number[]> {
-  if (!cache) cache = compute();
-  return cache;
+  return (g[CACHE_KEY] ??= compute());
 }
 
 /** Drop the cache after a GTFS rebuild so the next read sees the new feed. */
 export function invalidateStopDirections(): void {
-  cache = null;
+  g[CACHE_KEY] = null;
 }

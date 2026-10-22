@@ -17,6 +17,10 @@ import { KbApi, pyTruthy } from "./kb-api";
 import type { Stop, Trip } from "./types";
 
 const WEEKDAY_FIELDS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"] as const;
+/** calendar/feed_info validity from the build date; the feed is rebuilt daily, this only bounds a stalled rebuild */
+const FEED_VALID_DAYS = 30;
+/** share of failed upstream fetches above which a build throws (and the old feed stays) instead of publishing */
+const MAX_FAILED_SHARE = 0.1;
 
 type Row = Record<string, string | number>;
 
@@ -88,31 +92,20 @@ function weekdayMonday0(date: string): number {
   return (dt.getUTCDay() + 6) % 7;
 }
 
-function getServiceDates(refDate: string): { weekdayDate: string; saturdayDate: string; sundayDate: string } {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(refDate);
-  if (!m) throw new Error(`invalid date: ${refDate} (expected YYYY-MM-DD)`);
-  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
-  const dt = new Date(Date.UTC(y, mo - 1, d));
-  const dow = dt.getUTCDay(); // 0 = Sun, 1 = Mon, ..., 6 = Sat
+/** `date` (YYYY-MM-DD, already validated) shifted by `days`. */
+function addDays(date: string, days: number): string {
+  return new Date(Date.parse(`${date}T00:00:00Z`) + days * 86400_000).toISOString().slice(0, 10);
+}
 
-  let daysToMon = 1 - dow;
-  let daysToSat = 6 - dow;
-  let daysToSun = 7 - dow;
-  if (dow === 0) {
-    daysToMon = 1;
-    daysToSat = 6;
-    daysToSun = 0;
-  }
-
-  const toIso = (offset: number): string => {
-    const target = new Date(dt.getTime() + offset * 86400_000);
-    return target.toISOString().slice(0, 10);
-  };
-
+/** The day each service is sampled on: the weekday service from today (the next Monday on a weekend),
+ *  the next Saturday and Sunday (today when it is one). Never a past day: the daily rebuild then picks
+ *  up a mid-week timetable change, and one holiday Monday does not stand in for the whole week. */
+export function getServiceDates(refDate: string): { weekdayDate: string; saturdayDate: string; sundayDate: string } {
+  const dow = (weekdayMonday0(refDate) + 1) % 7; // 0 = Sun, 1 = Mon, ..., 6 = Sat
   return {
-    weekdayDate: toIso(daysToMon),
-    saturdayDate: toIso(daysToSat),
-    sundayDate: toIso(daysToSun),
+    weekdayDate: addDays(refDate, dow === 6 ? 2 : dow === 0 ? 1 : 0),
+    saturdayDate: addDays(refDate, (6 - dow + 7) % 7),
+    sundayDate: addDays(refDate, (7 - dow) % 7),
   };
 }
 
@@ -197,7 +190,7 @@ function writeGtfs(
         feed_publisher_url: config.AGENCY_URL,
         feed_lang: config.AGENCY_LANG,
         feed_start_date: dateCompact,
-        feed_end_date: "20261231",
+        feed_end_date: addDays(date, FEED_VALID_DAYS).replace(/-/g, ""),
         feed_version: `KB-GTFS ${date}`,
       },
     ],
@@ -214,7 +207,7 @@ interface ServiceConfig {
 async function build(
   date: string,
   outDir: string,
-  concurrency: number,
+  api: KbApi,
   doZip: boolean,
   fullSchedule: boolean,
 ): Promise<void> {
@@ -228,7 +221,7 @@ async function build(
   fs.rmSync(tmpDir, { recursive: true, force: true });
   fs.mkdirSync(tmpDir, { recursive: true });
   try {
-    await buildInto(date, tmpDir, concurrency, doZip, fullSchedule);
+    await buildInto(date, tmpDir, api, doZip, fullSchedule);
   } catch (err) {
     fs.rmSync(tmpDir, { recursive: true, force: true });
     throw err;
@@ -252,15 +245,28 @@ async function build(
 async function buildInto(
   date: string,
   outDir: string,
-  concurrency: number,
+  api: KbApi,
   doZip: boolean,
   fullSchedule: boolean,
 ): Promise<void> {
-  const api = new KbApi({ concurrency });
   const rev = await api.fetchRevision();
   console.log(`[gtfs] stops revision: ${rev}`);
   const stops = await api.fetchStops(rev);
   console.log(`[gtfs] loaded ${stops.length} stops`);
+  if (stops.length === 0) throw new Error("upstream returned no stops, keeping the old feed");
+
+  // fetchMany turns a failed fetch into null, the same as "no data": count the failures, so a build
+  // during an upstream outage or rate limiting throws instead of publishing a partial feed
+  let failed = 0;
+  const counted = <T, R>(fn: (x: T) => Promise<R>) => (x: T): Promise<R> =>
+    fn(x).catch((err: unknown) => {
+      failed++;
+      throw err;
+    });
+  const checkFailures = (what: string, total: number): void => {
+    if (failed > total * MAX_FAILED_SHARE) throw new Error(`${failed}/${total} ${what} fetches failed, keeping the old feed`);
+    failed = 0;
+  };
 
   const stopByUrl = new Map(stops.map((s) => [s.urlId, s]));
   const stopById = new Map(stops.map((s) => [s.internalId, s]));
@@ -306,7 +312,8 @@ async function buildInto(
   const tripToServices = new Map<string, Set<string>>();
   for (const svc of services) {
     console.log(`[gtfs] fetching timetables for ${svc.id} (${svc.date}) ...`);
-    const results = await api.fetchMany((s: Stop) => api.fetchTimetable(s.urlId, svc.date), stops);
+    const results = await api.fetchMany(counted((s: Stop) => api.fetchTimetable(s.urlId, svc.date)), stops);
+    checkFailures(`${svc.id} timetable`, stops.length);
     for (const [, tt] of results) {
       if (!pyTruthy(tt)) continue;
       const departures = (tt as Record<string, unknown>).departures;
@@ -329,7 +336,8 @@ async function buildInto(
   console.log(`[gtfs] discovered ${tripToServices.size} unique trips across all services`);
 
   console.log(`[gtfs] fetching trip details ...`);
-  const tripResults = await api.fetchMany((t: string) => api.fetchTrip(t, 0), [...tripToServices.keys()].sort());
+  const tripResults = await api.fetchMany(counted((t: string) => api.fetchTrip(t, 0)), [...tripToServices.keys()].sort());
+  checkFailures("trip", tripToServices.size);
 
   const routes = new Map<string, Row>();
   const shapesRows: Row[] = [];
@@ -445,31 +453,23 @@ async function buildInto(
     friday: s.days.friday,
     saturday: s.days.saturday,
     sunday: s.days.sunday,
-    start_date: "20260101",
-    end_date: "20261231",
+    start_date: date.replace(/-/g, ""),
+    end_date: addDays(date, FEED_VALID_DAYS).replace(/-/g, ""),
   }));
 
-  // Write to a temporary directory first so readers never see half-written feeds
-  const tmpDir = path.join(path.dirname(outDir), `.gtfs_tmp_${Date.now()}`);
-  fs.mkdirSync(tmpDir, { recursive: true });
+  if (tripsRows.length === 0) throw new Error("no trips built, keeping the old feed");
 
-  writeGtfs(tmpDir, stops, routes, tripsRows, finalStopTimes, shapesRows, calendarRows, date);
+  // outDir is build()'s temp sibling, published by rename only after this returns
+  writeGtfs(outDir, stops, routes, tripsRows, finalStopTimes, shapesRows, calendarRows, date);
 
   if (doZip) {
-    const zp = path.join(tmpDir, "kb_gtfs.zip");
+    const zp = path.join(outDir, "kb_gtfs.zip");
     const files: Record<string, Uint8Array> = {};
-    for (const name of fs.readdirSync(tmpDir)) {
-      if (name.endsWith(".txt")) files[name] = new Uint8Array(fs.readFileSync(path.join(tmpDir, name)));
+    for (const name of fs.readdirSync(outDir)) {
+      if (name.endsWith(".txt")) files[name] = new Uint8Array(fs.readFileSync(path.join(outDir, name)));
     }
     fs.writeFileSync(zp, zipSync(files, { level: 6 }));
   }
-
-  // Atomically publish files into outDir
-  fs.mkdirSync(outDir, { recursive: true });
-  for (const name of fs.readdirSync(tmpDir)) {
-    fs.copyFileSync(path.join(tmpDir, name), path.join(outDir, name));
-  }
-  fs.rmSync(tmpDir, { recursive: true, force: true });
 
   console.log(`[gtfs] wrote files to ${outDir}`);
   console.log(`[gtfs] trips=${tripsRows.length} routes=${routes.size} stop_times=${finalStopTimes.length} shapes=${shapesRows.length}`);
@@ -488,6 +488,8 @@ export interface BuildGtfsOptions {
    * If false, builds a single-day feed for the given date.
    */
   fullSchedule?: boolean;
+  /** Upstream client (tests inject a fake); defaults to a new KbApi with `concurrency`. */
+  api?: KbApi;
 }
 
 /** Build and atomically publish a GTFS feed. */
@@ -495,7 +497,7 @@ export async function buildGtfs(opts: BuildGtfsOptions = {}): Promise<void> {
   await build(
     opts.date ?? config.todayLocalISO(),
     opts.outDir ?? config.GTFS_DIR,
-    opts.concurrency ?? config.DEFAULT_CONCURRENCY,
+    opts.api ?? new KbApi({ concurrency: opts.concurrency ?? config.DEFAULT_CONCURRENCY }),
     opts.zip ?? true,
     opts.fullSchedule ?? true,
   );
