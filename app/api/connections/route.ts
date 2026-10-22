@@ -1,5 +1,6 @@
-import { badRequest } from "@/lib/api-helpers";
+import { badRequest, internalError, isValidDate } from "@/lib/api-helpers";
 import { getMergedStopsView, getShapes, startPoller } from "@/lib/poller-singleton";
+import { allowRequest, clientIp, tooManyRequests } from "@/lib/rate-limit";
 import { findConnections, type ConnectionItinerary } from "@/lib/router";
 import { rawTripId } from "@/lib/shape-patterns";
 
@@ -7,7 +8,7 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const INT_RE = /^\d{1,4}$/;
 
 /** Router stop ids of a merged stop: its KB pole and every MZK symbol its departures board asks
  *  (a station hub lists several). Undefined for a name the merged list does not know. */
@@ -50,6 +51,8 @@ function attachLegShapes(connections: ConnectionItinerary[]): void {
  * In-memory connection search between two stops.
  */
 export async function GET(req: Request): Promise<Response> {
+  // the search is synchronous CPU work on the event loop the pollers share
+  if (!allowRequest(clientIp(req))) return tooManyRequests();
   let url: URL;
   try {
     url = new URL(req.url);
@@ -76,12 +79,16 @@ export async function GET(req: Request): Promise<Response> {
     afterSecs = h * 3600 + m * 60;
   }
 
-  if (date && !DATE_RE.test(date)) {
+  if (date && !isValidDate(date)) {
     return badRequest("Invalid 'date' parameter (expected YYYY-MM-DD)");
   }
 
+  // parseInt("abc") is NaN, which the router's defaults and clamps do not catch
+  if (minTransferParam && !INT_RE.test(minTransferParam)) return badRequest("Invalid 'minTransfer' parameter (expected minutes)");
+  if (limitParam && !INT_RE.test(limitParam)) return badRequest("Invalid 'limit' parameter (expected an integer)");
+
   const directOnly = directParam === "true" || directParam === "1";
-  const minTransferSecs = minTransferParam ? Math.max(0, Number.parseInt(minTransferParam, 10) * 60) : undefined;
+  const minTransferSecs = minTransferParam ? Number.parseInt(minTransferParam, 10) * 60 : undefined;
   const sortBy = sortByParam === "duration" || sortByParam === "arrival" || sortByParam === "departure"
     ? sortByParam
     : undefined;
@@ -108,7 +115,7 @@ export async function GET(req: Request): Promise<Response> {
       { count: connections.length, connections },
       { headers: { "Cache-Control": "public, max-age=60" } },
     );
-  } catch {
-    return Response.json({ error: "Internal error" }, { status: 500 });
+  } catch (err) {
+    return internalError("connections", err);
   }
 }

@@ -13,7 +13,8 @@ const ID_RE = /^[A-Za-z0-9:._-]{1,64}$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 export function isValidId(v: string): boolean {
-  return ID_RE.test(v);
+  // "." / ".." are dot segments: fetch() would normalise /api/trip/../0 into /api/0
+  return ID_RE.test(v) && v !== "." && v !== "..";
 }
 
 /** Road-shape wire id: "kb:<12 hex>" or "mzk:<variant>", optionally ".<rev6>". */
@@ -23,8 +24,12 @@ export function isValidShapeId(v: string): boolean {
   return SHAPE_ID_RE.test(v);
 }
 
+/** A real calendar day: 2026-02-31 would reach KB verbatim while MZK's Date.UTC rolls it into March. */
 export function isValidDate(v: string): boolean {
-  return DATE_RE.test(v);
+  if (!DATE_RE.test(v)) return false;
+  const [y, m, d] = v.split("-").map(Number);
+  const t = new Date(Date.UTC(y, m - 1, d));
+  return t.getUTCFullYear() === y && t.getUTCMonth() === m - 1 && t.getUTCDate() === d;
 }
 
 /** 500 for a failure inside our own code (no upstream involved) — logs the

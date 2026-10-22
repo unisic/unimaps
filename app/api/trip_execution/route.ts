@@ -29,10 +29,11 @@ export async function GET(req: Request): Promise<Response> {
       });
     }
 
+    const reqMs = Date.now(); // a reply landing after a newer poller fix must not overwrite it
     const data = await getApi().fetchTripExecution(execId, index);
     let body: unknown = pyTruthy(data) ? data : {};
     if (pyTruthy(data) && isRecord(data)) {
-      const pos = getPoller().ingestTripExecution(execId, data);
+      const pos = getPoller().ingestTripExecution(execId, data, reqMs);
       // stored road geometry for this trip's stop pattern (never mutate `data`); `arrived` = recorded arrival
       // epoch secs per times[] position, which upstream drops for passed stops
       body = { ...data, ...kbShapeRef(asRecord(data.trip)), ...(pos?.arrivals ? { arrived: pos.arrivals.arrived } : {}) };

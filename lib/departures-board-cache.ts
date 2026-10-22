@@ -5,7 +5,9 @@ export interface Board {
   rows: Array<Record<string, unknown>>;
   /** upstream legs that failed ("kb" / "mzk") */
   failed: Array<"kb" | "mzk">;
-  /** how many operators were asked (1, or 2 for a BOTH stop) */
+  /** how many upstream fetches failed (a hub's MZK symbols count one each) */
+  failedLegs: number;
+  /** how many upstream fetches were made (KB + one per MZK symbol) */
   legs: number;
 }
 

@@ -12,12 +12,20 @@ const CAP = 600; // burst capacity per IP (accommodates 300+ departure timetable
 const REFILL_PER_SEC = 40; // sustained requests/sec per IP once the burst is spent
 const MAX_KEY_LEN = 64; // headers are client-controlled; don't key on arbitrary blobs
 const MAX_BUCKETS = 10_000; // hard cap so spoofed keys can't grow the map unbounded
+const SWEEP_EVERY_MS = 10_000; // a full-map idle sweep at most this often, not on every request of a flood
 
 interface Bucket {
   tokens: number;
   last: number;
 }
 const buckets = new Map<string, Bucket>();
+let lastSweep = 0;
+
+function sweepIdle(now: number): void {
+  if (now - lastSweep < SWEEP_EVERY_MS) return;
+  lastSweep = now;
+  for (const [k, v] of buckets) if (now - v.last > 60_000) buckets.delete(k);
+}
 
 // Global backstop across ALL clients: even when per-IP keys are spoofed
 // (direct exposure, forged X-Forwarded-For), total upstream throughput stays
@@ -49,14 +57,17 @@ export function clientIp(req: Request): string {
   return req.headers.get("x-real-ip") || "local";
 }
 
-/** true = allowed; false = over the limit (caller should return 429). */
-export function allowRequest(ip: string): boolean {
+/**
+ * true = allowed; false = over the limit (caller should return 429). `cost` = upstream fetches the
+ * request will make (a batch route charges one per id), so one token never buys a fan-out.
+ */
+export function allowRequest(ip: string, cost = 1): boolean {
   const now = Date.now();
   const key = ip.slice(0, MAX_KEY_LEN);
   let b = buckets.get(key);
   if (!b) {
     if (buckets.size >= MAX_BUCKETS) {
-      for (const [k, v] of buckets) if (now - v.last > 60_000) buckets.delete(k);
+      sweepIdle(now);
       // still full: evict oldest-inserted entries (cheap via Map iteration order)
       while (buckets.size >= MAX_BUCKETS) {
         const oldest = buckets.keys().next().value;
@@ -71,12 +82,10 @@ export function allowRequest(ip: string): boolean {
   }
   refill(globalBucket, now, GLOBAL_CAP, GLOBAL_REFILL_PER_SEC);
   // opportunistic sweep so idle IPs don't accumulate in a long-lived process
-  if (buckets.size > 5000) {
-    for (const [k, v] of buckets) if (now - v.last > 60_000) buckets.delete(k);
-  }
-  if (b.tokens < 1 || globalBucket.tokens < 1) return false;
-  b.tokens -= 1;
-  globalBucket.tokens -= 1;
+  if (buckets.size > 5000) sweepIdle(now);
+  if (b.tokens < cost || globalBucket.tokens < cost) return false;
+  b.tokens -= cost;
+  globalBucket.tokens -= cost;
   return true;
 }
 

@@ -33,7 +33,7 @@ export async function GET(
     const key = `${designator}|${m?.operator ?? ""}|${(m?.mzkSymbols ?? (m?.mzkSymbol ? [m.mzkSymbol] : [])).join(",")}`;
     const { value: board } = await departuresBoardCache.get(key, () => buildBoard(designator));
     // every upstream leg failed: an honest 502, not a 200 "no departures" that blanks a populated list
-    if (board.failed.length >= board.legs) throw new Error(`all ${board.legs} upstream leg(s) failed (${board.failed.join(",")})`);
+    if (board.failedLegs >= board.legs) throw new Error(`all ${board.legs} upstream leg(s) failed (${board.failed.join(",")})`);
     return Response.json(
       { rows: board.rows, server_ts: Date.now() / 1000, ...(board.failed.length ? { warnings: board.failed } : {}) },
       { headers: { "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0", Pragma: "no-cache" } },
@@ -51,6 +51,7 @@ async function buildBoard(designator: string): Promise<Board> {
 
     /* a failed upstream fetch used to look exactly like "no departures": a BOTH stop then showed one operator's rows only */
     const failed = new Set<"kb" | "mzk">();
+    let failedLegs = 0; // per fetch: a hub asks several MZK symbols, one failed symbol is not a failed operator
     const fetchMzk = async (symbol: string) => {
       try {
         const mzkApi = getMzkApi();
@@ -86,7 +87,7 @@ async function buildBoard(designator: string): Promise<Board> {
           });
 
           // Register in courseMetaMap so trip resolution has line/variant/direction
-          mzkPoller.courseMetaMap.set(d.courseId, {
+          mzkPoller.noteCourse(d.courseId, {
             lineName: d.lineName,
             variantId: d.variantId,
             direction: d.directionName,
@@ -123,6 +124,7 @@ async function buildBoard(designator: string): Promise<Board> {
         });
       } catch (err) {
         failed.add("mzk");
+        failedLegs++;
         log.warn("mzk-departures", `Realtime fetch failed for symbol ${symbol}: ${err}`);
         return [];
       }
@@ -148,6 +150,7 @@ async function buildBoard(designator: string): Promise<Board> {
         }
       } catch (err) {
         failed.add("kb");
+        failedLegs++;
         log.warn("kb-departures", `Departures fetch failed for ${kbDesig}: ${err}`);
       }
       return [];
@@ -158,6 +161,7 @@ async function buildBoard(designator: string): Promise<Board> {
     const respond = (rows: Array<Record<string, unknown>>, legs: number): Board => ({
       rows: preSortRows(rows as TimingRow[], Date.now() / 1000) as Array<Record<string, unknown>>,
       failed: [...failed],
+      failedLegs,
       legs,
     });
 
@@ -177,7 +181,7 @@ async function buildBoard(designator: string): Promise<Board> {
         const id = String((r as Record<string, unknown>).trip_execution_id);
         return !seen.has(id) && !!seen.add(id);
       });
-      return respond([...mzkRows, ...kbRows] as Array<Record<string, unknown>>, mzkRes.length > 0 ? 2 : 1);
+      return respond([...mzkRows, ...kbRows] as Array<Record<string, unknown>>, 1 + mzkRes.length);
     }
 
     if (designator.startsWith("mzk:")) {

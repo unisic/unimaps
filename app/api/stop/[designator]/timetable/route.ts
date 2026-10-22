@@ -26,14 +26,16 @@ export async function GET(
 
     const mzkPoller = getMzkPoller();
     // one shared, memoized merge (same list the client got from /api/stops) — never an ad hoc re-merge
-    const mergedStop = getMergedStopsView().lookup(designator);
+    const view = getMergedStopsView();
+    const mergedStop = view.lookup(designator);
 
     /* a failed upstream fetch used to look like "no departures today" — and the 200 was cached for 15 min */
     const failed = new Set<"kb" | "mzk">();
     const respond = (body: object): Response =>
       Response.json(
         { ...body, ...(failed.size ? { warnings: [...failed] } : {}) },
-        { headers: { "Cache-Control": failed.size ? "no-store" : "public, max-age=900" } },
+        // a partial view (one operator's stop list still missing) may answer a BOTH stop as one operator only
+        { headers: { "Cache-Control": failed.size || view.partial ? "no-store" : "public, max-age=900" } },
       );
 
     const fetchMzk = async (symbol: string): Promise<TimetableDeparture[]> => {
@@ -57,7 +59,7 @@ export async function GET(
               operator: "MZK",
             });
             // Cache metadata for trip detail resolution
-            mzkPoller.courseMetaMap.set(dep.courseId, {
+            mzkPoller.noteCourse(dep.courseId, {
               lineName,
               variantId: dep.variantId,
               direction,

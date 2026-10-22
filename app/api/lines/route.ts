@@ -1,3 +1,4 @@
+import { internalError } from "@/lib/api-helpers";
 import { getLines } from "@/lib/lines";
 import { getCombinedLines, startPoller } from "@/lib/poller-singleton";
 
@@ -14,7 +15,7 @@ export async function GET(): Promise<Response> {
       { count: lines.length, lines },
       { headers: { "Cache-Control": "public, max-age=3600" } },
     );
-  } catch {
-    return Response.json({ error: "Internal error" }, { status: 500 });
+  } catch (err) {
+    return internalError("lines", err);
   }
 }

@@ -30,6 +30,8 @@ describe("isValidId", () => {
     assert.equal(isValidId("a%2fb"), false);
     assert.equal(isValidId("a b"), false);
     assert.equal(isValidId("a\nb"), false);
+    assert.equal(isValidId("."), false); // dot segments: fetch() normalises /api/trip/../0 into /api/0
+    assert.equal(isValidId(".."), false);
   });
 });
 
@@ -45,6 +47,9 @@ describe("isValidDate", () => {
     assert.equal(isValidDate("2026-07-21T00"), false);
     assert.equal(isValidDate("2026-07-21 "), false);
     assert.equal(isValidDate(""), false);
+    assert.equal(isValidDate("2026-02-31"), false); // shape-valid, but not a day
+    assert.equal(isValidDate("2026-13-01"), false);
+    assert.equal(isValidDate("2028-02-29"), true);
   });
 });
 

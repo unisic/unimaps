@@ -7,9 +7,14 @@ export const runtime = "nodejs";
 
 const MAX_BATCH_IDS = 300;
 
-async function handleBatch(req: Request, rawIds: string[]): Promise<Response> {
-  if (!allowRequest(clientIp(req))) return tooManyRequests();
-
+/**
+ * GET /api/trips?ids=123,456,789 — batch trip detail resolution.
+ */
+export async function GET(req: Request): Promise<Response> {
+  const url = new URL(req.url);
+  const idsParam = url.searchParams.get("ids");
+  if (!idsParam) return badRequest("Missing ?ids= query parameter");
+  const rawIds = [...new Set(idsParam.split(",").map((s) => s.trim()).filter(Boolean))];
   if (!rawIds.length) return badRequest("ids list cannot be empty");
   if (rawIds.length > MAX_BATCH_IDS) return badRequest(`Exceeded maximum of ${MAX_BATCH_IDS} ids`);
 
@@ -17,16 +22,22 @@ async function handleBatch(req: Request, rawIds: string[]): Promise<Response> {
     if (!isValidId(id)) return badRequest(`Invalid trip id: ${id}`);
   }
 
+  const api = getApi();
+  const kbIds = rawIds.filter((id) => !id.startsWith("mzk:"));
+  const mzkIds = rawIds.filter((id) => id.startsWith("mzk:"));
+  // one token per id that costs an upstream fetch (MZK ids always do), so a batch is not a 300x amplifier
+  const cost = Math.max(1, mzkIds.length + kbIds.filter((id) => !api.hasCachedTrip(id)).length);
+  if (!allowRequest(clientIp(req), cost)) return tooManyRequests();
+
   try {
     await startPoller();
-    const kbIds = rawIds.filter((id) => !id.startsWith("mzk:"));
-    const mzkIds = rawIds.filter((id) => id.startsWith("mzk:"));
-
     const trips: Record<string, unknown> = {};
+    let failed = 0;
 
     if (kbIds.length > 0) {
-      const kbTrips = await getApi().fetchTripsBatch(kbIds);
-      for (const [id, t] of Object.entries(kbTrips)) {
+      const kb = await api.fetchTripsBatch(kbIds);
+      failed += kb.failed;
+      for (const [id, t] of Object.entries(kb.trips)) {
         // cached shared objects — spread, never mutate
         trips[id] = t && typeof t === "object" ? { ...(t as Record<string, unknown>), ...kbShapeRef(t, "background") } : t;
       }
@@ -50,6 +61,7 @@ async function handleBatch(req: Request, rawIds: string[]): Promise<Response> {
                 : null,
             ] as const;
           } catch {
+            failed += 1;
             return [id, null] as const;
           }
         }),
@@ -59,38 +71,12 @@ async function handleBatch(req: Request, rawIds: string[]): Promise<Response> {
       }
     }
 
-    return Response.json(
-      { count: Object.keys(trips).length, trips },
-      { headers: { "Cache-Control": "public, max-age=3600" } },
-    );
+    // a failed fetch is not "no such trip": never cache it, and with nothing resolved let the client fall back
+    if (failed === rawIds.length) return upstreamError("trips", new Error(`all ${failed} trip fetches failed`));
+    const pending = Object.values(trips).some((t) => (t as { shape_status?: string } | null)?.shape_status === "pending");
+    const cacheControl = failed > 0 ? "no-store" : `public, max-age=${pending ? 300 : 3600}`;
+    return Response.json({ count: Object.keys(trips).length, trips }, { headers: { "Cache-Control": cacheControl } });
   } catch (err) {
     return upstreamError("trips", err);
-  }
-}
-
-/**
- * GET /api/trips?ids=123,456,789 — batch trip detail resolution.
- */
-export async function GET(req: Request): Promise<Response> {
-  const url = new URL(req.url);
-  const idsParam = url.searchParams.get("ids");
-  if (!idsParam) return badRequest("Missing ?ids= query parameter");
-  const rawIds = idsParam.split(",").map((s) => s.trim()).filter(Boolean);
-  return handleBatch(req, rawIds);
-}
-
-/**
- * POST /api/trips — JSON body { ids: string[] } for large batches.
- */
-export async function POST(req: Request): Promise<Response> {
-  try {
-    const body = (await req.json()) as { ids?: unknown };
-    if (!body || !Array.isArray(body.ids)) {
-      return badRequest("Body must be JSON { ids: string[] }");
-    }
-    const rawIds = body.ids.map(String).map((s) => s.trim()).filter(Boolean);
-    return handleBatch(req, rawIds);
-  } catch {
-    return badRequest("Invalid JSON body");
   }
 }
