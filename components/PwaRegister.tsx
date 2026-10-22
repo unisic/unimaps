@@ -45,7 +45,7 @@ export default function PwaRegister() {
     document.addEventListener("visibilitychange", onVisibility);
 
     navigator.serviceWorker
-      .register("/sw.js")
+      .register(`/sw.js?v=${process.env.NEXT_PUBLIC_BUILD_ID ?? ""}`)
       .then((r) => {
         reg = r;
         // an update downloaded on a previous visit is already waiting

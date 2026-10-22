@@ -5,10 +5,15 @@
  *  - /api/* is NEVER cached — live vehicle and stop data must not be served stale;
  *  - cross-origin requests (map tiles, OSRM) pass through untouched;
  *  - pre-caches app shell and icons on install for immediate offline readiness;
- *  - hashed build assets (/_next/static) and static assets are cache-first;
- *  - navigations are network-first with cached shell fallback.
+ *  - hashed build assets (/_next/static) are cache-first;
+ *  - non-hashed icons / manifest are stale-while-revalidate (a changed file
+ *    reaches installed PWAs on the next load);
+ *  - navigations are network-first, cached per path ("/", "/brygady") with
+ *    the "/" shell as the last offline fallback.
  */
-const CACHE = "kb-shell-v2";
+// PwaRegister registers /sw.js?v=<build id>: every deploy is a new SW (update toast) whose
+// activate drops the previous deploy's cache, so hashed chunks never pile up
+const CACHE = "kb-shell-" + (new URL(self.location.href).searchParams.get("v") || "v2");
 const SHELL = "/";
 
 const PRECACHE_URLS = [
@@ -66,8 +71,8 @@ self.addEventListener("fetch", (event) => {
   if (url.origin !== self.location.origin) return;
   if (url.pathname.startsWith("/api/")) return;
 
-  // immutable build assets + icons: cache-first
-  if (url.pathname.startsWith("/_next/static/") || /\.(png|svg|ico|webmanifest)$/.test(url.pathname)) {
+  // immutable build assets: cache-first
+  if (url.pathname.startsWith("/_next/static/")) {
     event.respondWith(
       (async () => {
         const cache = await caches.open(CACHE);
@@ -81,6 +86,24 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
+  // icons / manifest keep their URL across deploys: serve the cached copy, refresh it behind
+  if (/\.(png|svg|ico|webmanifest)$/.test(url.pathname)) {
+    event.respondWith(
+      (async () => {
+        const cache = await caches.open(CACHE);
+        const hit = await cache.match(req);
+        const fresh = fetch(req).then((resp) => {
+          if (resp.ok) return cache.put(req, resp.clone()).then(() => resp);
+          return resp;
+        });
+        if (!hit) return fresh;
+        event.waitUntil(fresh.catch(() => {}));
+        return hit;
+      })(),
+    );
+    return;
+  }
+
   // page navigations: network-first, cached shell offline
   if (req.mode === "navigate") {
     event.respondWith(
@@ -88,10 +111,10 @@ self.addEventListener("fetch", (event) => {
         const cache = await caches.open(CACHE);
         try {
           const resp = await fetch(req);
-          if (resp.ok) cache.put(SHELL, resp.clone());
+          if (resp.ok) cache.put(url.pathname, resp.clone());
           return resp;
         } catch {
-          const hit = await cache.match(SHELL);
+          const hit = (await cache.match(url.pathname)) ?? (await cache.match(SHELL));
           return hit ?? Response.error();
         }
       })(),

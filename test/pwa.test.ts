@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { describe, it } from "node:test";
+import vm from "node:vm";
 
 import manifestFn from "../app/manifest";
 
@@ -122,8 +123,86 @@ describe("PWA Specification and Assets Verification", () => {
       assert.ok(swCode.includes("/manifest.webmanifest"), "must precache manifest");
       assert.ok(swCode.includes("/apple-touch-icon.png"), "must precache apple touch icon");
 
-      // Never cache live data
-      assert.ok(swCode.includes("/api/"), "must explicitly handle or skip /api/ paths");
+    });
+
+    it("caches per build: /sw.js?v=<build id> opens its own cache, the bare URL the legacy one", async () => {
+      const sw = loadSw({ "/brand.svg": "v1" }, "?v=abc123");
+      await sw.dispatch("/brand.svg");
+      assert.deepEqual([...new Set(sw.opened)], ["kb-shell-abc123"]);
+      const legacy = loadSw({ "/brand.svg": "v1" });
+      await legacy.dispatch("/brand.svg");
+      assert.deepEqual([...new Set(legacy.opened)], ["kb-shell-v2"]);
+      const reg = fs.readFileSync(path.resolve(process.cwd(), "components/PwaRegister.tsx"), "utf-8");
+      assert.ok(reg.includes("/sw.js?v=${process.env.NEXT_PUBLIC_BUILD_ID"), "PwaRegister registers the versioned script");
+    });
+
+    it("never answers /api/* from the SW (live data goes straight to the network)", async () => {
+      const sw = loadSw({ "/api/vehicles": "live" });
+      assert.equal(sw.dispatch("/api/vehicles"), null);
+      assert.equal(sw.dispatch("/api/stops"), null);
+      assert.equal(sw.dispatch("/api/health", "navigate"), null); // opened as a page: still not cached
+    });
+
+    it("offline navigation serves the page last loaded at THAT path, the / shell only as a fallback", async () => {
+      const sw = loadSw({ "/": "map", "/brygady": "brygady" });
+      await sw.dispatch("/brygady", "navigate");
+      await sw.dispatch("/", "navigate");
+      sw.offline = true;
+      assert.equal(await (await sw.dispatch("/brygady", "navigate"))!.text(), "brygady");
+      assert.equal(await (await sw.dispatch("/?stop=1", "navigate"))!.text(), "map");
+      assert.equal(await (await sw.dispatch("/other", "navigate"))!.text(), "map");
+    });
+
+    it("icons are stale-while-revalidate: a changed file replaces the cached copy behind the scenes", async () => {
+      const sw = loadSw({ "/brand.svg": "v1" });
+      assert.equal(await (await sw.dispatch("/brand.svg"))!.text(), "v1");
+      sw.files["/brand.svg"] = "v2";
+      assert.equal(await (await sw.dispatch("/brand.svg"))!.text(), "v1"); // instant, from cache
+      await sw.settled();
+      assert.equal(await (await sw.dispatch("/brand.svg"))!.text(), "v2");
     });
   });
 });
+
+/** Runs public/sw.js in a fake service-worker global: Map-backed CacheStorage, a fake network over `files`. */
+function loadSw(files: Record<string, string>, query = "") {
+  const origin = "https://kb.test";
+  const listeners = new Map<string, (e: unknown) => void>();
+  const store = new Map<string, Response>();
+  const pending: Promise<unknown>[] = [];
+  const opened: string[] = [];
+  const key = (r: Request | string): string => (typeof r === "string" ? new URL(r, origin).href : r.url);
+  const cache = {
+    match: async (r: Request | string) => store.get(key(r))?.clone(),
+    put: async (r: Request | string, resp: Response) => void store.set(key(r), resp),
+  };
+  const h = {
+    files,
+    offline: false,
+    dispatch(p: string, mode = "no-cors"): Promise<Response> | null {
+      let answer: Promise<Response> | null = null;
+      listeners.get("fetch")!({
+        request: { method: "GET", url: new URL(p, origin).href, mode },
+        respondWith: (r: Promise<Response>) => (answer = r),
+        waitUntil: (pr: Promise<unknown>) => void pending.push(pr),
+      });
+      return answer;
+    },
+    settled: () => Promise.all(pending),
+    opened,
+  };
+  const fakeFetch = async (r: Request | string): Promise<Response> => {
+    if (h.offline) throw new TypeError("offline");
+    const body = files[new URL(key(r)).pathname];
+    return body == null ? new Response("nf", { status: 404 }) : new Response(body);
+  };
+  const self = { location: { origin, href: `${origin}/sw.js${query}` }, addEventListener: (t: string, fn: (e: unknown) => void) => listeners.set(t, fn) };
+  vm.runInNewContext(fs.readFileSync(path.resolve(process.cwd(), "public/sw.js"), "utf-8"), {
+    self,
+    caches: { open: async (name: string) => (opened.push(name), cache), keys: async () => [], delete: async () => true },
+    fetch: fakeFetch,
+    URL,
+    Response,
+  });
+  return h;
+}
