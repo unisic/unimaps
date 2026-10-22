@@ -38,8 +38,8 @@ describe("injectDetourPoints", () => {
     const res = injectDetourPoints(pts, "121", "Hulanka");
     assert.ok(res.detour);
     assert.ok(res.points.length > pts.length);
-    // Contains Słowackiego / Grunwaldzka / Konopnickiej waypoints
-    assert.ok(res.points.some((p) => Math.abs(p[0] - 49.8241) < 1e-4));
+    // Contains the Grunwaldzka / Konopnickiej replacement stops
+    assert.ok(res.points.some((p) => Math.abs(p[0] - 49.823333) < 1e-4));
   });
 
   it("preserves all stops on circular line 134 without truncating loop", () => {
@@ -60,6 +60,29 @@ describe("injectDetourPoints", () => {
     // Middle loop stops must not be deleted!
     assert.equal(res.points.length, pts.length);
     assert.ok(res.points.some((p) => Math.abs(p[0] - 49.8000) < 1e-4));
+  });
+
+  it("keeps the reverse direction of the one-way Piastowska detour on its road", () => {
+    // Real line 121 towards D.A.: Hulanka -> Piastowska Starostwo -> D.A. (GTFS stops 10361, 10000)
+    const pts: LatLng[] = [
+      [49.8145, 19.0185],
+      [49.825851, 19.032577],
+      [49.830227, 19.042746],
+    ];
+    const res = injectDetourPoints(pts, "121", "BIELSKO-BIAŁA D.A.");
+    assert.equal(res.detour, null);
+    assert.deepEqual(res.points, pts);
+  });
+
+  it("does not turn a single stop inside the area into an out-and-back spur", () => {
+    const pts: LatLng[] = [
+      [49.92, 19.23],
+      [49.965, 19.245], // only stop inside the Osiek area
+      [49.98, 19.3],
+    ];
+    const res = injectDetourPoints(pts, "141");
+    assert.equal(res.detour, null);
+    assert.deepEqual(res.points, pts);
   });
 
   it("leaves points unchanged if line has no detour", () => {

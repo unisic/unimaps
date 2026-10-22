@@ -9,8 +9,10 @@ export interface LineDetour {
   directionContains?: string;
   /** Bounding box or trigger area where detour applies [minLat, minLon, maxLat, maxLon] */
   triggerArea?: [number, number, number, number];
-  /** Waypoints to route through instead of the standard road */
+  /** Waypoints to route through instead of the standard road, in travel order */
   viaWaypoints: LatLng[];
+  /** Only trips crossing the area in waypoint order detour; the other direction keeps its road. */
+  oneWay?: boolean;
 }
 
 /**
@@ -20,38 +22,28 @@ export interface LineDetour {
 export const KNOWN_DETOURS: LineDetour[] = [
   {
     id: "bielsko-piastowska",
-    // Remont ul. Piastowskiej od 18.08.2025 do odwołania w kierunku Hulanki
+    // Remont ul. Piastowskiej, etap od 29.09.2026 do odwołania, tylko w kierunku Hulanki (KB announcement 15375)
     lines: ["121", "122", "123", "124", "125", "127", "129", "131", "132", "133", "134"],
     title: "Objazd: remont ul. Piastowskiej",
-    description: "Trasa poprowadzona ulicami Słowackiego, Grunwaldzką i Konopnickiej.",
+    description: "W kierunku Ronda Hulanka trasa ulicami Listopadową, Grunwaldzką, 3 Pułku Strzelców Podhalańskich i Konopnickiej.",
     triggerArea: [49.815, 19.030, 49.835, 19.055],
     viaWaypoints: [
-      [49.8241, 19.0412], // ul. Słowackiego (BCK)
-      [49.8218, 19.0365], // ul. Grunwaldzka (Szpital Miejski)
-      [49.8205, 19.0315], // ul. Konopnickiej (Szpital Pediatryczny)
+      [49.823333, 19.034472], // GRUNWALDZKA SZPITAL MIEJSKI (replacement stop 11072)
+      [49.820083, 19.029194], // KONOPNICKIEJ SZPITAL PEDIATRYCZNY (replacement stop 11082)
     ],
+    oneWay: true,
   },
   {
     id: "osiek-beskidzka",
-    // Zamknięcie ul. Beskidzkiej w Osieku - objazd ul. Zieloną
+    // Remont ul. Karolina w Osieku od 23.03.2026 do odwołania (KB announcement 12172); the announcement
+    // names no detour streets, the waypoint is the pre-existing one
     lines: ["141", "143"],
     title: "Objazd w Osieku",
-    description: "Objazd ul. Beskidzkiej realizowany ulicą Zieloną.",
+    description: "Remont ul. Karolina: przystanki Włosień i Malec Granica nieobsługiwane, Włosień Bar przeniesiony na ul. Włosieńską.",
     triggerArea: [49.930, 19.240, 49.970, 19.290],
     viaWaypoints: [
       [49.9455, 19.2612], // ul. Zielona
       [49.9498, 19.2685],
-    ],
-  },
-  {
-    id: "jasienica-strumienska",
-    // Zamknięcie odcinka ul. Strumieńskiej w Jasienicy
-    lines: ["123", "125", "129", "131", "132"],
-    title: "Objazd w Jasienicy",
-    description: "Tymczasowa trasa w rejonie ul. Młyńskiej.",
-    triggerArea: [49.810, 18.890, 49.835, 18.930],
-    viaWaypoints: [
-      [49.8215, 18.9080], // ul. Młyńska
     ],
   },
 ];
@@ -60,16 +52,19 @@ export const KNOWN_DETOURS: LineDetour[] = [
  * Checks if a line has an active detour definition.
  */
 export function getLineDetour(line: string, direction?: string): LineDetour | null {
-  if (!line) return null;
+  return lineDetours(line, direction)[0] ?? null;
+}
+
+function lineDetours(line: string, direction?: string): LineDetour[] {
+  if (!line) return [];
   const cleanLine = line.trim();
-  const detour = KNOWN_DETOURS.find((d) => {
+  return KNOWN_DETOURS.filter((d) => {
     if (!d.lines.includes(cleanLine)) return false;
     if (d.directionContains && direction) {
       if (!direction.toUpperCase().includes(d.directionContains.toUpperCase())) return false;
     }
     return true;
   });
-  return detour ?? null;
 }
 
 function approxDistanceMeters(p1: LatLng, p2: LatLng): number {
@@ -80,7 +75,8 @@ function approxDistanceMeters(p1: LatLng, p2: LatLng): number {
 
 /**
  * Injects detour waypoints into the sequence of stop coordinates if the route passes through
- * the affected detour area.
+ * the affected detour area. A line can sit in several detours, so each one applies where the
+ * trip enters its own area; `detour` is the first one that applied.
  */
 export function injectDetourPoints(
   points: LatLng[],
@@ -88,22 +84,30 @@ export function injectDetourPoints(
   direction?: string,
 ): { points: LatLng[]; detour: LineDetour | null } {
   if (!line || points.length < 2) return { points, detour: null };
-  const detour = getLineDetour(line, direction);
-  if (!detour) return { points, detour: null };
-
-  const area = detour.triggerArea;
-  if (!area) {
-    return { points, detour };
+  let out = points;
+  let hit: LineDetour | null = null;
+  for (const detour of lineDetours(line, direction)) {
+    const res = applyDetour(out, detour);
+    if (!res) continue;
+    if (!hit || (out === points && res !== out)) hit = detour;
+    out = res;
   }
+  return { points: out, detour: hit };
+}
 
-  // If the trip already visits all detour waypoints (e.g. Słowackiego, Grunwaldzka, Konopnickiej
-  // which are scheduled stops on lines 121..134), the detour is already in the timetable.
+/** Points with the detour applied (the same array when it only needs a banner), null when it does not apply. */
+function applyDetour(points: LatLng[], detour: LineDetour): LatLng[] | null {
+  const area = detour.triggerArea;
+  if (!area) return points;
+
+  // If the trip already visits all detour waypoints (e.g. the Grunwaldzka and Konopnickiej
+  // replacement stops scheduled on lines 121..134), the detour is already in the timetable.
   // Do not alter points, but return the detour info for banners.
   if (
     detour.viaWaypoints.length > 0 &&
     detour.viaWaypoints.every((wp) => points.some((pt) => approxDistanceMeters(pt, wp) < 380))
   ) {
-    return { points, detour };
+    return points;
   }
 
   const [minLat, minLon, maxLat, maxLon] = area;
@@ -125,18 +129,26 @@ export function injectDetourPoints(
     segments.push({ start: curStart, end: points.length - 1 });
   }
 
-  if (segments.length === 0) {
-    return { points, detour: null };
+  // Inject into the first segment that can carry the detour, preserving all stops before and
+  // after it. A single stop in the area has no leg between two of its stops to replace (the
+  // waypoints would become an out-and-back spur), and the waypoints follow the travel direction:
+  // reversed for a trip crossing the area the other way, skipped for a one-way detour.
+  const wps = detour.viaWaypoints;
+  if (wps.length === 0) return segments.length > 0 ? points : null;
+  for (const seg of segments) {
+    if (seg.end === seg.start) continue;
+    const a = points[seg.start];
+    const b = points[seg.end];
+    const first = wps[0];
+    const last = wps[wps.length - 1];
+    const forward =
+      approxDistanceMeters(a, first) + approxDistanceMeters(last, b) <=
+      approxDistanceMeters(a, last) + approxDistanceMeters(first, b);
+    if (!forward && detour.oneWay) continue;
+    const via = forward ? wps : [...wps].reverse();
+    return [...points.slice(0, seg.start + 1), ...via, ...points.slice(seg.end)];
   }
-
-  // Only inject detour waypoints into the first affected contiguous segment,
-  // preserving all stops before and after that segment.
-  const seg = segments[0];
-  const before = points.slice(0, seg.start + 1);
-  const after = points.slice(seg.end);
-  const combined = [...before, ...detour.viaWaypoints, ...after];
-
-  return { points: combined, detour };
+  return null;
 }
 
 /**
