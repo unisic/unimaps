@@ -15,6 +15,7 @@ import {
   MagnifyingGlassIcon,
   MoonIcon,
   PathIcon,
+  PersonSimpleWalkIcon,
   StarIcon,
   SunIcon,
   XCircleIcon,
@@ -48,6 +49,7 @@ export interface TopBarSearchProps {
   baseLayer: BaseLayerId;
   onBaseLayer: (id: BaseLayerId) => void;
   onClearView: () => void;
+  onOpenNearby: () => void;
   onOpenConnections?: () => void;
   /** Pass-through handle to allow parent / sibling buttons to focus search */
   searchRef?: React.RefObject<TopBarSearchHandle | null>;
@@ -221,6 +223,7 @@ function TopBarSearch({
   baseLayer,
   onBaseLayer,
   onClearView,
+  onOpenNearby,
   onOpenConnections,
   searchRef,
   onDropdownChange,
@@ -340,6 +343,13 @@ function TopBarSearch({
         run: onLocate,
       },
       {
+        id: "nearby",
+        label: "Odjazdy w pobliżu",
+        keywords: "w poblizu najblizszy przystanek odjazdy obok blisko",
+        icon: <PersonSimpleWalkIcon />,
+        run: onOpenNearby,
+      },
+      {
         id: "stops-toggle",
         label: stopsVisible ? "Ukryj przystanki" : "Pokaż przystanki",
         keywords: "przystanki ukryj pokaz widocznosc mapa",
@@ -380,7 +390,7 @@ function TopBarSearch({
       });
     }
     return list;
-  }, [onOpenConnections, onLocate, stopsVisible, onToggleStops, baseLayer, onBaseLayer, onClearView, lineFilter, onClearLineFilter]);
+  }, [onOpenConnections, onLocate, onOpenNearby, stopsVisible, onToggleStops, baseLayer, onBaseLayer, onClearView, lineFilter, onClearLineFilter]);
 
   // Compute matched sections
   const sections = useMemo<Section[]>(() => {

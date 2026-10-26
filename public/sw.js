@@ -2,7 +2,8 @@
  * Service worker for PWA installability + offline app shell.
  *
  * Strategy:
- *  - /api/* is NEVER cached — live vehicle and stop data must not be served stale;
+ *  - /api/* is NEVER cached — live vehicle and stop data must not be served stale (the page keeps
+ *    its own offline copies in "kb-offline", which activate leaves alone);
  *  - cross-origin requests (map tiles, OSRM) pass through untouched;
  *  - pre-caches app shell and icons on install for immediate offline readiness;
  *  - hashed build assets (/_next/static) are cache-first;
@@ -54,11 +55,28 @@ self.addEventListener("message", (event) => {
   if (event.data && event.data.type === "SKIP_WAITING") self.skipWaiting();
 });
 
+// an alert notification (lib/client/alerts.ts) opens its stop: in the app's open tab, else a new one
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const url = new URL((event.notification.data && event.notification.data.url) || "/", self.location.origin);
+  if (url.origin !== self.location.origin) return;
+  event.waitUntil(
+    (async () => {
+      const tabs = await self.clients.matchAll({ type: "window" });
+      const tab = tabs.find((c) => new URL(c.url).pathname === "/");
+      if (!tab) return self.clients.openWindow(url.href);
+      await tab.focus();
+      return tab.navigate(url.href);
+    })(),
+  );
+});
+
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     (async () => {
       const keys = await caches.keys();
-      await Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)));
+      // kb-offline is the page's own store (lib/client/offline.ts), not a deploy's shell
+      await Promise.all(keys.filter((k) => k !== CACHE && k !== "kb-offline").map((k) => caches.delete(k)));
       await self.clients.claim();
     })(),
   );

@@ -136,6 +136,26 @@ describe("PWA Specification and Assets Verification", () => {
       assert.ok(reg.includes("/sw.js?v=${process.env.NEXT_PUBLIC_BUILD_ID"), "PwaRegister registers the versioned script");
     });
 
+    it("activate drops the previous deploy's shell but keeps the page's kb-offline store", async () => {
+      const sw = loadSw({}, "?v=new");
+      sw.cacheNames.push("kb-shell-old", "kb-shell-new", "kb-offline");
+      await sw.activate();
+      assert.deepEqual(sw.deleted, ["kb-shell-old"]);
+    });
+
+    it("an alert notification opens its stop in the map tab, a new window without one", async () => {
+      const sw = loadSw({});
+      sw.tabs.push({ url: "https://kb.test/brygady", focused: false, navigated: null });
+      sw.tabs.push({ url: "https://kb.test/?trip=1", focused: false, navigated: null });
+      await sw.click({ url: "/?stop=123" });
+      assert.deepEqual(sw.tabs[1], { url: "https://kb.test/?trip=1", focused: true, navigated: "https://kb.test/?stop=123" });
+      assert.equal(sw.tabs[0].navigated, null);
+      const fresh = loadSw({});
+      await fresh.click({ url: "/?stop=123" });
+      await fresh.click({ url: "https://evil.test/" });
+      assert.deepEqual(fresh.windows, ["https://kb.test/?stop=123"]);
+    });
+
     it("never answers /api/* from the SW (live data goes straight to the network)", async () => {
       const sw = loadSw({ "/api/vehicles": "live" });
       assert.equal(sw.dispatch("/api/vehicles"), null);
@@ -171,6 +191,8 @@ function loadSw(files: Record<string, string>, query = "") {
   const store = new Map<string, Response>();
   const pending: Promise<unknown>[] = [];
   const opened: string[] = [];
+  const cacheNames: string[] = [];
+  const deleted: string[] = [];
   const key = (r: Request | string): string => (typeof r === "string" ? new URL(r, origin).href : r.url);
   const cache = {
     match: async (r: Request | string) => store.get(key(r))?.clone(),
@@ -189,17 +211,49 @@ function loadSw(files: Record<string, string>, query = "") {
       return answer;
     },
     settled: () => Promise.all(pending),
+    async activate(): Promise<void> {
+      listeners.get("activate")!({ waitUntil: (pr: Promise<unknown>) => void pending.push(pr) });
+      await Promise.all(pending);
+    },
     opened,
+    cacheNames,
+    deleted,
+    tabs: [] as { url: string; focused: boolean; navigated: string | null }[],
+    windows: [] as string[],
+    async click(data: unknown): Promise<void> {
+      listeners.get("notificationclick")!({
+        notification: { data, close: () => {} },
+        waitUntil: (pr: Promise<unknown>) => void pending.push(pr),
+      });
+      await Promise.all(pending);
+    },
   };
   const fakeFetch = async (r: Request | string): Promise<Response> => {
     if (h.offline) throw new TypeError("offline");
     const body = files[new URL(key(r)).pathname];
     return body == null ? new Response("nf", { status: 404 }) : new Response(body);
   };
-  const self = { location: { origin, href: `${origin}/sw.js${query}` }, addEventListener: (t: string, fn: (e: unknown) => void) => listeners.set(t, fn) };
+  const self = {
+    location: { origin, href: `${origin}/sw.js${query}` },
+    addEventListener: (t: string, fn: (e: unknown) => void) => listeners.set(t, fn),
+    clients: {
+      claim: async () => {},
+      matchAll: async () =>
+        h.tabs.map((t) => ({
+          url: t.url,
+          focus: async () => void (t.focused = true),
+          navigate: async (u: string) => void (t.navigated = u),
+        })),
+      openWindow: async (u: string) => void h.windows.push(u),
+    },
+  };
   vm.runInNewContext(fs.readFileSync(path.resolve(process.cwd(), "public/sw.js"), "utf-8"), {
     self,
-    caches: { open: async (name: string) => (opened.push(name), cache), keys: async () => [], delete: async () => true },
+    caches: {
+      open: async (name: string) => (opened.push(name), cache),
+      keys: async () => [...cacheNames],
+      delete: async (name: string) => (deleted.push(name), true),
+    },
     fetch: fakeFetch,
     URL,
     Response,

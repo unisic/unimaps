@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { buildSearch, parseUrlState } from "../lib/client/urlState";
+import { buildSearch, loadSavedLines, parseUrlState, saveLines } from "../lib/client/urlState";
 
 describe("parseUrlState", () => {
   it("reads stop/exec/trip/lines/map", () => {
@@ -49,5 +49,42 @@ describe("buildSearch", () => {
     assert.match(buildSearch({ stop: null, exec: "e", trip: "t", lines: null, map: null }), /exec=e/);
     assert.doesNotMatch(buildSearch({ stop: null, exec: "e", trip: "t", lines: null, map: null }), /trip=/);
     assert.equal(buildSearch({ stop: null, exec: null, trip: null, lines: null, map: null }), "");
+  });
+});
+
+describe("saved line filter", () => {
+  it("round-trips through localStorage, sanitized and capped; empty clears", () => {
+    const store = new Map<string, string>();
+    const g = globalThis as { window?: unknown };
+    g.window = {
+      localStorage: {
+        getItem: (k: string) => store.get(k) ?? null,
+        setItem: (k: string, v: string) => void store.set(k, v),
+        removeItem: (k: string) => void store.delete(k),
+      },
+    };
+    try {
+      assert.equal(loadSavedLines(), null);
+      saveLines(["104", "120"]);
+      assert.deepEqual(loadSavedLines(), ["104", "120"]);
+      store.set("kb:lineFilter", `104,zł a,${Array.from({ length: 12 }, (_, i) => i).join(",")}`);
+      assert.equal(loadSavedLines()?.length, 10);
+      assert.equal(loadSavedLines()?.[0], "104");
+      saveLines(null);
+      assert.equal(store.has("kb:lineFilter"), false);
+    } finally {
+      delete g.window;
+    }
+  });
+
+  it("forgets quietly when storage throws", () => {
+    const g = globalThis as { window?: unknown };
+    g.window = {};
+    try {
+      assert.equal(loadSavedLines(), null);
+      saveLines(["104"]);
+    } finally {
+      delete g.window;
+    }
   });
 });

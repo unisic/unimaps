@@ -60,6 +60,11 @@ function subscribe(fn: () => void): () => void {
   };
 }
 
+/** Current favourites outside React (timetable prefetch / offline save). */
+export function getFavorites(): readonly string[] {
+  return getSnapshot();
+}
+
 /** Toggle a stop (by designator — stop *names* are not unique). */
 export function toggleFavorite(designator: string): void {
   const cur = getSnapshot();

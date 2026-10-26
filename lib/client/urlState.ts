@@ -30,6 +30,16 @@ function cleanId(v: string | null): string | null {
   return t.length > 0 && t.length <= ID_MAX ? t : null;
 }
 
+/** Valid line names from a comma list, capped at MAX_LINES; null when none survive. */
+function parseLines(raw: string | null): string[] | null {
+  const lines = (raw ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => LINE_RE.test(s))
+    .slice(0, MAX_LINES);
+  return lines.length > 0 ? lines : null;
+}
+
 /** Parse (and validate) a location.search string; invalid parts become null. */
 export function parseUrlState(search: string): UrlState {
   let p: URLSearchParams;
@@ -38,11 +48,6 @@ export function parseUrlState(search: string): UrlState {
   } catch {
     return EMPTY_URL_STATE;
   }
-  const lines = (p.get("lines") ?? "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter((s) => LINE_RE.test(s))
-    .slice(0, MAX_LINES);
   let map: UrlState["map"] = null;
   const m = p.get("map");
   if (m) {
@@ -66,7 +71,7 @@ export function parseUrlState(search: string): UrlState {
     stop: cleanId(p.get("stop")),
     exec: cleanId(p.get("exec")),
     trip: cleanId(p.get("trip")),
-    lines: lines.length > 0 ? lines : null,
+    lines: parseLines(p.get("lines")),
     map,
   };
 }
@@ -81,4 +86,25 @@ export function buildSearch(s: UrlState): string {
   if (s.map) p.set("map", `${s.map.lat.toFixed(5)},${s.map.lon.toFixed(5)},${Math.round(s.map.zoom * 100) / 100}`);
   const out = p.toString();
   return out ? `?${out}` : "";
+}
+
+/* "Moje linie": the last line filter, remembered per browser. A ?lines= deep link wins on load and
+   then becomes the remembered filter; storage that throws (private mode) just forgets it. */
+const SAVED_LINES_KEY = "kb:lineFilter";
+
+export function loadSavedLines(): string[] | null {
+  try {
+    return parseLines(window.localStorage.getItem(SAVED_LINES_KEY));
+  } catch {
+    return null;
+  }
+}
+
+export function saveLines(lines: readonly string[] | null): void {
+  try {
+    if (lines && lines.length > 0) window.localStorage.setItem(SAVED_LINES_KEY, lines.slice(0, MAX_LINES).join(","));
+    else window.localStorage.removeItem(SAVED_LINES_KEY);
+  } catch {
+    /* storage blocked */
+  }
 }

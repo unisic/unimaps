@@ -84,6 +84,7 @@ export interface TopBarProps {
   onToggleLine: (line: string) => void;
   onClearLineFilter: () => void;
   onClearView: () => void;
+  onOpenNearby: () => void;
   onOpenConnections?: () => void;
   searchRef?: React.RefObject<TopBarSearchHandle | null>;
   operatorFilter: "all" | "kb" | "mzk";
@@ -221,6 +222,7 @@ function TopBar({
   onToggleLine,
   onClearLineFilter,
   onClearView,
+  onOpenNearby,
   onOpenConnections,
   searchRef,
   operatorFilter,
@@ -268,6 +270,7 @@ function TopBar({
           baseLayer={baseLayer}
           onBaseLayer={onBaseLayer}
           onClearView={onClearView}
+          onOpenNearby={onOpenNearby}
           onOpenConnections={onOpenConnections}
           searchRef={searchRef}
           onShowToast={onShowToast}

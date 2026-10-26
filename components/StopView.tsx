@@ -2,11 +2,15 @@
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import BottomSheet from "@/components/BottomSheet";
-import { CaretDownIcon, CaretRightIcon, CaretUpIcon, PathIcon, WarningCircleIcon } from "@/components/icons";
+import { BellIcon, CaretDownIcon, CaretRightIcon, CaretUpIcon, PathIcon, WarningCircleIcon } from "@/components/icons";
+import { removeAlert, useAlerts } from "@/lib/client/alerts";
 import { CloseIcon, EmptyState, ErrorState, IconButton, LineBadge, ShareButton, SkeletonRows, StarIcon } from "@/components/ui";
-import { fetchJSON, getTripsBatch } from "@/lib/client/api";
+import { fetchJSON } from "@/lib/client/api";
 import { useFavorites } from "@/lib/client/favorites";
+import { formatDistance, formatWalk } from "@/lib/client/geo";
 import { createLivePoll, LIVE_STALE_MS, type LivePoll } from "@/lib/client/live-poll";
+import { loadDay, NO_WARNINGS, type DayLoad, type TtRow, type Warnings } from "@/lib/client/timetable";
+import { indexVehicles, rowVehicle } from "@/lib/client/vehicleIndex";
 import {
   delayClass,
   delayTxt,
@@ -21,9 +25,6 @@ import type {
   DepartureRow,
   DeparturesResponse,
   Stop,
-  TimetableDeparture,
-  TimetableResponse,
-  Trip,
   Vehicle,
 } from "@/lib/client/types";
 import {
@@ -37,12 +38,11 @@ import {
   nextEarlierHorizon,
   nextLaterHorizon,
   resolveTiming,
+  rowKey,
   schedTiming,
-  schedTripKey,
   schedVehicle,
   sortBoard,
   uniqueKeys,
-  vehicleTripKey,
   warsawDateISO,
   warsawDayTs,
   type Timing,
@@ -59,12 +59,8 @@ interface Props {
   onShowLive: (execId: string, tripId: string | number | null) => void;
   onShowStatic: (tripId: string | number) => void;
   onPlanRoute?: (s: Stop) => void;
-}
-
-interface TtRow {
-  dp: TimetableDeparture;
-  line: string;
-  dir: string;
+  /** straight-line distance from the user's location, rounded to 10 m; null = unknown or too far */
+  walkM?: number | null;
 }
 
 function Chevron() {
@@ -79,12 +75,6 @@ function OperatorTag({ op, label }: { op: "kb" | "mzk"; label: string }) {
     </span>
   );
 }
-
-type Warnings = ReadonlyArray<"kb" | "mzk">;
-const NO_WARNINGS: Warnings = [];
-
-/** One day of the stop's timetable. Absent from the map = not requested yet or still fetching. */
-type DayLoad = { status: "trips" } | { status: "ok"; rows: TtRow[]; warnings: Warnings } | { status: "error" };
 
 /** A timetable departure on the absolute time line, shaped as a board row so it sorts with the live ones. */
 interface SchedItem {
@@ -106,57 +96,6 @@ interface Reveal {
 const REVEAL_IDLE: Reveal = { at: null, busy: false, err: false, tried: false };
 /** departures added per "Pokaż wcześniejsze / późniejsze" tap */
 const REVEAL_STEP = 10;
-
-/* complete days only (a day with a failed upstream leg is never cached), FIFO-capped:
-   one busy hub is ~450 rows */
-const timetableRowCache = new Map<string, TtRow[]>();
-const TT_CACHE_MAX = 8;
-
-/** One day of the timetable with every row's line and direction (KB rows carry neither: resolved via /api/trips). */
-async function loadDay(designator: string, date: string, signal: AbortSignal, onTrips: () => void): Promise<DayLoad> {
-  const cacheKey = `${designator}:${date}`;
-  const cached = timetableRowCache.get(cacheKey);
-  if (cached) return { status: "ok", rows: cached, warnings: NO_WARNINGS };
-  try {
-    const d = await fetchJSON<TimetableResponse>(
-      `/api/stop/${encodeURIComponent(designator)}/timetable?date=${date}`,
-      { signal },
-    );
-    const deps = d.departures ?? [];
-    onTrips();
-    const neededTripIds = Array.from(
-      new Set(
-        deps
-          .filter((dp) => !dp.line || !dp.direction)
-          .map((dp) => dp.trip_id)
-          .filter(Boolean),
-      ),
-    );
-    const tripMap =
-      neededTripIds.length > 0 ? await getTripsBatch(neededTripIds, signal) : new Map<string, Trip | null>();
-    // getTripsBatch stops early on abort: a half-resolved day must not be cached
-    if (signal.aborted) return { status: "error" };
-    const rows: TtRow[] = deps.map((dp) => {
-      const trip = tripMap.get(String(dp.trip_id));
-      return {
-        dp,
-        line: dp.line || trip?.line?.name || "?",
-        dir: dp.direction || trip?.direction || d.main_direction?.name || "",
-      };
-    });
-    const warnings = d.warnings ?? NO_WARNINGS;
-    if (!warnings.length) {
-      timetableRowCache.set(cacheKey, rows);
-      for (const k of timetableRowCache.keys()) {
-        if (timetableRowCache.size <= TT_CACHE_MAX) break;
-        timetableRowCache.delete(k);
-      }
-    }
-    return { status: "ok", rows, warnings };
-  } catch {
-    return { status: "error" };
-  }
-}
 
 /* per rows array (one array = one stop-day), so the Intl work runs once per loaded day */
 const schedCache = new WeakMap<readonly TtRow[], SchedItem[]>();
@@ -310,34 +249,12 @@ function SourceWarning({ sources }: { sources: ReadonlyArray<"kb" | "mzk"> }) {
   );
 }
 
-function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, onPlanRoute }: Props) {
+function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, onPlanRoute, walkM }: Props) {
   const [tab, setTab] = useState<Tab>("live");
+  const alerts = useAlerts();
+  const alertByKey = useMemo(() => new Map(alerts.map((a) => [a.key, a])), [alerts]);
 
-  const vehByExec = useMemo(() => {
-    const m = new Map<string, Vehicle>();
-    for (const v of vehicles ?? []) {
-      if (v.id) m.set(v.id, v);
-    }
-    return m;
-  }, [vehicles]);
-
-  const vehByTrip = useMemo(() => {
-    const m = new Map<string, Vehicle>();
-    for (const v of vehicles ?? []) {
-      if (v.trip_id) m.set(String(v.trip_id), v);
-    }
-    return m;
-  }, [vehicles]);
-  /* the timetable trip each running bus serves (MZK: its course; KB: the static id the server
-     learned from the departures boards), so a timetable row can show its bus */
-  const vehBySched = useMemo(() => {
-    const m = new Map<string, Vehicle>();
-    for (const v of vehicles ?? []) {
-      const k = vehicleTripKey(v);
-      if (k) m.set(k, v);
-    }
-    return m;
-  }, [vehicles]);
+  const vix = useMemo(() => indexVehicles(vehicles), [vehicles]);
 
   const [liveRows, setLiveRows] = useState<DepartureRow[] | null>(null);
   /* mirrors liveRows so the refresh closure can tell "have data" without going
@@ -488,6 +405,7 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
   const tt = ttLoad?.status === "ok" ? ttLoad.rows : null;
   const ttErr = ttLoad?.status === "error";
   const ttWarn = ttLoad?.status === "ok" ? ttLoad.warnings : NO_WARNINGS;
+  const ttOffline = ttLoad?.status === "ok" && ttLoad.offline === true;
 
   const sched = useMemo(() => schedOf(days), [days]);
   const ext = useMemo(() => boardExtension(sched, liveRows ?? [], nowTs), [sched, liveRows, nowTs]);
@@ -529,10 +447,10 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
     return ext.earlier
       .filter((s) => s.planTs >= from)
       .map((s) => {
-        const veh = schedVehicle(s, vehBySched, nowTs);
+        const veh = schedVehicle(s, vix.bySched, nowTs);
         return { s, veh, timing: schedTiming(s.planTs, veh) };
       });
-  }, [ext.earlier, earlier.at, vehBySched, nowTs]);
+  }, [ext.earlier, earlier.at, vix, nowTs]);
   const earlierKeys = useMemo(() => uniqueKeys(earlierShown.map((e) => e.s.row)), [earlierShown]);
   /* nothing left to reveal: the earliest/latest timetable row is already on screen (or there is none) */
   const earliestTs = ext.earlier.length ? ext.earlier[0].planTs : null;
@@ -547,14 +465,11 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
   const { board, laterUntil } = useMemo(() => {
     type Entry = BoardItem<DepartureRow> & { veh: Vehicle | null; sched: SchedItem | null };
     const items: Entry[] = (liveRows ?? []).map((row) => {
-      const veh =
-        (row.trip_execution_id ? vehByExec.get(row.trip_execution_id) : null) ??
-        (row.trip_id != null ? (vehByTrip.get(String(row.trip_id)) ?? vehBySched.get(schedTripKey(row.trip_id))) : null) ??
-        null;
+      const veh = rowVehicle(row, vix);
       return { row, veh, timing: resolveTiming(row, veh), sched: null };
     });
     const addSched = (s: SchedItem) => {
-      const veh = schedVehicle(s, vehBySched, nowTs);
+      const veh = schedVehicle(s, vix.bySched, nowTs);
       items.push({ row: s.row, veh, timing: schedTiming(s.planTs, veh), sched: s });
     };
     for (const s of ext.gaps) addSched(s);
@@ -570,7 +485,7 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
     const sorted = sortBoard(items, nowTs);
     const keys = uniqueKeys(sorted.map((it) => it.row));
     return { board: sorted.map((it, i) => ({ ...it, key: keys[i] })), laterUntil: until };
-  }, [liveRows, vehByExec, vehByTrip, vehBySched, nowTs, ext, later.at]);
+  }, [liveRows, vix, nowTs, ext, later.at]);
   const earlierDone =
     days.get(day0)?.status === "ok" && (earliestTs == null || (earlier.at != null && earliestTs >= earlier.at));
   const laterDone =
@@ -579,6 +494,7 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
   const ttPending = days.get(day0) === undefined || days.get(day0)?.status === "trips";
 
   const liveLoading = liveRows === null && !liveErr;
+
   const staleEmpty =
     liveRows !== null && liveRows.length > 0 && !board.some((it) => it.sched === null) && nowTs - fetchedTs > 90;
 
@@ -605,6 +521,11 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
               {isStation ? "Dworzec autobusowy" : "Przystanek"}
               {stop.onRequest && ", na żądanie"}
             </span>
+            {walkM != null && (
+              <span className="tabular-nums text-text-faint">
+                {formatDistance(walkM)}, {formatWalk(walkM)}
+              </span>
+            )}
           </div>
         </div>
         {onPlanRoute && (
@@ -672,6 +593,11 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
       <div key={tab} className="kb-scroll h-full overflow-y-auto pb-4 animate-fade">
         {(tab === "live" ? liveWarn.length > 0 && !liveErr : ttWarn.length > 0) && (
           <SourceWarning sources={tab === "live" ? liveWarn : ttWarn} />
+        )}
+        {tab !== "live" && ttOffline && (
+          <p role="status" className="mx-4 mt-3 rounded-xl bg-white/6 px-3 py-2 text-[12px] text-text-mute">
+            Bez sieci: zapisany rozkład.
+          </p>
         )}
         {tab === "live" ? (
           liveErr || staleEmpty ? (
@@ -767,19 +693,21 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
                 /* KB boards carry only direction_id; the server resolves it through the board's
                    `directions` map, the live vehicle's headsign is the fallback */
                 const dest = row.direction || veh?.headsign;
+                const destText = dest ? displayStopName(dest) : `Linia ${line}`;
+                const ak = rowKey(row);
+                const al = alertByKey.get(ak);
 
                 return (
                   <li key={key}>
+                    <div className="flex items-center">
                     <button
                       type="button"
                       onClick={() => onShowLive(row.trip_execution_id || "", row.trip_id ?? null)}
-                      className="tap flex w-full items-center gap-3 rounded-xl px-2 py-2.5 text-left hover:bg-white/5 active:bg-white/8"
+                      className="tap flex min-w-0 flex-1 items-center gap-3 rounded-xl px-2 py-2.5 text-left hover:bg-white/5 active:bg-white/8"
                     >
                       <LineBadge line={line} operator={row.operator} />
                       <div className="min-w-0 flex-1">
-                        <p className="truncate text-[13.5px] font-medium text-text">
-                          {dest ? displayStopName(dest) : `Linia ${line}`}
-                        </p>
+                        <p className="truncate text-[13.5px] font-medium text-text">{destText}</p>
                         {sub && (
                           <p className="mt-0.5 truncate text-[12px] tabular-nums text-text-faint">{sub}</p>
                         )}
@@ -804,6 +732,18 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
                       </div>
                       <Chevron />
                     </button>
+                    {/* set from the trip view; here only shown and cancelled */}
+                    {al && (
+                      <button
+                        type="button"
+                        aria-label={`Wyłącz powiadomienie ${al.leadMin} min przed`}
+                        onClick={() => removeAlert(ak)}
+                        className="tap grid h-11 w-10 shrink-0 place-items-center rounded-xl text-[17px] text-primary hover:bg-white/5"
+                      >
+                        <BellIcon weight="fill" aria-hidden />
+                      </button>
+                    )}
+                    </div>
                   </li>
                 );
               })}

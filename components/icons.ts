@@ -12,6 +12,7 @@ export { ArrowsClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowsClockw
 export { ArrowsDownUpIcon } from "@phosphor-icons/react/dist/csr/ArrowsDownUp";
 export { ArrowsHorizontalIcon } from "@phosphor-icons/react/dist/csr/ArrowsHorizontal";
 export { ArrowsLeftRightIcon } from "@phosphor-icons/react/dist/csr/ArrowsLeftRight";
+export { BellIcon } from "@phosphor-icons/react/dist/csr/Bell";
 export { BusIcon } from "@phosphor-icons/react/dist/csr/Bus";
 export { CalendarBlankIcon } from "@phosphor-icons/react/dist/csr/CalendarBlank";
 export { CardsIcon } from "@phosphor-icons/react/dist/csr/Cards";

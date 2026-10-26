@@ -7,6 +7,7 @@ import {
   ArrowRightIcon,
   ArrowsClockwiseIcon,
   ArrowsHorizontalIcon,
+  BellIcon,
   BusIcon,
   CardsIcon,
   CrosshairIcon,
@@ -19,6 +20,15 @@ import {
   WheelchairIcon,
 } from "@/components/icons";
 import { BackIcon, CloseIcon, ErrorState, IconButton, LineBadge, ShareButton } from "@/components/ui";
+import {
+  ALERT_LEADS,
+  MAX_ALERTS,
+  addAlert,
+  alertUntil,
+  removeAlert,
+  tripAlertKey,
+  useAlerts,
+} from "@/lib/client/alerts";
 import {
   computeEta,
   countdown,
@@ -58,6 +68,7 @@ interface Props {
   onRetry: () => void;
   /** open the MZK vehicle card over the map (closing it returns to this trip) */
   onOpenVehicleCard: (side: string) => void;
+  onShowToast: (text: string) => void;
   initialSnap?: "peek" | "half" | "full";
 }
 
@@ -123,9 +134,14 @@ function TripView({
   onLocate,
   onRetry,
   onOpenVehicleCard,
+  onShowToast,
   initialSnap = "half",
 }: Props) {
   const now = useNow();
+  const alerts = useAlerts();
+  const alertByKey = useMemo(() => new Map(alerts.map((a) => [a.key, a])), [alerts]);
+  /** alert key of the stop row whose 3/5/10 min picker is open */
+  const [alertMenu, setAlertMenu] = useState<string | null>(null);
   /* the ⋮ menu's anchor (viewport px) while it is open */
   const [menuAt, setMenuAt] = useState<{ top: number; right: number } | null>(null);
   const menuBtnRef = useRef<HTMLButtonElement>(null);
@@ -323,6 +339,28 @@ function TripView({
     currentVeh && Number.isFinite(currentVeh.lat) && Number.isFinite(currentVeh.lon) ? currentVeh : trip.vehicle;
   const hasDetails = !loading && !failed;
 
+  /* runs from a tap, so the permission prompt is allowed (browsers drop it without a user gesture) */
+  const pickAlert = async (key: string, stop: Stop, planned: number, leadMin: number) => {
+    setAlertMenu(null);
+    if (typeof Notification === "undefined") return onShowToast("Ta przeglądarka nie obsługuje powiadomień.");
+    const perm = Notification.permission === "default" ? await Notification.requestPermission() : Notification.permission;
+    if (perm !== "granted") return onShowToast("Powiadomienia są zablokowane. Włącz je w ustawieniach przeglądarki.");
+    const ok = addAlert({
+      key,
+      designator: stop.designator,
+      stopName: displayStopName(stop.name),
+      line: trip.line,
+      dest: direction ? displayStopName(direction) : `Linia ${trip.line}`,
+      leadMin,
+      until: alertUntil(planned),
+    });
+    onShowToast(
+      ok
+        ? `Powiadomię ${leadMin} min przed odjazdem linii ${trip.line}.`
+        : `Najwyżej ${MAX_ALERTS} powiadomienia naraz. Wyłącz któreś dzwonkiem.`,
+    );
+  };
+
   const header = (
     <header className="px-4 pb-3 pt-2 md:pt-4">
       <div className="flex items-center gap-2">
@@ -504,15 +542,21 @@ function TripView({
               const selected = !!trip.stop && tripTimeMatchesStop(t, trip.stop);
               const first = idx === 0;
               const last = idx === trip.rawTimes.length - 1;
+              /* the bell sits only on the stop the trip was opened from: the board there is what the alert watches.
+                 Not on the last stop: a loop ending where it started arrives there, it never departs */
+              const ak = selected && trip.execId ? tripAlertKey(trip.execId, t.index) : null;
+              const al = ak ? alertByKey.get(ak) : undefined;
+              const canAlert = al != null || (ak != null && !passed && !last && planned != null);
               return (
                 <li key={`${t.index}-${idx}`} ref={idx === scrollTargetIdx ? currentRef : undefined}>
+                  <div className={`flex items-center rounded-xl ${selected ? "bg-primary-dim" : ""}`}>
                   <button
                     type="button"
                     disabled={!coord}
                     onClick={() => coord && onFocusStop(coord)}
-                    className={`flex w-full items-stretch gap-3 rounded-xl text-left transition-colors ${
+                    className={`flex min-w-0 flex-1 items-stretch gap-3 rounded-xl text-left transition-colors ${
                       coord ? "hover:bg-white/5 active:bg-white/8" : ""
-                    } ${selected ? "bg-primary-dim" : ""}`}
+                    }`}
                   >
                     {/* time: the plan struck through above the actual one when they differ */}
                     <span className="w-12 shrink-0 self-center pl-1 text-right tabular-nums">
@@ -598,6 +642,47 @@ function TripView({
                       </span>
                     )}
                   </button>
+                  {canAlert && ak && (
+                    <button
+                      type="button"
+                      aria-label={al ? `Wyłącz powiadomienie ${al.leadMin} min przed` : "Powiadom przed odjazdem"}
+                      aria-expanded={al ? undefined : alertMenu === ak}
+                      onClick={() => (al ? removeAlert(ak) : setAlertMenu((m) => (m === ak ? null : ak)))}
+                      className={`tap grid h-11 w-10 shrink-0 place-items-center rounded-xl text-[17px] hover:bg-white/5 ${
+                        al ? "text-primary" : "text-text-mute hover:text-text"
+                      }`}
+                    >
+                      <BellIcon weight={al ? "fill" : "bold"} aria-hidden />
+                    </button>
+                  )}
+                  </div>
+                  {ak && !al && alertMenu === ak && trip.stop && planned != null && (
+                    /* aligned with the stop names, the rail runs on beside it */
+                    <div className="flex items-stretch gap-3">
+                      <span className="w-12 shrink-0" aria-hidden />
+                      <span className="relative w-6 shrink-0" aria-hidden>
+                        {!last && (
+                          <span className="absolute inset-y-0 left-1/2 w-1.5 -translate-x-1/2" style={{ background: lineColor }} />
+                        )}
+                      </span>
+                      <div
+                        role="group"
+                        aria-label="Powiadom przed odjazdem"
+                        className="flex min-w-0 flex-1 flex-wrap items-center gap-2 py-2 text-[12px]"
+                      >
+                        {ALERT_LEADS.map((m) => (
+                          <button
+                            key={m}
+                            type="button"
+                            onClick={() => trip.stop && void pickAlert(ak, trip.stop, planned, m)}
+                            className="tap min-h-8 rounded-full bg-white/8 px-3 font-medium text-text hover:bg-white/12"
+                          >
+                            {m} min przed
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </li>
               );
             })}

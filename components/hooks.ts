@@ -4,10 +4,30 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import useSWR from "swr";
 import { fetchJSON, vehiclesFetcher } from "@/lib/client/api";
 import { nowSecs } from "@/lib/client/format";
+import { loadOffline, saveOffline } from "@/lib/client/offline";
 import type { LinesResponse, StopsResponse, VehiclesResponse } from "@/lib/client/types";
 
 /** Cached SWR fetcher — honors HTTP Cache-Control headers for static catalogs */
 const cachedFetcher = <T>(url: string): Promise<T> => fetchJSON<T>(url);
+
+/* the last complete stop list is kept offline (at most one write per 10 min, focus revalidates up to
+   once a minute) and answers when the network fails, so an offline start still has stops and favourites */
+const STOPS_SAVE_MS = 10 * 60_000;
+let stopsSavedAt = 0;
+async function stopsFetcher(url: string): Promise<StopsResponse> {
+  try {
+    const body = await fetchJSON<StopsResponse>(url);
+    if (!body.partial && Date.now() - stopsSavedAt > STOPS_SAVE_MS) {
+      stopsSavedAt = Date.now();
+      void saveOffline("stops", body);
+    }
+    return body;
+  } catch (e) {
+    const saved = await loadOffline<StopsResponse>("stops");
+    if (saved) return saved;
+    throw e;
+  }
+}
 
 /** Live vehicle positions, polled every 4 s, never HTTP-cached. */
 export function useVehicles() {
@@ -30,7 +50,7 @@ export function useVehicles() {
  * An unchanged payload keeps its identity (SWR compares deeply), so the 4 s heartbeat tree never re-renders for it.
  */
 export function useStops() {
-  return useSWR<StopsResponse>("/api/stops", cachedFetcher, {
+  return useSWR<StopsResponse>("/api/stops", stopsFetcher, {
     revalidateOnFocus: true,
     focusThrottleInterval: 60_000,
     revalidateOnReconnect: true,

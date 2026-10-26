@@ -20,6 +20,14 @@ export function formatDistance(m: number): string {
   return `${(m / 1000).toFixed(1).replace(".", ",")} km`;
 }
 
+/* same pace as the server router (lib/router.ts WALK_MPS) */
+const WALK_MPS = 1.1;
+
+/** "~7 min pieszo". ponytail: straight line, a real foot route would need the OSRM foot profile. */
+export function formatWalk(m: number): string {
+  return `~${Math.max(1, Math.ceil(m / WALK_MPS / 60))} min pieszo`;
+}
+
 /** The `limit` stops closest to `pos`, nearest first. O(n) over ~956 stops. */
 export function nearestStops(
   stops: Stop[],
