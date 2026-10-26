@@ -6,6 +6,8 @@ const nextConfig: NextConfig = {
   env: { NEXT_PUBLIC_BUILD_ID: Date.now().toString(36) },
   reactStrictMode: true,
   poweredByHeader: false,
+  // nothing uses next/image: /_next/image answers 404 before sharp ever parses a byte
+  images: { unoptimized: true },
   // lib reads <cwd>/output and the tests <cwd>/test at runtime, so the tracer would bake a snapshot of
   // the local output/ (feed, shape store, its .lock) and the fixtures into .next/standalone.
   // Covers the route traces only: Next 16 applies no excludes to the instrumentation trace, so a local

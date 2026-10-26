@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  # a new advisory against an unchanged lockfile turns the audit red (and mails the repo owner)
+  schedule:
+    - cron: "0 5 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -13,6 +17,7 @@ env:
 
 jobs:
   check:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -39,6 +44,7 @@ jobs:
   # The production deploy path (Dockerfile COPY stages, .dockerignore). Build
   # only: running the image would start the poller against the live upstream.
   docker:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5

@@ -12,6 +12,15 @@ services:
       # ports + healthchecks assume 8080; don't let a PORT in .env move the listener
       PORT: "8080"
     restart: unless-stopped
+    # blast radius if a framework RCE ever lands: image code is immutable, no capabilities,
+    # no setuid escalation, no fork bomb. Every write the app makes goes to /app/output
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /app/.next/cache
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 256
     volumes:
       # built GTFS feed (stop-direction arrows, line catalog) + logs — survives
       # redeploys; populated by the in-process nightly build (KB_GTFS_AUTOBUILD)
