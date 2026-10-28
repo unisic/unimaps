@@ -45,19 +45,18 @@ export function makeVehicleIcon(
   line: string,
   color: string,
   bearing: number | null,
-  operator?: "KB" | "MZK",
+  operator?: "KB" | "MZK" | "GZM",
 ): L.DivIcon {
   const hasHeading = bearing != null;
   const arrow = hasHeading
     ? `<span class="veh-arrow" style="transform:rotate(${bearing}deg)">${ARROW_SVG}</span>`
     : "";
-  const isMzk = operator === "MZK";
-  const brandIcon = isMzk
-    ? `<img class="veh-bus" src="/mzk-logo.svg" alt="" aria-hidden="true" draggable="false"/>`
-    : `<img class="veh-bus" src="/brand.svg" alt="" aria-hidden="true" draggable="false"/>`;
+  const logo = operator === "GZM" ? "/gzm-logo.svg" : operator === "MZK" ? "/mzk-logo.svg" : "/brand.svg";
+  const brandIcon = `<img class="veh-bus" src="${logo}" alt="" aria-hidden="true" draggable="false"/>`;
+  const opClass = operator === "GZM" ? " veh-gzm" : operator === "MZK" ? " veh-mzk" : "";
 
   return L.divIcon({
-    className: `veh-marker${isMzk ? " veh-mzk" : ""}`,
+    className: `veh-marker${opClass}`,
     html:
       `<div class="veh-wrap"><div class="veh-pill${hasHeading ? "" : " no-heading"}" style="background:${color}">` +
       arrow +
@@ -66,6 +65,12 @@ export function makeVehicleIcon(
     iconSize: [40, 40],
     iconAnchor: [20, 20],
   });
+}
+
+function stopOpClass(operator?: "KB" | "MZK" | "GZM" | "BOTH"): string {
+  if (operator === "BOTH") return " is-both";
+  if (operator === "MZK") return " is-mzk";
+  return operator === "GZM" ? " is-gzm" : " is-kb";
 }
 
 /** Direction caret, cropped to the glyph so it sits flush against the stop disc. */
@@ -80,15 +85,17 @@ const STOP_ARROW_SVG = `<svg class="stop-arrow-svg" viewBox="32 60 192 116" aria
 export function makeStopIcon(
   dirs: number[] = [],
   isStation = false,
-  operator?: "KB" | "MZK" | "BOTH",
+  operator?: "KB" | "MZK" | "GZM" | "BOTH",
 ): L.DivIcon {
-  const opClass = operator === "BOTH" ? " is-both" : operator === "MZK" ? " is-mzk" : " is-kb";
+  const opClass = stopOpClass(operator);
   const stnTitle =
     operator === "BOTH"
       ? "Komunikacja Beskidzka / MZK"
       : operator === "MZK"
         ? "MZK Bielsko-Biała"
-        : "Dworzec Autobusowy";
+        : operator === "GZM"
+          ? "Metropolia GZM"
+          : "Dworzec Autobusowy";
   if (isStation) {
     return L.divIcon({
       className: `stop-mk-icon${opClass}`,
@@ -113,8 +120,8 @@ export function makeStopIcon(
   });
 }
 
-export function makeStopPingIcon(operator?: "KB" | "MZK" | "BOTH"): L.DivIcon {
-  const opClass = operator === "BOTH" ? " is-both" : operator === "MZK" ? " is-mzk" : " is-kb";
+export function makeStopPingIcon(operator?: "KB" | "MZK" | "GZM" | "BOTH"): L.DivIcon {
+  const opClass = stopOpClass(operator);
   return L.divIcon({
     className: `stop-ping-marker${opClass}`,
     html: '<div class="stop-ping"><span class="ring"></span><span class="core"></span></div>',

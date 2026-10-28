@@ -57,10 +57,13 @@ export const COLOR_EARLY = "#a86fdd";
 export const BRAND_MZK = "#2563eb";
 export const ACCENT_MZK = "#3b82f6";
 
+/** Metropolia GZM brand amber (apart from KB red and MZK blue). */
+export const BRAND_GZM = "#a16207";
+
 /** Check if a line or operator belongs to MZK Bielsko-Biała. */
 export function isMzk(operator?: string | null, line?: string | null): boolean {
   if (operator === "MZK") return true;
-  if (operator === "KB") return false;
+  if (operator === "KB" || operator === "GZM") return false;
   if (!line || line === "…") return false;
   const s = String(line).trim();
   // KB lines: 101-157 (three digits)
@@ -69,8 +72,9 @@ export function isMzk(operator?: string | null, line?: string | null): boolean {
   return s.length <= 2 || /^\d{1,2}[A-Z]$/i.test(s) || s.startsWith("N") || s.startsWith("P");
 }
 
-/** Constant brand color: red for KB, characteristic blue for MZK. */
+/** Constant brand color: red for KB, characteristic blue for MZK, amber for GZM. */
 export function operatorColor(operator?: string | null, line?: string | null): string {
+  if (operator === "GZM") return BRAND_GZM;
   return isMzk(operator, line) ? BRAND_MZK : BRAND_KB;
 }
 
@@ -160,14 +164,16 @@ export function delayClass(td: number | null | undefined): string {
 
 /**
  * Recorded arrival per trip.times position as Warsaw seconds since midnight (null = unknown or not passed):
- * KB from the server's arrival log (`arrived`, epoch secs; upstream drops passed stops' times), MZK from the
+ * KB from the server's arrival log (`arrived`, epoch secs; upstream drops passed stops' times), MZK and GZM from the
  * operator's per-stop times of the stops before the vehicle's index.
  */
 export function arrivedSecs(resp: Pick<TripExecutionResponse, "trip" | "arrived" | "vehicle_trip_index">): (number | null)[] | null {
   if (resp.arrived) return resp.arrived.map((e) => (e == null ? null : nowSecs(new Date(e * 1000))));
   const times = resp.trip?.times;
   const vti = resp.vehicle_trip_index;
-  if (resp.trip?.operator !== "MZK" || !times || vti == null) return null;
+  const op = resp.trip?.operator;
+  // GZM speaks the MZK dialect: per-stop estimates in seconds
+  if ((op !== "MZK" && op !== "GZM") || !times || vti == null) return null;
   return times.map((t, i) => {
     const plan = secsFromHHMM(t.departure_time);
     const diff = t.estimate?.time_diff;

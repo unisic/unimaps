@@ -47,6 +47,7 @@ import {
   secsFromHHMM,
   tripTimeMatchesStop,
 } from "@/lib/client/format";
+import { cityOfId } from "@/lib/client/city";
 import { findActiveStop, type ActiveStopResult } from "@/lib/client/geo";
 import type { LatLng, Stop, TripView as TripViewState, Vehicle, VehicleFeatures } from "@/lib/client/types";
 import { progressFromVehicle, stopAlongFor } from "@/lib/shared/trip-progress";
@@ -172,8 +173,17 @@ function TripView({
   }
 
   const currentVeh = liveVeh ?? lastLive.veh ?? vehMeta;
-  const tripOp = currentVeh?.operator ?? trip.operator;
+  const tripOp =
+    currentVeh?.operator ??
+    trip.operator ??
+    (cityOfId(trip.execId) === "gzm" || cityOfId(trip.tripId) === "gzm" ? "GZM" : undefined);
   const isMzkTrip = isMzk(tripOp, trip.line);
+  const isGzmTrip = tripOp === "GZM";
+  /* fleet card key: MZK side number; GZM `<op>_<fleet>` from the vehicle id (side_number is the bare fleet label) */
+  const vehId = currentVeh?.id ?? trip.execId;
+  const cardSide = isGzmTrip
+    ? (vehId?.startsWith("gzm:") ? vehId.slice(4) : null)
+    : isMzkTrip ? (currentVeh?.side_number ?? null) : null;
   const lineColor = operatorColor(tripOp, trip.line === "…" ? null : trip.line);
   const loading = trip.status === "loading";
   const failed = trip.status === "error";
@@ -369,7 +379,7 @@ function TripView({
             <BackIcon />
           </IconButton>
         )}
-        <LineBadge line={trip.line} operator={isMzkTrip ? "MZK" : "KB"} big />
+        <LineBadge line={trip.line} operator={isGzmTrip ? "GZM" : isMzkTrip ? "MZK" : "KB"} big />
         <div className="min-w-0 flex-1 pl-0.5">
           <h2 className="truncate text-[16px] font-semibold leading-tight tracking-tight text-text">
             {loading ? "Wczytywanie…" : direction ? displayStopName(direction) : `Linia ${trip.line}`}
@@ -433,21 +443,24 @@ function TripView({
           style={{ top: menuAt.top, right: menuAt.right, maxHeight: `calc(100dvh - ${menuAt.top + 12}px)` }}
         >
           <div className="flex items-center gap-2 pl-3">
-            <span className={`h-2 w-2 rounded-full ${isMzkTrip ? "bg-mzk" : "bg-kb"}`} aria-hidden />
+            <span
+              className={`h-2 w-2 rounded-full ${isGzmTrip ? "bg-gzm" : isMzkTrip ? "bg-mzk" : "bg-kb"}`}
+              aria-hidden
+            />
             <span className="flex-1 text-[12px] font-medium text-text-faint">
-              {isMzkTrip ? "MZK Bielsko-Biała" : "Komunikacja Beskidzka"}
+              {isGzmTrip ? "Metropolia GZM" : isMzkTrip ? "MZK Bielsko-Biała" : "Komunikacja Beskidzka"}
             </span>
             <ShareButton title={`Linia ${trip.line}${direction ? ` → ${displayStopName(direction)}` : ""}`} />
           </div>
-          {isMzkTrip && currentVeh?.side_number && (
+          {cardSide && (
             <a
-              href={`/brygady?tabor=${encodeURIComponent(currentVeh.side_number)}`}
+              href={`/brygady?${isGzmTrip ? "city=gzm&" : ""}tabor=${encodeURIComponent(cardSide)}`}
               onClick={(e) => {
                 // a modified click still opens the fleet page in a new tab
-                if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || !currentVeh.side_number) return;
+                if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
                 e.preventDefault();
                 setMenuAt(null);
-                onOpenVehicleCard(currentVeh.side_number);
+                onOpenVehicleCard(cardSide);
               }}
               className="group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-text transition-colors hover:bg-white/5"
             >
@@ -455,8 +468,8 @@ function TripView({
               <span className="min-w-0 flex-1">
                 <span className="block">Karta pojazdu</span>
                 <span className="block truncate text-[12px] tabular-nums text-text-mute">
-                  #{currentVeh.side_number}
-                  {currentVeh.model ? ` · ${currentVeh.model}` : ""}
+                  #{currentVeh?.side_number ?? cardSide}
+                  {currentVeh?.model ? ` · ${currentVeh.model}` : ""}
                 </span>
               </span>
               <ArrowRightIcon className="text-[14px] text-text-faint transition-transform duration-200 group-hover:translate-x-0.5" />
@@ -512,9 +525,15 @@ function TripView({
     >
       <div ref={scrollRef} className="kb-scroll h-full overflow-y-auto">
         {failed ? (
-          <ErrorState onRetry={onRetry} />
+          <ErrorState onRetry={onRetry} message={trip.errorMsg} />
         ) : loading ? (
           <TimelineSkeleton />
+        ) : trip.rawTimes.length === 0 ? (
+          <p className="px-5 pb-6 pt-2 text-[13px] text-text-mute">
+            {isLiveWithLoc
+              ? "Przewoźnik nie podaje teraz kursu tego pojazdu: skończył kursy na dziś, jedzie do zajezdni albo ma przerwę. Pozycja na mapie jest na żywo."
+              : "Brak przystanków tego kursu."}
+          </p>
         ) : (
           <ol className="px-4 pt-1" style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 1.25rem)" }}>
             {trip.rawTimes.map((t, idx) => {
@@ -544,7 +563,7 @@ function TripView({
               const last = idx === trip.rawTimes.length - 1;
               /* the bell sits only on the stop the trip was opened from: the board there is what the alert watches.
                  Not on the last stop: a loop ending where it started arrives there, it never departs */
-              const ak = selected && trip.execId ? tripAlertKey(trip.execId, t.index) : null;
+              const ak = selected && trip.execId ? tripAlertKey(trip.execId, t.index, trip.tripId || currentVeh?.trip_id) : null;
               const al = ak ? alertByKey.get(ak) : undefined;
               const canAlert = al != null || (ak != null && !passed && !last && planned != null);
               return (

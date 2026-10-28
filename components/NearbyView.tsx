@@ -5,7 +5,8 @@ import BottomSheet from "@/components/BottomSheet";
 import { CaretRightIcon, PersonSimpleWalkIcon } from "@/components/icons";
 import type { GeoStatus } from "@/components/hooks";
 import { CloseIcon, ErrorState, IconButton, LineBadge, SkeletonRows } from "@/components/ui";
-import { fetchJSON } from "@/lib/client/api";
+import { fetchJSON, isWarming } from "@/lib/client/api";
+import { GZM_LOADING } from "@/lib/client/city";
 import { delayClass, displayStopName } from "@/lib/client/format";
 import { formatDistance, formatWalk, nearestStops } from "@/lib/client/geo";
 import { createLivePoll } from "@/lib/client/live-poll";
@@ -37,7 +38,8 @@ function NearbyView({ desktop, stops, pos, geoStatus, vehicles, onSelectStop, on
   /* the poll restarts only when the SET of nearby stops changes, not on every GPS fix */
   const key = near.map((n) => n.s.designator).sort().join("\n");
   const [boards, setBoards] = useState<Boards | null>(null);
-  const [err, setErr] = useState(false);
+  /* "warming": the server is still loading the GZM data (503); the poll keeps retrying */
+  const [err, setErr] = useState<false | "error" | "warming">(false);
   const [attempt, setAttempt] = useState(0);
   const [nowTs, setNowTs] = useState(() => Date.now() / 1000);
 
@@ -70,8 +72,8 @@ function NearbyView({ desktop, stops, pos, geoStatus, vehicles, onSelectStop, on
         setErr(false);
         setNowTs(Date.now() / 1000 + skew);
       },
-      onFail: () => {
-        if (!have) setErr(true);
+      onFail: (e) => {
+        if (!have) setErr(designators[0].startsWith("gzm:") && isWarming(e) ? "warming" : "error");
       },
       isVisible: () => !document.hidden,
     });
@@ -126,6 +128,7 @@ function NearbyView({ desktop, stops, pos, geoStatus, vehicles, onSelectStop, on
           <SkeletonRows />
         ) : err && !boards ? (
           <ErrorState
+            message={err === "warming" ? GZM_LOADING : undefined}
             onRetry={() => {
               setErr(false);
               setAttempt((a) => a + 1);

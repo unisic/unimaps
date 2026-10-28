@@ -9,5 +9,13 @@ export async function register(): Promise<void> {
     void startPoller().catch((err: unknown) => {
       log.error("rt", `background poller start failed: ${err}`);
     });
+    // GZM runs beside the BB pollers, never inside startPoller: its failure must not touch BB
+    const { GZM_ENABLED } = await import("./lib/config");
+    if (GZM_ENABLED) {
+      const { startGzm } = await import("./lib/gzm");
+      void startGzm().catch((err: unknown) => {
+        log.error("gzm", `GZM start failed: ${err}`);
+      });
+    }
   }
 }

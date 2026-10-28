@@ -1,11 +1,9 @@
 "use client";
 
 import { useEffect, useEffectEvent, useId, useMemo, useRef, useState } from "react";
-import { isNotFound, useVehicleDetail, useVehiclePhotos, type FleetSummaryItem } from "@/lib/client/fleet";
-import { prefersReducedMotion } from "@/lib/client/motion";
-import type { FleetCurrentCourse, FleetVehicleDetail, VehicleCourseRecord, VehiclePhoto } from "@/lib/shared/fleet";
+import { cityOfSide, isNotFound, useVehicleDetail, type FleetSummaryItem } from "@/lib/client/fleet";
+import type { FleetCurrentCourse, FleetVehicleDetail, VehicleCourseRecord } from "@/lib/shared/fleet";
 import { useNow } from "../hooks";
-import { CaretLeftIcon, CaretRightIcon } from "../icons";
 import { CloseIcon, LineBadge, ShareButton } from "../ui";
 import { CourseDelayColumns, CourseGantt, GanttLegend, type DelayColumn, type GanttCourse } from "./charts";
 import {
@@ -13,6 +11,7 @@ import {
   ChevronDownIcon,
   DelayBadge,
   featureList,
+  FLEET_CITY,
   fmtAgo,
   fmtDelay,
   fmtDelayMin,
@@ -31,7 +30,9 @@ const FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]),select,t
 /** Opens a live course on the map in place (the card sits over the map); without it the link navigates. */
 type ShowOnMap = (execId: string) => void;
 
-/** Modal sheet: bottom sheet on phones, centred dialog from md up. */
+type Operator = FleetVehicleDetail["operator"];
+
+/** Modal sheet: bottom sheet on phones, centred dialog from md up. The city follows from the side number. */
 export function VehicleSheet({
   side,
   seed,
@@ -45,7 +46,9 @@ export function VehicleSheet({
 }) {
   const titleId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
-  const { data, error, isLoading, mutate } = useVehicleDetail(side);
+  const city = cityOfSide(side);
+  const brand = FLEET_CITY[city];
+  const { data, error, isLoading, mutate } = useVehicleDetail(side, city);
   const close = useEffectEvent(() => onClose());
 
   useEffect(() => {
@@ -89,6 +92,9 @@ export function VehicleSheet({
   const vehicle = data?.vehicle;
   const notFound = isNotFound(error);
   const model = vehicle?.model ?? seed?.model;
+  const company = vehicle?.company ?? seed?.company;
+  // GZM shows the printed fleet number, not the "<company>_<fleet>" key (MZK: the side number itself)
+  const label = vehicle?.label ?? seed?.label ?? side.slice(side.indexOf("_") + 1);
 
   return (
     <div className="fixed inset-0 z-[2000] flex items-end justify-center md:items-center md:p-6">
@@ -105,14 +111,18 @@ export function VehicleSheet({
         <header className="flex shrink-0 items-center gap-2 border-b border-hairline px-4 pb-3 pt-2 md:pt-4">
           <div className="min-w-0 flex-1">
             <h2 id={titleId} className="truncate text-[18px] font-bold text-text tabular-nums">
-              Pojazd #{side}
+              Pojazd #{label}
             </h2>
             <p className="truncate text-[13px] text-text-mute">
+              {company ? `${company}${model ? ", " : ""}` : null}
               {model ?? (notFound ? "Nieznany pojazd" : " ")}
               {vehicle?.year ? <span className="text-text-faint"> ({vehicle.year})</span> : null}
             </p>
           </div>
-          <ShareButton title={`Pojazd MZK #${side}`} path={`/brygady?tabor=${encodeURIComponent(side)}`} />
+          <ShareButton
+            title={`Pojazd ${brand.short} #${label}`}
+            path={`/brygady?${city === "gzm" ? "city=gzm&" : ""}tabor=${encodeURIComponent(side)}`}
+          />
           <button
             type="button"
             onClick={onClose}
@@ -136,9 +146,11 @@ export function VehicleSheet({
             </>
           ) : notFound ? (
             <div className="py-12 text-center">
-              <p className="text-[15px] font-medium text-text">Nie znamy pojazdu #{side}</p>
+              <p className="text-[15px] font-medium text-text">Nie znamy pojazdu #{label}</p>
               <p className="mx-auto mt-1 max-w-sm text-[13px] text-text-mute">
-                Tego numeru nie ma we flocie MZK Bielsko-Biała. Link mógł się zestarzeć albo numer ma literówkę.
+                {city === "gzm"
+                  ? "Ten pojazd nie wyjechał dziś na trasę. Link mógł się zestarzeć albo numer ma literówkę."
+                  : "Tego numeru nie ma we flocie MZK Bielsko-Biała. Link mógł się zestarzeć albo numer ma literówkę."}
               </p>
               <button
                 type="button"
@@ -198,8 +210,15 @@ function Block({ title, children, aside }: { title: string; children: React.Reac
   );
 }
 
+/** The map's exec id of the running course: GZM keys a live vehicle by its side alone. */
 function liveExec(v: FleetVehicleDetail, c: FleetCurrentCourse): string | null {
+  if (v.operator === "GZM") return `gzm:${v.sideNumber}`;
   return c.courseLoid === undefined ? null : `mzk:${c.courseLoid}:${v.sideNumber}`;
+}
+
+/** "69/1" when the course has a brigade (GZM). */
+function brigadeOf(c: { lineName: string; brigade?: string }): string | null {
+  return c.brigade ? `${c.lineName}/${c.brigade}` : null;
 }
 
 function VehicleBody({ v, onShowOnMap }: { v: FleetVehicleDetail; onShowOnMap?: ShowOnMap }) {
@@ -252,10 +271,7 @@ function VehicleBody({ v, onShowOnMap }: { v: FleetVehicleDetail; onShowOnMap?: 
 
   return (
     <div className="space-y-4">
-      <div className="space-y-4 md:flex md:gap-4 md:space-y-0">
-        <PhotoGallery side={v.sideNumber} />
-        <StatusBlock v={v} nowEpoch={nowEpoch} onShowOnMap={onShowOnMap} />
-      </div>
+      <StatusBlock v={v} nowEpoch={nowEpoch} onShowOnMap={onShowOnMap} />
 
       <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Kpi label="Kursy dziś" value={String(s.totalCoursesToday)}>
@@ -286,7 +302,7 @@ function VehicleBody({ v, onShowOnMap }: { v: FleetVehicleDetail; onShowOnMap?: 
           <ul className="flex flex-wrap gap-2" aria-label="Linie obsłużone dziś">
             {v.lines.map((l) => (
               <li key={l}>
-                <LineBadge line={l} operator="MZK" big={l === v.mainLine} />
+                <LineBadge line={l} operator={v.operator} big={l === v.mainLine} />
               </li>
             ))}
           </ul>
@@ -295,7 +311,9 @@ function VehicleBody({ v, onShowOnMap }: { v: FleetVehicleDetail; onShowOnMap?: 
         )}
         <p className="mt-3 flex gap-2 text-[12px] leading-snug text-text-faint">
           <InfoIcon size={14} className="mt-px shrink-0" />
-          MZK nie publikuje numerów brygad, dlatego pokazujemy linie obsłużone dziś przez ten pojazd.
+          {v.operator === "GZM"
+            ? "Brygady kursów i następny kurs pochodzą z rozkładu GZM."
+            : "MZK nie publikuje numerów brygad, dlatego pokazujemy linie obsłużone dziś przez ten pojazd."}
         </p>
       </Block>
 
@@ -314,7 +332,7 @@ function VehicleBody({ v, onShowOnMap }: { v: FleetVehicleDetail; onShowOnMap?: 
         </Block>
       ) : null}
 
-      {v.predictedNextCourse ? <PredictionCard p={v.predictedNextCourse} /> : null}
+      {v.predictedNextCourse ? <PredictionCard p={v.predictedNextCourse} operator={v.operator} /> : null}
 
       <Block
         title="Karta drogowa"
@@ -329,7 +347,7 @@ function VehicleBody({ v, onShowOnMap }: { v: FleetVehicleDetail; onShowOnMap?: 
         {roadLog.length > 0 ? (
           <ul className="-mx-1 divide-y divide-hairline">
             {roadLog.map(({ c, live }) => (
-              <CourseRow key={c.id} c={c} live={live} open={expanded.has(c.id)} onToggle={toggle} />
+              <CourseRow key={c.id} c={c} live={live} open={expanded.has(c.id)} onToggle={toggle} operator={v.operator} />
             ))}
           </ul>
         ) : (
@@ -338,22 +356,34 @@ function VehicleBody({ v, onShowOnMap }: { v: FleetVehicleDetail; onShowOnMap?: 
       </Block>
 
       <Block title="Dane techniczne">
-        <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 text-[13px]">
-          <dt className="text-text-mute">Numer boczny</dt>
-          <dd className="font-semibold text-text tabular-nums">#{v.sideNumber}</dd>
-          <dt className="text-text-mute">Producent</dt>
-          <dd className="text-text">{v.producer || "–"}</dd>
-          <dt className="text-text-mute">Model</dt>
-          <dd className="text-text">{v.model || "–"}</dd>
-          <dt className="text-text-mute">Rok produkcji</dt>
-          <dd className="text-text tabular-nums">{v.year ?? "–"}</dd>
-          <dt className="text-text-mute">Długość</dt>
-          <dd className="text-text">{LENGTH_LABEL[v.lengthCategory]}</dd>
-          <dt className="text-text-mute">Napęd</dt>
-          <dd className="text-text">{FUEL_LABEL[v.fuelType]}</dd>
-          <dt className="text-text-mute">Wyposażenie</dt>
-          <dd className="text-text">{featureList(v.features).join(", ") || "–"}</dd>
-        </dl>
+        {v.operator === "GZM" ? (
+          // GZM publishes the model only: no producer, year, length, propulsion or equipment
+          <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 text-[13px]">
+            <dt className="text-text-mute">Numer taborowy</dt>
+            <dd className="font-semibold text-text tabular-nums">#{v.label ?? v.sideNumber}</dd>
+            <dt className="text-text-mute">Przewoźnik</dt>
+            <dd className="text-text">{v.company || "–"}</dd>
+            <dt className="text-text-mute">Model</dt>
+            <dd className="text-text">{v.model || "–"}</dd>
+          </dl>
+        ) : (
+          <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 text-[13px]">
+            <dt className="text-text-mute">Numer boczny</dt>
+            <dd className="font-semibold text-text tabular-nums">#{v.sideNumber}</dd>
+            <dt className="text-text-mute">Producent</dt>
+            <dd className="text-text">{v.producer || "–"}</dd>
+            <dt className="text-text-mute">Model</dt>
+            <dd className="text-text">{v.model || "–"}</dd>
+            <dt className="text-text-mute">Rok produkcji</dt>
+            <dd className="text-text tabular-nums">{v.year ?? "–"}</dd>
+            <dt className="text-text-mute">Długość</dt>
+            <dd className="text-text">{v.lengthCategory ? LENGTH_LABEL[v.lengthCategory] : "–"}</dd>
+            <dt className="text-text-mute">Napęd</dt>
+            <dd className="text-text">{v.fuelType ? FUEL_LABEL[v.fuelType] : "–"}</dd>
+            <dt className="text-text-mute">Wyposażenie</dt>
+            <dd className="text-text">{featureList(v.features).join(", ") || "–"}</dd>
+          </dl>
+        )}
       </Block>
     </div>
   );
@@ -373,16 +403,18 @@ function StatusBlock({ v, nowEpoch, onShowOnMap }: { v: FleetVehicleDetail; nowE
   const c = v.currentCourse;
   if (c && v.status === "active") {
     const exec = liveExec(v, c);
+    const brigade = brigadeOf(c);
     const driven = c.drivenMeters !== undefined ? c.drivenMeters / 1000 : null;
     const length = c.lengthMeters !== undefined ? c.lengthMeters / 1000 : null;
     return (
-      <section aria-label="Bieżący kurs" className="flex flex-col rounded-2xl border border-hairline bg-surface p-4 md:min-w-0 md:flex-1">
+      <section aria-label="Bieżący kurs" className="flex flex-col rounded-2xl border border-hairline bg-surface p-4">
         <div className="flex items-center gap-2.5">
-          <LineBadge line={c.lineName} operator="MZK" big />
+          <LineBadge line={c.lineName} operator={v.operator} big />
           <div className="min-w-0 flex-1">
             <p className="truncate text-[15px] font-semibold text-text">{c.direction}</p>
             <p className="text-[12.5px] text-text-mute tabular-nums">
               Kurs {c.startTime}–{c.endTime} z {c.firstStopName}
+              {brigade ? `, brygada ${brigade}` : null}
             </p>
           </div>
           {!c.notStarted ? <DelayBadge sec={c.delaySec} size="md" /> : null}
@@ -455,7 +487,7 @@ function StatusBlock({ v, nowEpoch, onShowOnMap }: { v: FleetVehicleDetail; nowE
   const loc = v.lastKnownLocation;
   const hasCoords = loc && Math.abs(loc.lat) > 1 && Math.abs(loc.lon) > 1;
   return (
-    <section aria-label="Stan pojazdu" className="flex flex-col rounded-2xl border border-hairline bg-surface p-4 md:min-w-0 md:flex-1">
+    <section aria-label="Stan pojazdu" className="flex flex-col rounded-2xl border border-hairline bg-surface p-4">
       <p className="text-[15px] font-semibold text-text">Nie kursuje</p>
       <p className="mt-1 text-[13px] text-text-mute">
         {v.lastSeenAt > 0 ? (
@@ -470,7 +502,7 @@ function StatusBlock({ v, nowEpoch, onShowOnMap }: { v: FleetVehicleDetail; nowE
       {v.lastSeenAt > 0 && hasCoords ? (
         <div className="mt-auto pt-3">
           <a
-            href={`/?map=${loc.lat.toFixed(5)},${loc.lon.toFixed(5)},16`}
+            href={`/?${v.operator === "GZM" ? "city=gzm&" : ""}map=${loc.lat.toFixed(5)},${loc.lon.toFixed(5)},16`}
             className="inline-flex min-h-10 items-center gap-2 rounded-full bg-surface-3 px-4 text-[13px] font-semibold text-text transition-colors hover:bg-white/12"
           >
             <MapIcon size={15} />
@@ -482,124 +514,28 @@ function StatusBlock({ v, nowEpoch, onShowOnMap }: { v: FleetVehicleDetail; nowE
   );
 }
 
-const STRIP = "flex snap-x snap-mandatory overflow-x-auto overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden";
-const ARROW =
-  "absolute top-1/2 grid h-9 w-9 -translate-y-1/2 place-items-center rounded-full bg-black/55 text-[15px] text-white transition-opacity hover:bg-black/75 disabled:pointer-events-none disabled:opacity-0 pointer-coarse:hidden";
-
-const slideAt = (el: HTMLElement) => Math.round(el.scrollLeft / el.clientWidth);
-
-function slideTo(el: HTMLElement | null, k: number) {
-  el?.scrollTo({ left: k * el.clientWidth, behavior: prefersReducedMotion() ? "auto" : "smooth" });
-}
-
-/** The newest phototrans photos as a swipeable strip (scroll snap), hot-linked and credited; a tap
- *  opens the photo's page on phototrans, the only place its original shows (phototrans answers a
- *  foreign Referer with an empty page). Nothing when the vehicle has none. */
-function PhotoGallery({ side }: { side: string }) {
-  const { data, isLoading } = useVehiclePhotos(side);
-  const [failed, setFailed] = useState<ReadonlySet<string>>(() => new Set());
-  const [index, setIndex] = useState(0);
-  const stripRef = useRef<HTMLDivElement>(null);
-  if (isLoading) return <div className="skeleton aspect-[3/2] w-full rounded-2xl md:w-[300px] md:shrink-0 md:self-start" />;
-  const photos = (data?.photos ?? []).filter((ph) => !failed.has(ph.thumb));
-  if (photos.length === 0) return null;
-  const n = photos.length;
-  const i = Math.min(index, n - 1);
+function PredictionCard({ p, operator }: { p: NonNullable<FleetVehicleDetail["predictedNextCourse"]>; operator: Operator }) {
+  // "high" = the brigade's next trip from the GZM schedule, not a guess
+  const scheduled = p.confidence === "high";
   return (
-    <figure
-      aria-label={`Zdjęcia pojazdu #${side}`}
-      className="overflow-hidden rounded-2xl border border-hairline bg-surface md:w-[300px] md:shrink-0 md:self-start"
+    <section
+      aria-label={scheduled ? "Następny kurs według rozkładu" : "Następny kurs, szacunek"}
+      className={`rounded-2xl border p-4 ${scheduled ? "border-hairline bg-surface" : "border-dashed border-white/15"}`}
     >
-      <div className="relative">
-        <div ref={stripRef} onScroll={(e) => setIndex(slideAt(e.currentTarget))} className={STRIP}>
-          {photos.map((ph, k) => (
-            <a
-              key={ph.thumb}
-              href={ph.page}
-              target="_blank"
-              rel="noopener"
-              title="Pełna rozdzielczość na phototrans"
-              className="block w-full shrink-0 snap-center"
-            >
-              {/* the photos stay on phototrans: next/image would re-host them through our server */}
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={ph.thumb}
-                alt={`Pojazd #${side}, zdjęcie ${k + 1} z ${n}, fot. ${ph.author}`}
-                width={300}
-                height={200}
-                loading={k === 0 ? "eager" : "lazy"}
-                draggable={false}
-                className="aspect-[3/2] w-full bg-surface-2 object-cover"
-                onError={() => setFailed((prev) => new Set(prev).add(ph.thumb))}
-              />
-            </a>
-          ))}
-        </div>
-        {n > 1 ? (
-          <>
-            <span className="pointer-events-none absolute right-2 top-2 rounded-full bg-black/60 px-2 py-0.5 text-[11.5px] font-medium tabular-nums text-white">
-              {i + 1} / {n}
-            </span>
-            <SlideArrows i={i} n={n} go={(k) => slideTo(stripRef.current, k)} />
-          </>
-        ) : null}
-      </div>
-      <PhotoCredit p={photos[i]} className="px-3 py-2" />
-    </figure>
-  );
-}
-
-function SlideArrows({ i, n, go }: { i: number; n: number; go: (k: number) => void }) {
-  return (
-    <>
-      <button type="button" aria-label="Poprzednie zdjęcie" disabled={i === 0} onClick={() => go(i - 1)} className={`${ARROW} left-2`}>
-        <CaretLeftIcon size="1em" weight="bold" aria-hidden />
-      </button>
-      <button type="button" aria-label="Następne zdjęcie" disabled={i === n - 1} onClick={() => go(i + 1)} className={`${ARROW} right-2`}>
-        <CaretRightIcon size="1em" weight="bold" aria-hidden />
-      </button>
-    </>
-  );
-}
-
-function PhotoCredit({ p, className }: { p: VehiclePhoto; className: string }) {
-  return (
-    <figcaption className={`flex items-baseline gap-1.5 text-[12px] text-text-mute ${className}`}>
-      <span className="min-w-0 truncate">
-        Fot.{" "}
-        <a href={p.authorPage} target="_blank" rel="noopener" className="font-medium text-text hover:underline">
-          {p.author}
-        </a>
-        {p.date ? <span className="tabular-nums"> · {fmtPhotoDate(p.date)}</span> : null}
-      </span>
-      <a href={p.page} target="_blank" rel="noopener" className="ml-auto shrink-0 text-text-faint hover:text-text">
-        phototrans
-      </a>
-    </figcaption>
-  );
-}
-
-function fmtPhotoDate(date: NonNullable<VehiclePhoto["date"]>): string {
-  const [y, m, d] = date.split("-");
-  return `${Number(d)}.${m}.${y}`;
-}
-
-function PredictionCard({ p }: { p: NonNullable<FleetVehicleDetail["predictedNextCourse"]> }) {
-  return (
-    <section aria-label="Następny kurs, szacunek" className="rounded-2xl border border-dashed border-white/15 p-4">
       <div className="mb-2 flex items-center justify-between gap-3">
-        <h3 className="text-[14px] font-semibold text-text">Następny kurs (szacunek)</h3>
+        <h3 className="text-[14px] font-semibold text-text">{scheduled ? "Następny kurs" : "Następny kurs (szacunek)"}</h3>
         <span className="rounded-full bg-white/6 px-2 py-0.5 text-[11.5px] font-medium text-text-mute">
-          {p.confidence === "medium" ? "średnia pewność" : "niska pewność"}
+          {scheduled ? "według rozkładu" : p.confidence === "medium" ? "średnia pewność" : "niska pewność"}
         </span>
       </div>
       <div className="flex items-center gap-2.5">
-        <LineBadge line={p.lineName} operator="MZK" />
+        <LineBadge line={p.lineName} operator={operator} />
         <p className="min-w-0 flex-1 text-[13.5px] text-text">
           <span className="font-medium">{p.direction}</span>
           <span className="block text-[12.5px] text-text-mute tabular-nums">
-            ok. {p.departureTime} z {p.fromStopName}, postój ok. {p.pauseMinutes} min
+            {scheduled
+              ? `${p.departureTime} z ${p.fromStopName}, postój ${p.pauseMinutes} min`
+              : `ok. ${p.departureTime} z ${p.fromStopName}, postój ok. ${p.pauseMinutes} min`}
           </span>
         </p>
       </div>
@@ -613,13 +549,16 @@ function CourseRow({
   live,
   open,
   onToggle,
+  operator,
 }: {
   c: VehicleCourseRecord | FleetCurrentCourse;
   live: boolean;
   open: boolean;
   onToggle: (id: string) => void;
+  operator: Operator;
 }) {
   const panelId = useId();
+  const brigade = brigadeOf(c);
   const notStarted = live && "notStarted" in c && Boolean(c.notStarted);
   const cancelled = c.status === "cancelled";
   const km = c.drivenMeters !== undefined ? c.drivenMeters / 1000 : null;
@@ -635,12 +574,16 @@ function CourseRow({
         <span className="w-[5.5rem] shrink-0 text-[12.5px] text-text-mute tabular-nums">
           {c.startTime}–{c.endTime}
         </span>
-        <LineBadge line={c.lineName} operator="MZK" />
+        <LineBadge line={c.lineName} operator={operator} />
         <span className="min-w-0 flex-1">
           <span className="block truncate text-[13px] text-text">
             {c.firstStopName} → {c.lastStopName}
           </span>
-          {km !== null && km > 0 ? <span className="block text-[11.5px] text-text-faint tabular-nums">{fmtKm(km)}</span> : null}
+          {brigade || (km !== null && km > 0) ? (
+            <span className="block text-[11.5px] text-text-faint tabular-nums">
+              {[brigade ? `brygada ${brigade}` : null, km !== null && km > 0 ? fmtKm(km) : null].filter(Boolean).join(", ")}
+            </span>
+          ) : null}
         </span>
         {cancelled ? (
           <span className="shrink-0 rounded-md bg-danger/12 px-1.5 py-0.5 text-[12px] font-semibold text-danger">Przerwany</span>

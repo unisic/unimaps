@@ -1,19 +1,36 @@
 /**
- * Client data hooks for the /brygady page (MZK fleet). The wire types live in
- * lib/shared/fleet.ts, shared with the server that builds them.
+ * Client data hooks for the /brygady page (MZK fleet, or the Metropolia GZM fleet with
+ * `?city=gzm`). The wire types live in lib/shared/fleet.ts, shared with the server that builds them.
+ * Every hook takes the city: "bb" keeps the plain URLs, "gzm" adds `city=gzm`.
  */
 import { useEffect, useRef } from "react";
 import useSWR from "swr";
 import { fetchJSON, HttpError } from "./api";
-import type { FleetStats, FleetSummaryItem, FleetTimelinePoint, FleetVehicleDetail, VehiclePhoto } from "../shared/fleet";
+import { cityUrl, loadCity, type City } from "./city";
+import type { FleetStats, FleetSummaryItem, FleetTimelinePoint, FleetVehicleDetail } from "../shared/fleet";
 
 export type * from "../shared/fleet";
+
+export type FleetCity = City;
+
+/**
+ * The city /brygady shows: `?city=gzm` first, then the map's stored choice (`kb:city`), else BB.
+ * Read once per page load (switching city is a navigation); client only.
+ */
+export function readBrygadyCity(search: string): FleetCity {
+  return new URLSearchParams(search).get("city") === "gzm" ? "gzm" : (loadCity() ?? "bb");
+}
+
+/** The city of a side number: GZM keys are "<company code>_<fleet number>", MZK ones digits only. */
+export function cityOfSide(side: string): FleetCity {
+  return side.includes("_") ? "gzm" : "bb";
+}
 
 export interface FleetApiResponse {
   stats: FleetStats;
   count: number;
   vehicles: FleetSummaryItem[];
-  /** server epoch s when the body was built */
+  /** server epoch s when the body was built (GZM: from the X-Server-Time header, see fleetFetcher) */
   serverNow?: number;
   /** client-only: local epoch s when the body arrived (stamped by fleetFetcher) */
   receivedAt?: number;
@@ -43,18 +60,33 @@ const REQUEST_TIMEOUT_MS = 12_000;
  */
 const fetcher = <T>(url: string): Promise<T> =>
   fetchJSON<T>(url, { cache: "no-cache", signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
-const fleetFetcher = (url: string): Promise<FleetApiResponse> =>
-  fetcher<FleetApiResponse>(url).then((d) => ({ ...d, receivedAt: Date.now() / 1000 }));
+/**
+ * The GZM list body is cached on the server and carries no serverNow: the clock comes in the
+ * X-Server-Time header (epoch ms), which a 304 refreshes in the browser's stored response.
+ */
+const fleetFetcher = async (url: string): Promise<FleetApiResponse> => {
+  const r = await fetch(url, { cache: "no-cache", signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+  if (!r.ok) throw new HttpError(r.status, url);
+  const d = (await r.json()) as FleetApiResponse;
+  const serverMs = Number(r.headers.get("x-server-time"));
+  return {
+    ...d,
+    ...(d.serverNow === undefined && serverMs > 0 ? { serverNow: serverMs / 1000 } : {}),
+    receivedAt: Date.now() / 1000,
+  };
+};
 
 /**
  * The whole fleet (~150 rows, filtered on the client so typing never waits for the network).
  * The server state changes with the MZK poller every ~5 s; SWR pauses while the tab is hidden.
  * `background`: the list is covered by a vehicle card. It then refreshes once a minute (the
  * header clock stays under its 90 s "stale" mark) and catches up the moment the card closes.
+ * ponytail: GZM is ~1 350 rows (~0.6 MB uncompressed per changed body), so it polls every 20 s;
+ * a delta feed is the upgrade if that ever shows in the traffic.
  */
-export function useFleet(background = false) {
-  const swr = useSWR<FleetApiResponse>("/api/fleet", fleetFetcher, {
-    refreshInterval: background ? 60_000 : 10_000,
+export function useFleet(background = false, city: FleetCity = "bb") {
+  const swr = useSWR<FleetApiResponse>(cityUrl("/api/fleet", city), fleetFetcher, {
+    refreshInterval: background ? 60_000 : city === "gzm" ? 20_000 : 10_000,
     dedupingInterval: 4_000,
     revalidateOnFocus: true,
   });
@@ -81,9 +113,10 @@ export function isNotFound(err: unknown): boolean {
 const detailRefreshMs = (d: VehicleDetailApiResponse | undefined): number => (d && d.vehicle.status !== "active" ? 30_000 : 5_000);
 
 /** One vehicle's day. */
-export function useVehicleDetail(sideNumber: string | null) {
+export function useVehicleDetail(sideNumber: string | null, city: FleetCity = "bb") {
   const clean = sideNumber?.replace(/^#/, "").trim();
-  return useSWR<VehicleDetailApiResponse>(clean ? `/api/fleet/${encodeURIComponent(clean)}` : null, fetcher, {
+  const key = clean ? cityUrl(`/api/fleet/${encodeURIComponent(clean)}`, city) : null;
+  return useSWR<VehicleDetailApiResponse>(key, fetcher, {
     refreshInterval: detailRefreshMs,
     dedupingInterval: 2_000,
     revalidateOnFocus: true,
@@ -93,20 +126,11 @@ export function useVehicleDetail(sideNumber: string | null) {
 }
 
 /** Today's punctuality timeline: one slot per 5 minutes, so a minute's refresh is plenty (mostly 304). */
-export function useFleetTimeline(enabled: boolean) {
-  return useSWR<FleetTimelineResponse>(enabled ? "/api/fleet/timeline" : null, fetcher, {
+export function useFleetTimeline(enabled: boolean, city: FleetCity = "bb") {
+  return useSWR<FleetTimelineResponse>(enabled ? cityUrl("/api/fleet/timeline", city) : null, fetcher, {
     refreshInterval: 60_000,
     dedupingInterval: 30_000,
     revalidateOnFocus: true,
   });
 }
 
-/** The vehicle's phototrans photos: fetched once per card, the server caches them for a day. */
-export function useVehiclePhotos(sideNumber: string | null) {
-  return useSWR<{ photos: VehiclePhoto[] }>(sideNumber ? `/api/fleet/${encodeURIComponent(sideNumber)}/photo` : null, fetcher, {
-    revalidateIfStale: false,
-    revalidateOnFocus: false,
-    revalidateOnReconnect: false,
-    shouldRetryOnError: false,
-  });
-}

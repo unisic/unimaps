@@ -1,4 +1,5 @@
-import { badRequest, internalError, isValidDate } from "@/lib/api-helpers";
+import { badRequest, internalError, isValidDate, parseCity, warming } from "@/lib/api-helpers";
+import { getGzm, startGzm } from "@/lib/gzm";
 import { getMergedStopsView, getShapes, startPoller } from "@/lib/poller-singleton";
 import { allowRequest, clientIp, tooManyRequests } from "@/lib/rate-limit";
 import { findConnections, type ConnectionItinerary } from "@/lib/router";
@@ -9,6 +10,8 @@ export const runtime = "nodejs";
 
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 const INT_RE = /^\d{1,4}$/;
+/** GZM's feed is far larger (~22k trips a day): charge a search more so one client can't hold the event loop */
+const GZM_COST = 20;
 
 /** Router stop ids of a merged stop: its KB pole and every MZK symbol its departures board asks
  *  (a station hub lists several). Undefined for a name the merged list does not know. */
@@ -52,7 +55,9 @@ function attachLegShapes(connections: ConnectionItinerary[]): void {
  */
 export async function GET(req: Request): Promise<Response> {
   // the search is synchronous CPU work on the event loop the pollers share
-  if (!allowRequest(clientIp(req))) return tooManyRequests();
+  const city = parseCity(req);
+  if (!allowRequest(clientIp(req), city === "gzm" ? GZM_COST : 1)) return tooManyRequests();
+  if (city instanceof Response) return city;
   let url: URL;
   try {
     url = new URL(req.url);
@@ -93,6 +98,17 @@ export async function GET(req: Request): Promise<Response> {
     ? sortByParam
     : undefined;
   const limit = limitParam ? Number.parseInt(limitParam, 10) : undefined;
+
+  if (city === "gzm") {
+    void startGzm();
+    try {
+      const connections = getGzm().connections({ from, to, afterSecs, limit, directOnly, minTransferSecs, date: date || undefined, dayLabel, sortBy });
+      if (!connections) return warming();
+      return Response.json({ count: connections.length, connections }, { headers: { "Cache-Control": "public, max-age=60" } });
+    } catch (err) {
+      return internalError("gzm-connections", err);
+    }
+  }
 
   try {
     // the merged stop list needs both pollers' stops; a failed start still leaves name search working

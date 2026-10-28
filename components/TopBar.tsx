@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useCallback, useEffect, useId, useRef, useState } from "react";
+import { memo, useCallback, useContext, useEffect, useId, useRef, useState } from "react";
 import TopBarSearch, { type TopBarSearchHandle } from "@/components/TopBarSearch";
 import {
   ArrowRightIcon,
@@ -13,6 +13,7 @@ import {
   XIcon,
 } from "@/components/icons";
 import { useAnnouncements } from "@/lib/client/announcements";
+import { CITY, CityContext, saveCity, withCity, type City } from "@/lib/client/city";
 import { useSmoothMotion } from "@/lib/client/smoothMotion";
 import type { GeoPos } from "@/components/hooks";
 import type { Stop, Vehicle } from "@/lib/client/types";
@@ -184,10 +185,10 @@ function Segmented<T extends string>({
   );
 }
 
-function OperatorDot({ op }: { op: "kb" | "mzk" }) {
-  return (
-    <span className={`h-2 w-2 shrink-0 rounded-full ${op === "kb" ? "bg-kb" : "bg-mzk"}`} aria-hidden />
-  );
+const OP_DOT = { kb: "bg-kb", mzk: "bg-mzk", gzm: "bg-gzm" } as const;
+
+function OperatorDot({ op }: { op: keyof typeof OP_DOT }) {
+  return <span className={`h-2 w-2 shrink-0 rounded-full ${OP_DOT[op]}`} aria-hidden />;
 }
 
 function MenuLabel({ children }: { children: React.ReactNode }) {
@@ -199,6 +200,40 @@ const OPERATOR_OPTIONS: { id: "all" | "kb" | "mzk"; label: string; title?: strin
   { id: "kb", label: "KB", title: "Komunikacja Beskidzka", lead: <OperatorDot op="kb" /> },
   { id: "mzk", label: "MZK", title: "MZK Bielsko-Biała", lead: <OperatorDot op="mzk" /> },
 ];
+
+const CITY_OPTIONS: { id: City; label: string }[] = [
+  { id: "bb", label: CITY.bb.name },
+  { id: "gzm", label: CITY.gzm.name },
+];
+
+/* a full navigation: every store, poll and cache of the page is keyed to one city */
+function switchCity(next: City): void {
+  saveCity(next);
+  window.location.assign(next === "gzm" ? "/?city=gzm" : "/");
+}
+
+/** Its own component so the announcements store (and its poll) only runs where it is rendered: never in GZM. */
+function AnnouncementsButton({ onClick }: { onClick: () => void }) {
+  /* store notifies at most once per 15 min: no extra work in the 5 s cycle */
+  const { unseen } = useAnnouncements();
+  return (
+    <button
+      type="button"
+      aria-label={unseen ? "Utrudnienia w ruchu (nowe komunikaty)" : "Utrudnienia w ruchu"}
+      title="Utrudnienia w ruchu"
+      onClick={onClick}
+      className="tap relative grid h-10 w-10 shrink-0 place-items-center rounded-full text-[19px] text-text-mute hover:bg-white/8 hover:text-text md:h-9 md:w-9 md:text-[18px]"
+    >
+      <MegaphoneSimpleIcon />
+      {unseen && (
+        <span
+          className="absolute right-2 top-2 h-2 w-2 rounded-full bg-primary ring-2 ring-surface animate-pop md:right-1.5 md:top-1.5"
+          aria-hidden
+        />
+      )}
+    </button>
+  );
+}
 
 const LAYER_LEAD: Record<BaseLayerId, React.ReactNode> = {
   kb: <SunIcon />,
@@ -236,8 +271,8 @@ function TopBar({
   const rootRef = useRef<HTMLDivElement>(null);
   /* per-browser preference; only this component re-renders on toggle */
   const [smoothMotion, setSmoothMotion] = useSmoothMotion();
-  /* store notifies at most once per 15 min — no extra work in the 5 s cycle */
-  const { unseen } = useAnnouncements();
+  const city = useContext(CityContext);
+  const gzm = city === "gzm";
 
   /* close the menu on outside tap */
   useEffect(() => {
@@ -304,26 +339,16 @@ function TopBar({
           {count ?? "…"}
         </span>
 
-        {/* Announcements button */}
-        <button
-          type="button"
-          aria-label={unseen ? "Utrudnienia w ruchu (nowe komunikaty)" : "Utrudnienia w ruchu"}
-          title="Utrudnienia w ruchu"
-          onClick={() => {
-            setMenu(false);
-            searchRef?.current?.blur();
-            onOpenAnnouncements();
-          }}
-          className="tap relative grid h-10 w-10 shrink-0 place-items-center rounded-full text-[19px] text-text-mute hover:bg-white/8 hover:text-text md:h-9 md:w-9 md:text-[18px]"
-        >
-          <MegaphoneSimpleIcon />
-          {unseen && (
-            <span
-              className="absolute right-2 top-2 h-2 w-2 rounded-full bg-primary ring-2 ring-surface animate-pop md:right-1.5 md:top-1.5"
-              aria-hidden
-            />
-          )}
-        </button>
+        {/* Announcements button: KB/MZK only, GZM has no announcements feed */}
+        {!gzm && (
+          <AnnouncementsButton
+            onClick={() => {
+              setMenu(false);
+              searchRef?.current?.blur();
+              onOpenAnnouncements();
+            }}
+          />
+        )}
 
         {/* Map settings button */}
         <button
@@ -346,15 +371,24 @@ function TopBar({
       {/* Settings dropdown menu */}
       {menu && (
         <div className="surface mt-2 rounded-[20px] p-2 text-[13.5px] animate-drop">
-          <MenuLabel>Przewoźnik</MenuLabel>
+          <MenuLabel>Miasto</MenuLabel>
           <div className="px-1">
-            <Segmented
-              label="Wybór przewoźnika"
-              value={operatorFilter}
-              options={OPERATOR_OPTIONS}
-              onChange={onOperatorFilter}
-            />
+            <Segmented label="Wybór miasta" value={city} options={CITY_OPTIONS} onChange={switchCity} />
           </div>
+
+          {!gzm && (
+            <>
+              <MenuLabel>Przewoźnik</MenuLabel>
+              <div className="px-1">
+                <Segmented
+                  label="Wybór przewoźnika"
+                  value={operatorFilter}
+                  options={OPERATOR_OPTIONS}
+                  onChange={onOperatorFilter}
+                />
+              </div>
+            </>
+          )}
 
           {Object.keys(BASE_LAYERS).length > 1 && (
             <>
@@ -386,7 +420,7 @@ function TopBar({
           </div>
 
           <a
-            href="/brygady"
+            href={`/brygady${withCity("", city)}`}
             className="group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-text transition-colors hover:bg-white/5"
           >
             <CardsIcon className="text-[17px] text-text-mute" />
@@ -395,14 +429,23 @@ function TopBar({
           </a>
 
           <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1.5 border-t border-hairline px-3 pb-1.5 pt-3 text-[12px] text-text-mute">
-            <span className="inline-flex items-center gap-1.5">
-              <OperatorDot op="kb" />
-              KB
-            </span>
-            <span className="inline-flex items-center gap-1.5">
-              <OperatorDot op="mzk" />
-              MZK
-            </span>
+            {gzm ? (
+              <span className="inline-flex items-center gap-1.5">
+                <OperatorDot op="gzm" />
+                Metropolia GZM
+              </span>
+            ) : (
+              <>
+                <span className="inline-flex items-center gap-1.5">
+                  <OperatorDot op="kb" />
+                  KB
+                </span>
+                <span className="inline-flex items-center gap-1.5">
+                  <OperatorDot op="mzk" />
+                  MZK
+                </span>
+              </>
+            )}
             <span className="inline-flex items-center gap-1.5">
               <NavigationArrowIcon weight="fill" className="rotate-45 text-[11px]" />
               kierunek jazdy
@@ -425,6 +468,7 @@ function TopBar({
             <a href="https://project-osrm.org/" target="_blank" rel="noopener">
               OSRM
             </a>
+            {CITY[city].attribution && <>. Dane: {CITY[city].attribution}</>}
           </p>
         </div>
       )}

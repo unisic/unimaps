@@ -12,10 +12,11 @@
 import { useSyncExternalStore } from "react";
 
 import { fetchJSON } from "@/lib/client/api";
+import { cityOfId, type City } from "@/lib/client/city";
 import { nowSecs } from "@/lib/client/format";
 import { createLivePoll, type LivePoll } from "@/lib/client/live-poll";
 import type { DepartureRow, DeparturesResponse } from "@/lib/client/types";
-import { kbRowKey, minutesUntil, mzkRowKey, resolveTiming, rowKey } from "@/lib/shared/departures";
+import { gzmRowKey, kbRowKey, minutesUntil, mzkRowKey, resolveTiming, rowKey } from "@/lib/shared/departures";
 
 export interface Alert {
   /** rowKey of the departure: stable across refetches (KB exec + visit, MZK course + order) */
@@ -30,8 +31,10 @@ export interface Alert {
 }
 
 export const ALERT_LEADS = [3, 5, 10] as const;
+/** per city: both cities share one stored list */
 export const MAX_ALERTS = 3;
 const KEY = "kb:alerts";
+const STORED_MAX = MAX_ALERTS * 2;
 const EXPIRE_AFTER_SEC = 30 * 60;
 const EMPTY: readonly Alert[] = [];
 
@@ -65,10 +68,20 @@ export function alertUntil(plannedSecs: number, nowTs = Date.now() / 1000): numb
 
 /** The board rowKey of a trip's visit to its stop `index`: a board row's KB `trip_index` and MZK
  *  `orderInCourse` are the trip's own stop index. MZK exec ids are `mzk:<course>:<vehicle>`, its rows
- *  key on the course alone (the vehicle can be assigned later). */
-export function tripAlertKey(execId: string, index: number): string {
+ *  key on the course alone (the vehicle can be assigned later). GZM rows key on the static trip id
+ *  (`tripId`, "gzm:<id>") and the stop_sequence, never on the vehicle; null without a trip id. */
+export function tripAlertKey(execId: string, index: number, tripId?: string | number | null): string | null {
+  if (execId.startsWith("gzm:")) {
+    const id = tripId == null ? "" : String(tripId).replace(/^gzm:/, "");
+    return id ? gzmRowKey(id, index) : null;
+  }
   return execId.startsWith("mzk:") ? mzkRowKey(execId.split(":")[1], index) : kbRowKey(execId, index);
 }
+
+/* the city this page load shows (set by startAlertWatchers): the other city's alerts stay stored
+   untouched, they neither poll nor count against this city's cap */
+let alertsCity: City = "bb";
+const mine = (a: Alert): boolean => cityOfId(a.designator) === alertsCity;
 
 function isAlert(v: unknown): v is Alert {
   const a = v as Alert;
@@ -86,7 +99,7 @@ function load(): readonly Alert[] {
   try {
     const parsed: unknown = JSON.parse(window.localStorage.getItem(KEY) ?? "[]");
     const now = Date.now() / 1000;
-    return Array.isArray(parsed) ? parsed.filter(isAlert).filter((a) => a.until > now).slice(0, MAX_ALERTS) : EMPTY;
+    return Array.isArray(parsed) ? parsed.filter(isAlert).filter((a) => a.until > now).slice(0, STORED_MAX) : EMPTY;
   } catch {
     return EMPTY;
   }
@@ -120,10 +133,10 @@ export function useAlerts(): readonly Alert[] {
   return useSyncExternalStore(subscribe, getSnapshot, () => EMPTY);
 }
 
-/** Adds (or re-times) the alert for one departure; false when MAX_ALERTS other ones are set. */
+/** Adds (or re-times) the alert for one departure; false when MAX_ALERTS other ones are set in this city. */
 export function addAlert(a: Alert): boolean {
   const rest = getSnapshot().filter((x) => x.key !== a.key);
-  if (rest.length >= MAX_ALERTS) return false;
+  if (rest.filter(mine).length >= MAX_ALERTS) return false;
   mutate([...rest, a]);
   return true;
 }
@@ -142,7 +155,7 @@ function onBoard(designator: string, res: DeparturesResponse): void {
   const rows = res.rows ?? [];
   const done = new Set<string>();
   for (const a of getSnapshot()) {
-    if (a.designator !== designator) continue;
+    if (a.designator !== designator || !mine(a)) continue;
     const r = alertAction(a, rows, nowTs);
     if (r.act === "wait") continue;
     done.add(a.key);
@@ -154,7 +167,7 @@ function onBoard(designator: string, res: DeparturesResponse): void {
 }
 
 function syncWatchers(): void {
-  const want = new Set(getSnapshot().map((a) => a.designator));
+  const want = new Set(getSnapshot().filter(mine).map((a) => a.designator));
   for (const [d, p] of watchers) {
     if (!want.has(d)) {
       p.stop();
@@ -175,8 +188,9 @@ function syncWatchers(): void {
   }
 }
 
-/** Resume the watchers of alerts persisted by an earlier page load (call once on mount). */
-export function startAlertWatchers(): void {
+/** Resume the watchers of this city's alerts persisted by an earlier page load (call once on mount). */
+export function startAlertWatchers(city: City = "bb"): void {
+  alertsCity = city;
   syncWatchers();
 }
 

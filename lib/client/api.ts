@@ -1,9 +1,15 @@
+import type { City } from "./city";
 import type { ConnectionItinerary, ConnectionsResponse, LatLng, Trip, VehiclesResponse } from "./types";
 
 export class HttpError extends Error {
   constructor(public status: number, url: string) {
     super(`HTTP ${status} for ${url}`);
   }
+}
+
+/** 503 "Data is loading": the server is still loading the GZM feed (seconds after a start). Transient. */
+export function isWarming(err: unknown): boolean {
+  return err instanceof HttpError && err.status === 503;
 }
 
 export async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
@@ -45,6 +51,15 @@ function capMap<V>(m: Map<string, V>, max: number): void {
 
 const tripCache = new Map<string, Promise<Trip | null>>();
 const TRIP_CACHE_MAX = 1500;
+/* ids whose last fetch got a 503 (GZM feed still loading), so the trip view can say so; only filled
+   during those first seconds, cleared on the next answer */
+const warmingTrips = new Set<string>();
+const WARMING_MAX = 200;
+
+/** True when the last getTrip of this id failed because the server is still loading its data. */
+export function tripWarming(tripId: string | number): boolean {
+  return warmingTrips.has(String(tripId));
+}
 
 export function getTrip(tripId: string | number, signal?: AbortSignal): Promise<Trip | null> {
   const key = String(tripId);
@@ -58,6 +73,7 @@ export function getTrip(tripId: string | number, signal?: AbortSignal): Promise<
   const fetchWithRetry = async (retries = 2, delayMs = 150): Promise<Trip | null> => {
     try {
       const tr = await fetchJSON<Trip>(`/api/trip/${encodeURIComponent(key)}`, { signal });
+      warmingTrips.delete(key);
       // a still-routing road shape will be ready soon — don't pin "pending" for the session
       if (!tr?.times?.length || tr.shape_status === "pending") tripCache.delete(key);
       return tr;
@@ -67,6 +83,8 @@ export function getTrip(tripId: string | number, signal?: AbortSignal): Promise<
         return fetchWithRetry(retries - 1, delayMs * 2);
       }
       tripCache.delete(key);
+      if (!isWarming(err)) warmingTrips.delete(key);
+      else if (warmingTrips.size < WARMING_MAX) warmingTrips.add(key);
       return null;
     }
   };
@@ -240,6 +258,8 @@ export interface GetConnectionsOptions {
   sortBy?: "departure" | "duration" | "arrival";
   limit?: number;
   signal?: AbortSignal;
+  /** only "gzm" adds a param: BB keeps its original URL */
+  city?: City;
 }
 
 export async function getConnections(
@@ -262,6 +282,7 @@ export async function getConnections(
     if (optionsOrTime.sortBy) p.set("sortBy", optionsOrTime.sortBy);
     if (optionsOrTime.limit != null) p.set("limit", String(optionsOrTime.limit));
     if (optionsOrTime.signal) signal = optionsOrTime.signal;
+    if (optionsOrTime.city === "gzm") p.set("city", "gzm");
   }
 
   // Throws on HTTP/network errors and aborts: a failed search is not "no connections".

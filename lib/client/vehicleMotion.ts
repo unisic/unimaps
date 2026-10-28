@@ -35,7 +35,7 @@ export interface MotionInput {
   bearing: number | null;
   next_stop_lat: number | null;
   next_stop_lon: number | null;
-  operator?: "KB" | "MZK";
+  operator?: "KB" | "MZK" | "GZM";
   shape?: string;
   dist_m?: number;
   fix_at?: number;
@@ -416,7 +416,8 @@ export function createMotionStore(cfgIn: Partial<MotionConfig> = {}): MotionStor
         input: v,
         lastSeen: recvMs,
         pins: 0,
-        isMzk: v.operator === "MZK",
+        // GZM speaks the MZK data dialect
+        isMzk: v.operator === "MZK" || v.operator === "GZM",
         fixLat: v.lat,
         fixLon: v.lon,
         fixAtRaw: null,

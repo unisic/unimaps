@@ -1,4 +1,6 @@
-import { badRequest, isValidId, upstreamError } from "@/lib/api-helpers";
+import { badRequest, internalError, isGzmId, isValidId, notFound, upstreamError, warming } from "@/lib/api-helpers";
+import { GZM_ENABLED } from "@/lib/config";
+import { getGzm, startGzm } from "@/lib/gzm";
 import { pyTruthy } from "@/lib/kb-api";
 import { log } from "@/lib/logger";
 import { getFleetDetails } from "@/lib/mzk-fleet";
@@ -26,6 +28,19 @@ export async function GET(
   if (!allowRequest(clientIp(req))) return tooManyRequests();
   const { designator } = await ctx.params;
   if (!isValidId(designator)) return badRequest("Invalid stop designator");
+  if (isGzmId(designator)) {
+    if (!GZM_ENABLED) return notFound();
+    void startGzm();
+    try {
+      // built from the local feed + the live join: no upstream leg, so never `warnings`
+      const board = getGzm().departures(designator);
+      if (board === null) return warming();
+      if (board === "unknown") return notFound("Unknown stop");
+      return Response.json(board, { headers: { "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0", Pragma: "no-cache" } });
+    } catch (err) {
+      return internalError("gzm-departures", err);
+    }
+  }
   try {
     await startPoller();
     // the key carries the merged-stop identity: a late MZK list changes who is asked, so a KB-only board must not be reused

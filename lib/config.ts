@@ -126,6 +126,25 @@ export const MZK_STOP_DIRS_FILE = envStr("KB_MZK_STOP_DIRS_FILE", path.join(OUTP
 /** MZK static timetable built from OnTime for the connection search (lib/mzk-timetable.ts); outside output/gtfs for the same reason. */
 export const MZK_TIMETABLE_FILE = envStr("KB_MZK_TIMETABLE_FILE", path.join(OUTPUT_DIR, "mzk-timetable.v1.json"));
 
+/**
+ * Metropolia GZM (lib/gzm.ts, lib/gzm-feed.ts): a second city served from the same process, isolated
+ * from the BB pollers. KB_GZM=0 switches it off (every ?city=gzm / gzm: request then answers 404).
+ */
+export const GZM_ENABLED = envInt("KB_GZM", 1, 0) !== 0;
+/** zbiorkom api6-open: merged GTFS Schedule (stops, trips, shapes, brigades) and the live positions. */
+export const GZM_GTFS_URL = envStr("KB_GZM_GTFS_URL", "https://api.zbiorkom.live/api6-open/gzm/gtfs/default");
+export const GZM_POSITIONS_URL = envStr(
+  "KB_GZM_POSITIONS_URL",
+  "https://api.zbiorkom.live/api6-open/gzm/positions/18.3,49.9,19.7,50.7",
+);
+/** SDIP (sdip.transportgzm.pl) vehicle overlay, polled every 5 s only while someone watches GZM. */
+export const GZM_SDIP_ENABLED = envInt("KB_GZM_SDIP", 1, 0) !== 0;
+export const GZM_SDIP_URL = envStr("KB_GZM_SDIP_URL", "https://sdip.transportgzm.pl/vm/main");
+/** GZM state on disk: the last good GTFS zip and the GZM fleet history (outside output/gtfs). */
+export const GZM_DIR = envStr("KB_GZM_DIR", path.join(OUTPUT_DIR, "gzm"));
+/** Days of GZM fleet history kept on disk (~12-14 MB per day: ~22 000 finished courses x ~530 B, plus the running ones). */
+export const GZM_FLEET_HISTORY_DAYS = envInt("KB_GZM_FLEET_HISTORY_DAYS", 30);
+
 export const USER_AGENT = envStr(
   "KB_USER_AGENT",
   "kb-gtfs/1.0 (+https://komunikacjabeskidzka.kiedyprzyjedzie.pl)",

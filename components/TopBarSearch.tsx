@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useContext, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useLines, useVehicles, type GeoPos } from "@/components/hooks";
 import {
   BusIcon,
@@ -22,6 +22,7 @@ import {
   XIcon,
 } from "@/components/icons";
 import { LineBadge } from "@/components/ui";
+import { CityContext, withCity } from "@/lib/client/city";
 import { useFavorites } from "@/lib/client/favorites";
 import { delayTxt, displayStopName, normalizeText, wozPlural } from "@/lib/client/format";
 import { formatDistance, haversineMeters } from "@/lib/client/geo";
@@ -101,16 +102,18 @@ function Glyph({ children }: { children: React.ReactNode }) {
   );
 }
 
-const OPERATOR_LABEL = { KB: "KB", MZK: "MZK", BOTH: "KB i MZK" } as const;
+const OPERATOR_LABEL = { KB: "KB", MZK: "MZK", GZM: "Metropolia GZM", BOTH: "KB i MZK" } as const;
 
 /** The map's stop marker in miniature: disc for a stop, rounded square for a station, operator colour. */
-function StopGlyph({ operator = "KB", station = false }: { operator?: "KB" | "MZK" | "BOTH"; station?: boolean }) {
+function StopGlyph({ operator = "KB", station = false }: { operator?: "KB" | "MZK" | "GZM" | "BOTH"; station?: boolean }) {
   const fill =
     operator === "BOTH"
       ? "bg-[linear-gradient(90deg,var(--color-kb)_50%,var(--color-mzk)_50%)]"
       : operator === "MZK"
         ? "bg-mzk"
-        : "bg-kb";
+        : operator === "GZM"
+          ? "bg-gzm"
+          : "bg-kb";
   return (
     <span className="grid h-7 w-9 shrink-0 place-items-center" aria-hidden>
       <span
@@ -235,7 +238,9 @@ function TopBarSearch({
 
   const vehicles = useMemo(() => vehData?.vehicles ?? [], [vehData]);
   const lines = useMemo(() => linesData?.lines ?? [], [linesData]);
-  const allFleet = useMemo(() => getAllFleetVehicles(), []);
+  const city = useContext(CityContext);
+  // the depot fleet list is MZK Bielsko-Biała's: nothing to search in GZM
+  const allFleet = useMemo(() => (city === "gzm" ? [] : getAllFleetVehicles()), [city]);
 
   const [query, setQuery] = useState("");
   const [isFocused, setIsFocused] = useState(false);
@@ -376,7 +381,7 @@ function TopBarSearch({
         keywords: "brygady brygada tabor woz wozy flota pojazdy kursy gdzie pojedzie historia",
         icon: <BusIcon />,
         run: () => {
-          window.location.href = "/brygady";
+          window.location.href = `/brygady${withCity("", city)}`;
         },
       },
     ];
@@ -390,7 +395,7 @@ function TopBarSearch({
       });
     }
     return list;
-  }, [onOpenConnections, onLocate, onOpenNearby, stopsVisible, onToggleStops, baseLayer, onBaseLayer, onClearView, lineFilter, onClearLineFilter]);
+  }, [onOpenConnections, onLocate, onOpenNearby, stopsVisible, onToggleStops, baseLayer, onBaseLayer, onClearView, lineFilter, onClearLineFilter, city]);
 
   // Compute matched sections
   const sections = useMemo<Section[]>(() => {
@@ -729,7 +734,7 @@ function TopBarSearch({
                                       {it.l.terminus ? `→ ${displayStopName(it.l.terminus)}` : `Linia ${it.l.name}`}
                                     </span>
                                     <span className="mt-0.5 block truncate text-[11.5px] tabular-nums text-text-faint">
-                                      {it.l.operator || "KB"} ·{" "}
+                                      {OPERATOR_LABEL[it.l.operator || "KB"]} ·{" "}
                                       {it.active
                                         ? "filtr aktywny, kliknij, aby wyłączyć"
                                         : it.live > 0
@@ -763,7 +768,7 @@ function TopBarSearch({
                                         aria-hidden
                                       />
                                       <span className="truncate">
-                                        {it.v.operator || "KB"} ·{" "}
+                                        {OPERATOR_LABEL[it.v.operator || "KB"]} ·{" "}
                                         {it.v.not_started
                                           ? "czeka na odjazd"
                                           : `na żywo${it.v.delay != null ? ` · ${delayTxt(it.v.delay)}` : ""}`}

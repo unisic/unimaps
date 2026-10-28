@@ -35,8 +35,8 @@ export interface Stop {
   showPlatforms: boolean;
   /** String(internalId) — Python's Stop.stop_id property. */
   stopId: string;
-  operator?: "KB" | "MZK" | "BOTH";
-  operators?: ("KB" | "MZK")[];
+  operator?: "KB" | "MZK" | "GZM" | "BOTH";
+  operators?: ("KB" | "MZK" | "GZM")[];
   symbol?: string;
   onRequest?: boolean;
   gettingOut?: boolean;
@@ -51,7 +51,7 @@ export interface Stop {
 export interface LineInfo {
   name: string;
   type?: string;
-  operator?: "KB" | "MZK";
+  operator?: "KB" | "MZK" | "GZM";
 }
 
 /** One entry of a trip's "times" array (port of api.TripStop). */
@@ -77,7 +77,7 @@ export interface Trip {
   showName: boolean;
   vehicleType: number | null;
   currentStationId: number | null;
-  operator?: "KB" | "MZK";
+  operator?: "KB" | "MZK" | "GZM";
 }
 
 /** Internal live vehicle state (port of poller.VehiclePos). */
@@ -113,7 +113,7 @@ export interface VehiclePos {
    *  that has not begun. OnTime's delaySec is then a placeholder (now - scheduled
    *  start, floor -60 s), so `delay` is null instead — see lib/mzk-state.ts */
   notStarted?: boolean;
-  operator?: "KB" | "MZK";
+  operator?: "KB" | "MZK" | "GZM";
   sideNumber?: string;
   model?: string;
   features?: VehicleFeatures;
@@ -170,7 +170,7 @@ export interface VehicleJson {
   next_stop_lon: number | null;
   timestamp: number;
   updated_at: number;
-  operator?: "KB" | "MZK";
+  operator?: "KB" | "MZK" | "GZM";
   side_number?: string;
   model?: string;
   features?: VehicleFeatures;
@@ -214,8 +214,8 @@ export type WireStop = {
   dirs?: number[];
   isStation?: boolean;
   showPlatforms?: boolean;
-  operator?: "KB" | "MZK" | "BOTH";
-  operators?: ("KB" | "MZK")[];
+  operator?: "KB" | "MZK" | "GZM" | "BOTH";
+  operators?: ("KB" | "MZK" | "GZM")[];
   symbol?: string;
   onRequest?: boolean;
   gettingOut?: boolean;
@@ -278,6 +278,8 @@ export interface HealthResponse {
    *  deviation by >= 2 min — informational (measures upstream's estimate error that the stale detector can't see) */
   gps_polls?: number;
   gps_disagree?: number;
+  /** Metropolia GZM live layer + feed (lib/gzm.ts) — informational, never affects `status` */
+  gzm?: Record<string, unknown>;
 }
 
 /** One row of an upstream departures board (loosely typed). */

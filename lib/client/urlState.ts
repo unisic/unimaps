@@ -8,7 +8,9 @@
  *   &map=49.82196,19.04575,13 lat,lon,zoom view
  * `exec` and `trip` are separate params on purpose: they live in different id
  * spaces (see CLAUDE.md) and heuristics telling them apart would be fragile.
+ * The city marker (&city=gzm) is not part of this codec: callers add it with withCity().
  */
+import type { City } from "@/lib/client/city";
 
 export interface UrlState {
   stop: string | null;
@@ -89,21 +91,25 @@ export function buildSearch(s: UrlState): string {
 }
 
 /* "Moje linie": the last line filter, remembered per browser. A ?lines= deep link wins on load and
-   then becomes the remembered filter; storage that throws (private mode) just forgets it. */
-const SAVED_LINES_KEY = "kb:lineFilter";
+   then becomes the remembered filter; storage that throws (private mode) just forgets it.
+   GZM line names overlap BB ones ("1", "N1"), so it keeps its own key; BB keeps the original one. */
+export function savedLinesKey(city: City = "bb"): string {
+  return city === "gzm" ? "kb:lineFilter:gzm" : "kb:lineFilter";
+}
 
-export function loadSavedLines(): string[] | null {
+export function loadSavedLines(city: City = "bb"): string[] | null {
   try {
-    return parseLines(window.localStorage.getItem(SAVED_LINES_KEY));
+    return parseLines(window.localStorage.getItem(savedLinesKey(city)));
   } catch {
     return null;
   }
 }
 
-export function saveLines(lines: readonly string[] | null): void {
+export function saveLines(lines: readonly string[] | null, city: City = "bb"): void {
+  const key = savedLinesKey(city);
   try {
-    if (lines && lines.length > 0) window.localStorage.setItem(SAVED_LINES_KEY, lines.slice(0, MAX_LINES).join(","));
-    else window.localStorage.removeItem(SAVED_LINES_KEY);
+    if (lines && lines.length > 0) window.localStorage.setItem(key, lines.slice(0, MAX_LINES).join(","));
+    else window.localStorage.removeItem(key);
   } catch {
     /* storage blocked */
   }

@@ -5,7 +5,8 @@ import BottomSheet from "@/components/BottomSheet";
 import { BellIcon, CaretDownIcon, CaretRightIcon, CaretUpIcon, PathIcon, WarningCircleIcon } from "@/components/icons";
 import { removeAlert, useAlerts } from "@/lib/client/alerts";
 import { CloseIcon, EmptyState, ErrorState, IconButton, LineBadge, ShareButton, SkeletonRows, StarIcon } from "@/components/ui";
-import { fetchJSON } from "@/lib/client/api";
+import { fetchJSON, isWarming } from "@/lib/client/api";
+import { GZM_LOADING } from "@/lib/client/city";
 import { useFavorites } from "@/lib/client/favorites";
 import { formatDistance, formatWalk } from "@/lib/client/geo";
 import { createLivePoll, LIVE_STALE_MS, type LivePoll } from "@/lib/client/live-poll";
@@ -67,10 +68,12 @@ function Chevron() {
   return <CaretRightIcon className="shrink-0 text-[13px] text-text-faint" />;
 }
 
-function OperatorTag({ op, label }: { op: "kb" | "mzk"; label: string }) {
+const OP_DOT = { kb: "bg-kb", mzk: "bg-mzk", gzm: "bg-gzm" } as const;
+
+function OperatorTag({ op, label }: { op: keyof typeof OP_DOT; label: string }) {
   return (
     <span className="inline-flex items-center gap-1.5">
-      <span className={`h-2 w-2 rounded-full ${op === "kb" ? "bg-kb" : "bg-mzk"}`} aria-hidden />
+      <span className={`h-2 w-2 rounded-full ${OP_DOT[op]}`} aria-hidden />
       {label}
     </span>
   );
@@ -79,7 +82,7 @@ function OperatorTag({ op, label }: { op: "kb" | "mzk"; label: string }) {
 /** A timetable departure on the absolute time line, shaped as a board row so it sorts with the live ones. */
 interface SchedItem {
   trip_id: number | string;
-  operator?: "KB" | "MZK";
+  operator?: "KB" | "MZK" | "GZM";
   planTs: number;
   date: string;
   row: DepartureRow;
@@ -237,7 +240,7 @@ function ScheduleRow({
 }
 
 /** An upstream source failed: the list is incomplete, not empty (a failed MZK fetch used to look like "no MZK buses"). */
-function SourceWarning({ sources }: { sources: ReadonlyArray<"kb" | "mzk"> }) {
+function SourceWarning({ sources }: { sources: Warnings }) {
   return (
     <p
       role="status"
@@ -260,7 +263,8 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
   /* mirrors liveRows so the refresh closure can tell "have data" without going
      stale — a failed 30 s background refresh must not nuke a list we show */
   const liveRowsRef = useRef<DepartureRow[] | null>(null);
-  const [liveErr, setLiveErr] = useState(false);
+  /* "warming": the server is still loading the GZM data (503); the poll keeps retrying */
+  const [liveErr, setLiveErr] = useState<false | "error" | "warming">(false);
   const [liveWarn, setLiveWarn] = useState<Warnings>(NO_WARNINGS);
   /* "now" on the SERVER's clock (epoch s): every row time is an absolute instant, so there is no
      seconds-of-day / midnight arithmetic left, and a wrong device clock cannot shift the countdowns.
@@ -302,8 +306,8 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
         setLiveErr(false);
       },
       // the error sheet only when there is nothing to show; with a list on screen the next poll retries
-      onFail: () => {
-        if (liveRowsRef.current === null) setLiveErr(true);
+      onFail: (err) => {
+        if (liveRowsRef.current === null) setLiveErr(stop.designator.startsWith("gzm:") && isWarming(err) ? "warming" : "error");
       },
       isVisible: () => !document.hidden,
     });
@@ -514,6 +518,8 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
               </>
             ) : stop.operator === "MZK" ? (
               <OperatorTag op="mzk" label="MZK Bielsko-Biała" />
+            ) : stop.operator === "GZM" ? (
+              <OperatorTag op="gzm" label="Metropolia GZM" />
             ) : (
               <OperatorTag op="kb" label="Komunikacja Beskidzka" />
             )}
@@ -602,6 +608,7 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
         {tab === "live" ? (
           liveErr || staleEmpty ? (
             <ErrorState
+              message={liveErr === "warming" ? GZM_LOADING : undefined}
               onRetry={() => {
                 setLiveErr(false);
                 liveRowsRef.current = null;
@@ -758,6 +765,7 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
           )
         ) : ttErr ? (
           <ErrorState
+            message={ttLoad.warming ? GZM_LOADING : undefined}
             onRetry={() => {
               putDay(day0, null);
               void ensureDay(day0);

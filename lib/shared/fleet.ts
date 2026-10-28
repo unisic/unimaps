@@ -10,6 +10,11 @@
  * does NOT publish duty rosters, so a vehicle's real brigade number ("50/3") is unknowable:
  * we show the lines a vehicle served today instead of inventing one. Everything in
  * `todayCourses` was observed live; nothing is back-filled.
+ *
+ * Metropolia GZM (lib/gzm-fleet.ts) publishes the GTFS brigade of every trip, so its courses
+ * carry `brigade` and the next course comes from the brigade's schedule. Its vehicles are keyed
+ * by "<company code>_<fleet number>" (fleet numbers repeat across companies) and have no
+ * equipment data: `label` is the printed fleet number, length and fuel are null.
  */
 import type { VehicleFeatures } from "../mzk-fleet";
 
@@ -41,6 +46,8 @@ export interface VehicleCourseRecord {
   endTime: string; // HH:MM, scheduled
   startSecs: number; // agency seconds since midnight, scheduled
   endSecs: number;
+  /** GZM: the trip's GTFS brigade, shown as "<line>/<brigade>" (MZK publishes none) */
+  brigade?: string;
   /** last observed delay of the course (≈ arrival delay for a finished one) */
   delaySec: number;
   stopsCount: number;
@@ -83,8 +90,9 @@ export interface PredictedNextCourse {
   fromStopSymbol?: string;
   /** minutes between the expected arrival and the estimated departure */
   pauseMinutes: number;
-  /** "medium": the vehicle shuttled on this line today (observed); "low": generic assumption */
-  confidence: "medium" | "low";
+  /** "high": the brigade's next scheduled trip (GZM GTFS); "medium": the vehicle shuttled on this
+   *  line today (observed); "low": generic assumption */
+  confidence: "high" | "medium" | "low";
   reason: string;
 }
 
@@ -105,12 +113,17 @@ export interface FleetVehicleStats {
 
 export interface FleetVehicleDetail {
   sideNumber: string;
-  operator: "MZK" | "KB";
+  operator: "MZK" | "KB" | "GZM";
+  /** GZM: the printed fleet number (sideNumber is "<company code>_<fleet number>") */
+  label?: string;
+  /** GZM: the operating company */
+  company?: string;
   model: string;
   producer: string;
   year?: string;
-  lengthCategory: FleetLengthCategory;
-  fuelType: FleetFuelType;
+  /** null = unknown (GZM publishes no equipment data) */
+  lengthCategory: FleetLengthCategory | null;
+  fuelType: FleetFuelType | null;
   features: VehicleFeatures;
   /** "active" = in OnTime's running list right now */
   status: "active" | "depot";
@@ -134,15 +147,18 @@ export interface FleetVehicleDetail {
  */
 export interface FleetSummaryItem {
   sideNumber: string;
+  label?: string;
+  company?: string;
   model: string;
   producer: string;
   year?: string;
-  lengthCategory: FleetLengthCategory;
-  fuelType: FleetFuelType;
+  lengthCategory: FleetLengthCategory | null;
+  fuelType: FleetFuelType | null;
   status: "active" | "depot";
   lines: string[];
   lineName?: string;
   direction?: string;
+  brigade?: string;
   /** scheduled departure from the first stop of the current course, HH:MM */
   startTime?: string;
   firstStopName?: string;
@@ -203,17 +219,6 @@ export interface FleetTimelinePoint {
 
 export const TIMELINE_SLOT_SECS = 300;
 
-/** A phototrans photo of a vehicle: the browser hot-links the 300x200 thumbnail, credited to its
- *  author, both linking back to phototrans. */
-export interface VehiclePhoto {
-  thumb: string;
-  page: string;
-  author: string;
-  authorPage: string;
-  /** YYYY-MM-DD the photo was taken, when phototrans gives one */
-  date: string | null;
-}
-
 /* ── punctuality ─────────────────────────────────────────────────────────────── */
 
 /** On time = at most 1 min early and at most 3 min late (the usual Polish operator rule). */
@@ -264,13 +269,18 @@ export function compareLineNames(a: string, b: string): number {
 }
 
 /**
- * Free-text vehicle search: a side number ("#23…" by prefix, or 3+ digits), a line number
- * (exact, current or served today — "1" must not list side numbers 100-199), or a folded
- * substring of model, producer, direction, stop. A bare number is never a text substring:
- * "1" means line 1, not every "Urbino 12".
+ * Free-text vehicle search: a side number ("#23…" by prefix, or 3+ digits; GZM: the printed
+ * label, or the whole "<company>_<fleet>" key), a line number (exact, current or served today:
+ * "1" must not list side numbers 100-199), a GZM brigade as printed ("69/1", "69/" for all of
+ * line 69), or a folded substring of model, producer, company, direction, stop. A bare number is
+ * never a text substring: "1" means line 1, not every "Urbino 12".
  */
 export function matchesFleetQuery(
-  v: Pick<FleetSummaryItem, "sideNumber" | "model" | "producer" | "lines" | "lineName" | "direction" | "currentStopName">,
+  v: Pick<
+    FleetSummaryItem,
+    "sideNumber" | "model" | "producer" | "lines" | "lineName" | "direction" | "currentStopName"
+  > &
+    Partial<Pick<FleetSummaryItem, "label" | "company" | "brigade">>,
   query: string,
 ): boolean {
   const q = foldText(query.trim());
@@ -279,12 +289,15 @@ export function matchesFleetQuery(
   const bare = hash ? q.slice(1).trim() : q;
   // a lone "#" is the start of a side number being typed: keep the list until a digit narrows it
   if (hash && !bare) return true;
-  if (/^\d+$/.test(bare) && (hash || bare.length >= 3) && v.sideNumber.startsWith(bare)) return true;
+  if (/^\d+$/.test(bare) && (hash || bare.length >= 3) && (v.label ?? v.sideNumber).startsWith(bare)) return true;
+  // MZK side numbers are digits only: a "_" query can only be a GZM key
+  if (bare.includes("_") && v.sideNumber.startsWith(bare)) return true;
   if (hash) return false;
   if (v.lineName && foldText(v.lineName) === q) return true;
   if (v.lines.some((l) => foldText(l) === q)) return true;
+  if (v.brigade && v.lineName && q.includes("/") && foldText(`${v.lineName}/${v.brigade}`).startsWith(q)) return true;
   if (/^\d+$/.test(q)) return false;
-  for (const field of [v.model, v.producer, v.direction, v.currentStopName]) {
+  for (const field of [v.model, v.producer, v.company, v.direction, v.currentStopName]) {
     if (field && foldText(field).includes(q)) return true;
   }
   return false;
