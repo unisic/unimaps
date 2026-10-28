@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import useSWR from "swr";
 import { fetchJSON, vehiclesFetcher } from "@/lib/client/api";
+import { CITY, CityContext, cityUrl } from "@/lib/client/city";
 import { nowSecs } from "@/lib/client/format";
 import { loadOffline, saveOffline } from "@/lib/client/offline";
 import type { LinesResponse, StopsResponse, VehiclesResponse } from "@/lib/client/types";
@@ -15,24 +16,27 @@ const cachedFetcher = <T>(url: string): Promise<T> => fetchJSON<T>(url);
 const STOPS_SAVE_MS = 10 * 60_000;
 let stopsSavedAt = 0;
 async function stopsFetcher(url: string): Promise<StopsResponse> {
+  // one city per page load, so the shared save throttle never mixes the two lists
+  const key = url.includes("city=gzm") ? "stops-gzm" : "stops";
   try {
     const body = await fetchJSON<StopsResponse>(url);
     if (!body.partial && Date.now() - stopsSavedAt > STOPS_SAVE_MS) {
       stopsSavedAt = Date.now();
-      void saveOffline("stops", body);
+      void saveOffline(key, body);
     }
     return body;
   } catch (e) {
-    const saved = await loadOffline<StopsResponse>("stops");
+    const saved = await loadOffline<StopsResponse>(key);
     if (saved) return saved;
     throw e;
   }
 }
 
-/** Live vehicle positions, polled every 4 s, never HTTP-cached. */
+/** Live vehicle positions, polled every 4 s (GZM: 5 s, ~0.7 MB a poll), never HTTP-cached. */
 export function useVehicles() {
-  return useSWR<VehiclesResponse>("/api/vehicles", vehiclesFetcher, {
-    refreshInterval: 4000,
+  const city = useContext(CityContext);
+  return useSWR<VehiclesResponse>(cityUrl("/api/vehicles", city), vehiclesFetcher, {
+    refreshInterval: CITY[city].vehiclesRefreshMs,
     dedupingInterval: 1500,
     keepPreviousData: true,
     revalidateOnFocus: true,
@@ -50,7 +54,8 @@ export function useVehicles() {
  * An unchanged payload keeps its identity (SWR compares deeply), so the 4 s heartbeat tree never re-renders for it.
  */
 export function useStops() {
-  return useSWR<StopsResponse>("/api/stops", stopsFetcher, {
+  const city = useContext(CityContext);
+  return useSWR<StopsResponse>(cityUrl("/api/stops", city), stopsFetcher, {
     revalidateOnFocus: true,
     focusThrottleInterval: 60_000,
     revalidateOnReconnect: true,
@@ -61,7 +66,8 @@ export function useStops() {
 
 /** Static GTFS line catalog — fetched once per session, HTTP cached. */
 export function useLines() {
-  return useSWR<LinesResponse>("/api/lines", cachedFetcher, {
+  const city = useContext(CityContext);
+  return useSWR<LinesResponse>(cityUrl("/api/lines", city), cachedFetcher, {
     revalidateOnFocus: false,
     revalidateIfStale: false,
     revalidateOnReconnect: false,

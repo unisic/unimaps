@@ -8,6 +8,7 @@ import path from "node:path";
 import * as config from "./config";
 import { getFleetTracker } from "./fleet-tracker";
 import { startGtfsRefresh } from "./gtfs-refresh";
+import { flushGzmFleet } from "./gzm-fleet";
 import { KbApi } from "./kb-api";
 import { log } from "./logger";
 import { createMergedStopsCache, type MergedView } from "./merged-stops";
@@ -321,6 +322,11 @@ function registerSignalHandlers(st: SingletonState): void {
       getFleetTracker().flushSync(); // the debounced save would otherwise drop up to 30 s of history
     } catch (err) {
       log.error("fleet", `history flush failed: ${err}`);
+    }
+    try {
+      flushGzmFleet(); // up to 2 min for GZM
+    } catch (err) {
+      log.error("gzm-fleet", `history flush failed: ${err}`);
     }
     void Promise.allSettled([st.poller.stop(), st.mzkPoller.stop()]).catch((err: unknown) => {
       log.error("rt", `poller stop failed: ${err}`);

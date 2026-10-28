@@ -1,12 +1,13 @@
 "use client";
 
-import { memo, useDeferredValue, useId, useMemo } from "react";
-import type { FleetSummaryItem } from "@/lib/client/fleet";
+import { memo, useDeferredValue, useId, useMemo, useState } from "react";
+import type { FleetCity, FleetSummaryItem } from "@/lib/client/fleet";
 import { compareLineNames, matchesFleetQuery, type FleetFuelType } from "@/lib/shared/fleet";
 import { LineBadge } from "../ui";
 import {
   clockFromEpoch,
   DelayBadge,
+  FLEET_CITY,
   FUEL_LABEL,
   FUEL_LABEL_PLURAL,
   FuelIcon,
@@ -78,6 +79,9 @@ const STATUS_CHIPS: { key: StatusFilter; label: string }[] = [
   { key: "depot", label: "Nie kursuje" },
 ];
 
+/** ponytail: GZM lists ~1 400 vehicles; 200 cards per step keep the DOM small. Upgrade: a virtual list. */
+const PAGE_ROWS = 200;
+
 const SORT_LABEL: Record<FleetSort, string> = {
   line: "Linia",
   side: "Numer boczny",
@@ -91,15 +95,22 @@ export const FleetList = memo(function FleetList({
   onFiltersChange,
   onOpen,
   nowEpoch,
+  city = "bb",
 }: {
   vehicles: FleetSummaryItem[];
   filters: FleetFilters;
   onFiltersChange: (patch: Partial<FleetFilters>) => void;
   onOpen: (side: string) => void;
   nowEpoch: number;
+  city?: FleetCity;
 }) {
   const searchId = useId();
   const q = useDeferredValue(filters.q);
+  const brand = FLEET_CITY[city];
+  // "Pokaż więcej" counts for the filters it was pressed under; any filter change starts over
+  const filterKey = `${q}\n${filters.status}\n${filters.fuel}\n${filters.line}\n${filters.sort}`;
+  const [more, setMore] = useState({ key: "", rows: PAGE_ROWS });
+  const limit = more.key === filterKey ? more.rows : PAGE_ROWS;
 
   const lineOptions = useMemo(() => {
     const set = new Set<string>();
@@ -158,7 +169,7 @@ export const FleetList = memo(function FleetList({
             spellCheck={false}
             value={filters.q}
             onChange={(e) => onFiltersChange({ q: e.target.value })}
-            placeholder="Numer boczny, linia, model, kierunek"
+            placeholder={city === "gzm" ? "Numer taborowy, linia, brygada, kierunek" : "Numer boczny, linia, model, kierunek"}
             className="h-11 w-full rounded-xl border border-hairline bg-surface pl-10 pr-11 text-[14px] text-text placeholder:text-text-faint focus:border-primary/60 focus:outline-none [&::-webkit-search-cancel-button]:hidden"
           />
           {filters.q ? (
@@ -195,13 +206,16 @@ export const FleetList = memo(function FleetList({
           })}
         </div>
 
-        <div className="grid grid-cols-3 gap-2">
-          <Select
-            label="Napęd"
-            value={filters.fuel}
-            onChange={(v) => onFiltersChange({ fuel: v as FleetFilters["fuel"] })}
-            options={[["all", "Wszystkie"], ...fuelOptions.map((f) => [f, FUEL_LABEL_PLURAL[f]] as [string, string])]}
-          />
+        {/* GZM publishes no propulsion data: no "Napęd" filter without a single known value */}
+        <div className={`grid gap-2 ${fuelOptions.length > 0 ? "grid-cols-3" : "grid-cols-2"}`}>
+          {fuelOptions.length > 0 ? (
+            <Select
+              label="Napęd"
+              value={filters.fuel}
+              onChange={(v) => onFiltersChange({ fuel: v as FleetFilters["fuel"] })}
+              options={[["all", "Wszystkie"], ...fuelOptions.map((f) => [f, FUEL_LABEL_PLURAL[f]] as [string, string])]}
+            />
+          ) : null}
           <Select
             label="Linia"
             value={filters.line}
@@ -223,7 +237,7 @@ export const FleetList = memo(function FleetList({
 
         <div className="flex min-h-8 items-center justify-between gap-3 text-[12.5px] text-text-mute">
           <p aria-live="polite" className="tabular-nums">
-            {filtered ? `Pokazano ${fmtInt(shown.length)} z ${fmtInt(vehicles.length)}` : `${fmtInt(vehicles.length)} pojazdów MZK`}
+            {filtered ? `Pokazano ${fmtInt(shown.length)} z ${fmtInt(vehicles.length)}` : `${fmtInt(vehicles.length)} pojazdów ${brand.short}`}
           </p>
           {filtered ? (
             <button
@@ -239,18 +253,34 @@ export const FleetList = memo(function FleetList({
 
       {runningNow === 0 && !filtered ? (
         <p className="mb-3 rounded-xl border border-hairline bg-surface px-4 py-3 text-[13px] text-text-mute">
-          Żaden autobus MZK nie jest teraz w trasie, nocą to normalne. Karta pojazdu pokazuje jego dzisiejsze kursy.
+          Żaden {brand.veh} {brand.short} nie jest teraz w trasie, nocą to normalne. Karta pojazdu pokazuje jego dzisiejsze kursy.
         </p>
       ) : null}
 
       {shown.length > 0 ? (
-        <ul className={`grid gap-3 sm:grid-cols-2 xl:grid-cols-3 ${stale ? "opacity-70" : ""}`} aria-label="Pojazdy">
-          {shown.map((v) => (
-            <li key={v.sideNumber}>
-              <VehicleCard v={v} onOpen={onOpen} nowEpoch={nowEpoch} />
-            </li>
-          ))}
-        </ul>
+        <>
+          <ul className={`grid gap-3 sm:grid-cols-2 xl:grid-cols-3 ${stale ? "opacity-70" : ""}`} aria-label="Pojazdy">
+            {shown.slice(0, limit).map((v) => (
+              <li key={v.sideNumber}>
+                <VehicleCard v={v} onOpen={onOpen} nowEpoch={nowEpoch} operator={brand.operator} />
+              </li>
+            ))}
+          </ul>
+          {shown.length > limit ? (
+            <div className="mt-4 text-center">
+              <button
+                type="button"
+                onClick={() => setMore({ key: filterKey, rows: limit + PAGE_ROWS })}
+                className="min-h-10 rounded-full bg-surface-3 px-5 text-[13px] font-semibold text-text hover:bg-white/12"
+              >
+                Pokaż więcej
+                <span className="ml-1.5 font-normal text-text-mute tabular-nums">
+                  ({fmtInt(limit)} z {fmtInt(shown.length)})
+                </span>
+              </button>
+            </div>
+          ) : null}
+        </>
       ) : (
         <div className="rounded-2xl border border-hairline bg-surface px-4 py-12 text-center">
           <p className="text-[14px] font-medium text-text">Brak pojazdów dla tych filtrów</p>
@@ -337,13 +367,24 @@ function StatusPill({ v }: { v: FleetSummaryItem }) {
   return <span className="shrink-0 text-[12px] font-medium text-text-faint">Nie kursuje</span>;
 }
 
-function VehicleCard({ v, onOpen, nowEpoch }: { v: FleetSummaryItem; onOpen: (side: string) => void; nowEpoch: number }) {
+function VehicleCard({
+  v,
+  onOpen,
+  nowEpoch,
+  operator,
+}: {
+  v: FleetSummaryItem;
+  onOpen: (side: string) => void;
+  nowEpoch: number;
+  operator: "MZK" | "GZM";
+}) {
   const s = vehicleState(v);
   const courses = v.coursesCountToday;
   const lastSeenToday = v.lastSeenAt > 0 && nowEpoch - v.lastSeenAt < 86400;
   // "0,0 km, 0 kursów" under "Dziś nie wyjechał na trasę" only repeats it
   const drove = courses > 0 || v.kmToday > 0;
-  const hasTags = v.fuelType !== "diesel" || v.lengthCategory === "MEGA";
+  const fuel = v.fuelType !== null && v.fuelType !== "diesel" ? v.fuelType : null;
+  const hasTags = fuel !== null || v.lengthCategory === "MEGA";
   return (
     <button
       type="button"
@@ -354,9 +395,9 @@ function VehicleCard({ v, onOpen, nowEpoch }: { v: FleetSummaryItem; onOpen: (si
     >
       <span className="flex items-start justify-between gap-3">
         <span className="min-w-0">
-          <span className="block text-[15px] font-semibold text-text tabular-nums">#{v.sideNumber}</span>
+          <span className="block text-[15px] font-semibold text-text tabular-nums">#{v.label ?? v.sideNumber}</span>
           <span className="block truncate text-[12.5px] text-text-mute">
-            {v.model}
+            {v.company ? `${v.company}${v.model ? `, ${v.model}` : ""}` : v.model}
             {v.year ? <span className="text-text-faint"> ({v.year})</span> : null}
           </span>
         </span>
@@ -366,7 +407,8 @@ function VehicleCard({ v, onOpen, nowEpoch }: { v: FleetSummaryItem; onOpen: (si
       {s === "active" && v.lineName ? (
         <>
           <span className="flex min-w-0 items-center gap-2">
-            <LineBadge line={v.lineName} operator="MZK" />
+            <LineBadge line={v.lineName} operator={operator} />
+            <Brigade v={v} />
             <span className="min-w-0 flex-1 truncate text-[13.5px] font-medium text-text">{v.direction}</span>
             {v.delaySec !== undefined ? <DelayBadge sec={v.delaySec} /> : null}
           </span>
@@ -389,7 +431,8 @@ function VehicleCard({ v, onOpen, nowEpoch }: { v: FleetSummaryItem; onOpen: (si
       ) : s === "waiting" && v.lineName ? (
         <>
           <span className="flex min-w-0 items-center gap-2">
-            <LineBadge line={v.lineName} operator="MZK" />
+            <LineBadge line={v.lineName} operator={operator} />
+            <Brigade v={v} />
             <span className="min-w-0 flex-1 truncate text-[13.5px] font-medium text-text">{v.direction}</span>
           </span>
           <span className="block truncate text-[12.5px] text-text-mute">
@@ -407,10 +450,10 @@ function VehicleCard({ v, onOpen, nowEpoch }: { v: FleetSummaryItem; onOpen: (si
 
       {drove || hasTags ? (
         <span className="mt-auto flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-hairline pt-2.5 text-[12px] text-text-mute">
-          {v.fuelType !== "diesel" ? (
+          {fuel ? (
             <span className="inline-flex items-center gap-1 text-text">
-              <FuelIcon fuel={v.fuelType} size={13} />
-              {FUEL_LABEL[v.fuelType]}
+              <FuelIcon fuel={fuel} size={13} />
+              {FUEL_LABEL[fuel]}
             </span>
           ) : null}
           {v.lengthCategory === "MEGA" ? <span>Przegubowy</span> : null}
@@ -430,5 +473,15 @@ function VehicleCard({ v, onOpen, nowEpoch }: { v: FleetSummaryItem; onOpen: (si
         </span>
       ) : null}
     </button>
+  );
+}
+
+/** GZM: the trip's brigade next to the line badge ("69" + "bryg. 1" reads as 69/1). */
+function Brigade({ v }: { v: FleetSummaryItem }) {
+  if (!v.brigade) return null;
+  return (
+    <span title={`Brygada ${v.lineName}/${v.brigade}`} className="shrink-0 text-[12px] text-text-mute tabular-nums">
+      bryg. {v.brigade}
+    </span>
   );
 }

@@ -11,6 +11,8 @@ interface Props {
   stops: Stop[];
   visible: boolean;
   onSelect: (stop: Stop) => void;
+  /** zoom from which stops are drawn (default ZOOM_THRESHOLD; GZM's ~7400 stops start a level later) */
+  minZoom?: number;
 }
 
 /** Only reveal stops once zoomed in to street level — not the whole time. */
@@ -24,7 +26,7 @@ const BOUNDS_PAD = 0.25;
  * lightweight divIcons exist at once (the ~950-stop set never all mounts).
  * Markers are diffed in/out on move so panning never re-pops the whole set.
  */
-function StopsLayer({ stops, visible, onSelect }: Props) {
+function StopsLayer({ stops, visible, onSelect, minZoom = ZOOM_THRESHOLD }: Props) {
   const map = useMap();
   const onSelectRef = useRef(onSelect);
 
@@ -52,7 +54,7 @@ function StopsLayer({ stops, visible, onSelect }: Props) {
 
     const render = (): void => {
       const desired = new Set<string>();
-      if (visible && stops.length && map.getZoom() >= ZOOM_THRESHOLD) {
+      if (visible && stops.length && map.getZoom() >= minZoom) {
         const b = map.getBounds().pad(BOUNDS_PAD);
         for (const s of stops) {
           if (b.contains([s.lat, s.lon])) desired.add(s.id);
@@ -75,7 +77,14 @@ function StopsLayer({ stops, visible, onSelect }: Props) {
             zIndexOffset: -50, // below the live vehicle pills
           });
           const label = document.createElement("span");
-          const opBadge = s.operator === "BOTH" ? " · KB + MZK" : s.operator === "MZK" ? " · MZK" : " · KB";
+          const opBadge =
+            s.operator === "BOTH"
+              ? " · KB + MZK"
+              : s.operator === "MZK"
+                ? " · MZK"
+                : s.operator === "GZM"
+                  ? " · Metropolia GZM"
+                  : " · KB";
           label.textContent = `${displayStopName(s.name)}${s.symbol ? ` (${s.symbol})` : ""}${opBadge}`;
           m.bindTooltip(label, { direction: "top", offset: [0, -14], opacity: 1, className: "kb-tooltip" });
           m.on("click", () => onSelectRef.current(s));
@@ -93,7 +102,7 @@ function StopsLayer({ stops, visible, onSelect }: Props) {
       map.off("zoomend", render);
       group.remove();
     };
-  }, [stops, visible, map]);
+  }, [stops, visible, map, minZoom]);
 
   return null;
 }

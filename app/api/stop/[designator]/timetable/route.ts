@@ -1,5 +1,6 @@
-import { badRequest, isValidDate, isValidId, upstreamError } from "@/lib/api-helpers";
-import { todayLocalISO } from "@/lib/config";
+import { badRequest, internalError, isGzmId, isValidDate, isValidId, notFound, upstreamError, warming } from "@/lib/api-helpers";
+import { GZM_ENABLED, todayLocalISO } from "@/lib/config";
+import { getGzm, startGzm } from "@/lib/gzm";
 import { gtfsTripMeta } from "@/lib/gtfs-trips";
 import { pyTruthy } from "@/lib/kb-api";
 import { log } from "@/lib/logger";
@@ -20,6 +21,18 @@ export async function GET(
   if (!isValidId(designator)) return badRequest("Invalid stop designator");
   const date = new URL(req.url).searchParams.get("date") || todayLocalISO();
   if (!isValidDate(date)) return badRequest("date must be YYYY-MM-DD");
+  if (isGzmId(designator)) {
+    if (!GZM_ENABLED) return notFound();
+    void startGzm();
+    try {
+      const tt = getGzm().timetable(designator, date);
+      if (tt === null) return warming();
+      if (tt === "unknown") return notFound("Unknown stop");
+      return Response.json(tt, { headers: { "Cache-Control": "public, max-age=900" } });
+    } catch (err) {
+      return internalError("gzm-timetable", err);
+    }
+  }
 
   try {
     await startPoller();

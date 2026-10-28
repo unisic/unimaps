@@ -1,5 +1,7 @@
-import { jsonWithEtag, upstreamError } from "@/lib/api-helpers";
+import { jsonWithEtag, parseCity, upstreamError } from "@/lib/api-helpers";
 import { getFleetTracker } from "@/lib/fleet-tracker";
+import { getGzmFleetTracker } from "@/lib/gzm-fleet";
+import { startGzm } from "@/lib/gzm";
 import { startPoller } from "@/lib/poller-singleton";
 import { TIMELINE_SLOT_SECS } from "@/lib/shared/fleet";
 
@@ -11,9 +13,16 @@ export const runtime = "nodejs";
  * (`points[].t` = agency seconds since midnight). A slot with no sample (night, server down)
  * is simply absent: the chart draws a gap, never an interpolated line.
  * Only the current slot moves, so most polls are a 304 (no poll timestamp in the body for that reason).
+ * `?city=gzm`: the Metropolia GZM fleet.
  */
 export async function GET(req: Request): Promise<Response> {
+  const city = parseCity(req);
+  if (city instanceof Response) return city;
   try {
+    if (city === "gzm") {
+      void startGzm();
+      return jsonWithEtag(req, { slotSecs: TIMELINE_SLOT_SECS, points: getGzmFleetTracker().getTimeline() });
+    }
     await startPoller();
     return jsonWithEtag(req, { slotSecs: TIMELINE_SLOT_SECS, points: getFleetTracker().getTimeline() });
   } catch (err) {

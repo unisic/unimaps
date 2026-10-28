@@ -1,4 +1,4 @@
-import { fetchJSON, getTripsBatch } from "@/lib/client/api";
+import { fetchJSON, getTripsBatch, isWarming } from "@/lib/client/api";
 import { getFavorites } from "@/lib/client/favorites";
 import { offsetDateISO } from "@/lib/client/format";
 import { loadOffline, pruneOffline, saveOffline } from "@/lib/client/offline";
@@ -11,15 +11,16 @@ export interface TtRow {
   dir: string;
 }
 
-export type Warnings = ReadonlyArray<"kb" | "mzk">;
+export type Warnings = ReadonlyArray<"kb" | "mzk" | "gzm">;
 export const NO_WARNINGS: Warnings = [];
 
 /** One day of the stop's timetable. Absent from the map = not requested yet or still fetching.
- *  `offline`: the network failed and this is the copy saved for a favourite stop. */
+ *  `offline`: the network failed and this is the copy saved for a favourite stop.
+ *  `warming`: the server is still loading the GZM data (503), worth another try in a moment. */
 export type DayLoad =
   | { status: "trips" }
   | { status: "ok"; rows: TtRow[]; warnings: Warnings; offline?: boolean }
-  | { status: "error" };
+  | { status: "error"; warming?: boolean };
 
 /* complete days only (a day with a failed upstream leg is never cached), FIFO-capped:
    one busy hub is ~450 rows */
@@ -76,10 +77,11 @@ export async function loadDay(
       if (getFavorites().includes(designator)) void saveOffline(ttKey(designator, date), rows);
     }
     return { status: "ok", rows, warnings };
-  } catch {
+  } catch (err) {
     if (signal.aborted) return { status: "error" };
     const saved = await loadOffline<TtRow[]>(ttKey(designator, date));
-    return saved ? { status: "ok", rows: saved, warnings: NO_WARNINGS, offline: true } : { status: "error" };
+    if (saved) return { status: "ok", rows: saved, warnings: NO_WARNINGS, offline: true };
+    return isWarming(err) && designator.startsWith("gzm:") ? { status: "error", warming: true } : { status: "error" };
   }
 }
 

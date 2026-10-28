@@ -1,10 +1,10 @@
 "use client";
 
 import "leaflet/dist/leaflet.css";
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { AttributionControl, Circle, MapContainer, Marker, TileLayer, ZoomControl, useMap } from "react-leaflet";
 import L from "leaflet";
-import { fetchJSON, fetchRoute, getTrip } from "@/lib/client/api";
+import { fetchJSON, fetchRoute, getTrip, tripWarming } from "@/lib/client/api";
 import { loadShapeLatest } from "@/lib/client/shapes";
 import { projectStopsAlong, slicePolyline } from "@/lib/shared/polyline";
 import { peekVehicleAnimator } from "@/lib/client/vehicleAnimator";
@@ -15,6 +15,7 @@ import { panMotion } from "@/lib/client/motion";
 import { focusPoint, glideTo, installSmoothZoom, isCovered } from "@/lib/client/mapGlide";
 import { haversineMeters } from "@/lib/client/geo";
 import { startAlertWatchers } from "@/lib/client/alerts";
+import { CITY, CityContext, GZM_LOADING, withCity } from "@/lib/client/city";
 import { prefetchFavoriteTimetables } from "@/lib/client/timetable";
 import { buildSearch, loadSavedLines, parseUrlState, saveLines, type UrlState } from "@/lib/client/urlState";
 import { schedTripKey, vehicleTripKey } from "@/lib/shared/departures";
@@ -57,10 +58,13 @@ import { IconContext } from "@/components/icons";
 const VehicleSheet = lazy(() => import("@/components/brygady/VehicleSheet").then((m) => ({ default: m.VehicleSheet })));
 
 const NOT_STARTED = "Pojazd jeszcze nie wyruszył";
+const OFF_TRIP = "Pojazd poza kursem";
 const TRIP_REFRESH_MS = 30_000;
 const LAYER_KEY = "kb:baseLayer";
 /* module-level: a stable context value never re-renders the memo()-ized icon consumers */
 const ICON_DEFAULTS = { size: "1em", weight: "bold", "aria-hidden": true } as const;
+/* road geometry is routed server-side with OSRM: its usage policy asks for credit */
+const OSRM_CREDIT = 'Trasy: <a href="https://project-osrm.org/" target="_blank" rel="noopener noreferrer">OSRM</a>';
 
 type LastRequest =
   | { kind: "live"; execId: string; tripId: string | number | null; stop: Stop | null }
@@ -151,6 +155,9 @@ function loadingTrip(
 }
 
 export default function MapApp() {
+  /* fixed for the page life: switching city is a full navigation */
+  const city = useContext(CityContext);
+  const cityCfg = CITY[city];
   const { data: vehData, error: vehError } = useVehicles();
   const { data: stopsData } = useStops();
   const stops = useMemo(() => stopsData?.stops ?? [], [stopsData]);
@@ -167,7 +174,11 @@ export default function MapApp() {
     return () => clearTimeout(t);
   }, [stopsReady]);
   /* alerts set before a reload keep watching their stops */
-  useEffect(() => startAlertWatchers(), []);
+  useEffect(() => startAlertWatchers(city), [city]);
+  /* the server metadata title is BB's; GZM retitles the tab once */
+  useEffect(() => {
+    if (city === "gzm") document.title = "Metropolia GZM: mapa pojazdów na żywo";
+  }, [city]);
   const vehicles = useMemo(() => vehData?.vehicles ?? [], [vehData?.vehicles]);
   const desktop = useIsDesktop();
 
@@ -211,7 +222,7 @@ export default function MapApp() {
   /* line names shown on the map; null = no filter (all vehicles) — seeded from
      the ?lines= deep link, else from the filter remembered in this browser */
   const [lineFilter, setLineFilter] = useState<ReadonlySet<string> | null>(() => {
-    const lines = initialUrl.lines ?? loadSavedLines();
+    const lines = initialUrl.lines ?? loadSavedLines(city);
     return lines ? new Set(lines) : null;
   });
   const [operatorFilter, setOperatorFilter] = useState<"all" | "kb" | "mzk">("all");
@@ -445,7 +456,8 @@ export default function MapApp() {
       }
       if (gen !== genRef.current) return;
       if (!tr || !tr.times?.length) {
-        setTrip((prev) => (prev && prev.gen === gen ? { ...prev, status: "error" } : prev));
+        const errorMsg = !tr && tripWarming(tripId) ? GZM_LOADING : undefined;
+        setTrip((prev) => (prev && prev.gen === gen ? { ...prev, status: "error", errorMsg } : prev));
         return;
       }
       await buildTrip(gen, tr, null, null, stop, false, note, null, tripId, tr.shape, {
@@ -488,10 +500,16 @@ export default function MapApp() {
             genRef.current++;
             setTrip(null);
             showToast("Ten kurs już się zakończył lub jest niedostępny.");
-          } else
+          } else {
+            // a vehicle on the map without a trip (GZM: done for the day, or zbiorkom lists no stops) never departs
+            const v = vehiclesRef.current.find((x) => x.id === execId);
+            const off = v != null && !v.trip_id;
             setTrip((prev) =>
-              prev && prev.gen === gen ? { ...prev, status: "ready", note: NOT_STARTED } : prev,
+              prev && prev.gen === gen
+                ? { ...prev, status: "ready", note: off ? OFF_TRIP : NOT_STARTED, line: v?.line || prev.line }
+                : prev,
             );
+          }
           return;
         }
         // coerce like the server parses the same payload (parsePosition):
@@ -733,7 +751,7 @@ export default function MapApp() {
   );
   const clearLineFilter = useCallback(() => setLineFilter(null), []);
   const filterLines = useMemo(() => (lineFilter ? [...lineFilter] : null), [lineFilter]);
-  useEffect(() => saveLines(filterLines), [filterLines]);
+  useEffect(() => saveLines(filterLines, city), [filterLines, city]);
 
   /* ---- deep links: URL -> state (hydration) and state -> URL (sync) ----
      Plain History API on purpose, NOT next/navigation: useRouter schedules real
@@ -826,7 +844,7 @@ export default function MapApp() {
       lines: filterLines,
       map: m && c ? { lat: c.lat, lon: c.lng, zoom: m.getZoom() } : urlStateRef.current.map,
     };
-    const search = buildSearch(urlStateRef.current);
+    const search = withCity(buildSearch(urlStateRef.current), city);
     if (depth > prev && !fromPop) {
       // sheet appeared/deepened → its own history entry, so back closes it
       // (a same-URL overlay pushes too; landing on a deep link does not)
@@ -845,7 +863,7 @@ export default function MapApp() {
       // same-level change (stop→stop, filter, trip kind) → replace in place
       window.history.replaceState({ kb: true }, "", search || window.location.pathname);
     }
-  }, [selectedStop, tripOpen, tripExecId, tripIsStatic, filterLines, journeyOpen, annOpen, connModalOpen, nearbyOpen]);
+  }, [selectedStop, tripOpen, tripExecId, tripIsStatic, filterLines, journeyOpen, annOpen, connModalOpen, nearbyOpen, city]);
 
   const openVehicleCard = useCallback((side: string) => {
     if (cardRef.current) return;
@@ -886,7 +904,7 @@ export default function MapApp() {
           cardRef.current = null;
           setCardSide(null);
         }
-        const want = buildSearch(urlStateRef.current);
+        const want = withCity(buildSearch(urlStateRef.current), city);
         if (window.location.search !== want) {
           window.history.replaceState({ kb: true }, "", want || window.location.pathname);
         }
@@ -930,14 +948,14 @@ export default function MapApp() {
         closeNearby();
         return;
       }
-      const want = buildSearch(cur);
+      const want = withCity(buildSearch(cur), city);
       if (window.location.search !== want) {
         window.history.replaceState({ kb: true }, "", want || window.location.pathname);
       }
     };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
-  }, [closeTrip, closeJourney, closeConnModal, closeAnnouncements, closeNearby]);
+  }, [closeTrip, closeJourney, closeConnModal, closeAnnouncements, closeNearby, city]);
 
   /* "Wyczyść widok": close every sheet and drop the line filter */
   const handleClearView = useCallback(() => {
@@ -1049,13 +1067,13 @@ export default function MapApp() {
       t = setTimeout(() => {
         const c = m.getCenter();
         urlStateRef.current = { ...urlStateRef.current, map: { lat: c.lat, lon: c.lng, zoom: m.getZoom() } };
-        const search = buildSearch(urlStateRef.current);
+        const search = withCity(buildSearch(urlStateRef.current), city);
         if (search !== window.location.search) {
           window.history.replaceState({ kb: true }, "", search || window.location.pathname);
         }
       }, 500);
     });
-  }, []);
+  }, [city]);
 
   /* locate button: start (or reuse) the GPS watch and recenter on the fix */
   const flyToUser = useCallback(
@@ -1137,18 +1155,17 @@ export default function MapApp() {
     <IconContext.Provider value={ICON_DEFAULTS}>
       <div className="fixed inset-0 h-full w-full overflow-hidden bg-bg">
         <MapContainer
-          center={initialUrl.map ? [initialUrl.map.lat, initialUrl.map.lon] : [49.822, 19.046]}
-          zoom={initialUrl.map?.zoom ?? 11}
+          center={initialUrl.map ? [initialUrl.map.lat, initialUrl.map.lon] : cityCfg.center}
+          zoom={initialUrl.map?.zoom ?? cityCfg.zoom}
           maxZoom={19}
           zoomControl={false}
           attributionControl={false}
           className="absolute inset-0 z-0 h-full w-full"
         >
           {/* bottom-left, away from the zoom + locate column in the right corner */}
-          {/* road geometry is routed server-side with OSRM — its usage policy asks for credit */}
           <AttributionControl
             position="bottomleft"
-            prefix={'Trasy: <a href="https://project-osrm.org/" target="_blank" rel="noopener noreferrer">OSRM</a>'}
+            prefix={cityCfg.attribution ? `${OSRM_CREDIT} | Dane: ${cityCfg.attribution}` : OSRM_CREDIT}
           />
           <AttributionCollapse />
           <MapBridge onMap={handleMap} />
@@ -1169,7 +1186,12 @@ export default function MapApp() {
             />
           )}
           <ZoomControl position="bottomright" />
-          <StopsLayer stops={filteredStops} visible={stopsVisible} onSelect={handleSelectStop} />
+          <StopsLayer
+            stops={filteredStops}
+            visible={stopsVisible}
+            onSelect={handleSelectStop}
+            minZoom={cityCfg.stopMinZoom}
+          />
           {liveStop && (
             <Marker
               position={[liveStop.lat, liveStop.lon]}

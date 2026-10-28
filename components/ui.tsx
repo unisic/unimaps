@@ -24,7 +24,7 @@ export function LineBadge({
 }: {
   line: string;
   big?: boolean;
-  operator?: "KB" | "MZK";
+  operator?: "KB" | "MZK" | "GZM";
 }) {
   return (
     <span
@@ -149,13 +149,13 @@ export function EmptyState({ text }: { text: string }) {
   );
 }
 
-export function ErrorState({ onRetry }: { onRetry: () => void }) {
+export function ErrorState({ onRetry, message }: { onRetry: () => void; message?: string }) {
   return (
     <div className="px-6 py-10 text-center animate-fade">
       <span className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-danger/10 text-[22px] text-danger">
         <WarningCircleIcon size="1em" weight="bold" aria-hidden />
       </span>
-      <p className="mt-3 text-[13px] text-text-mute">Nie udało się pobrać danych.</p>
+      <p className="mt-3 text-[13px] text-text-mute">{message ?? "Nie udało się pobrać danych."}</p>
       <button
         type="button"
         onClick={onRetry}

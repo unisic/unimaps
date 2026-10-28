@@ -24,7 +24,7 @@
  * minute the countdown prints.
  */
 
-export type Operator = "KB" | "MZK";
+export type Operator = "KB" | "MZK" | "GZM";
 
 /** Wire fields the server adds to every row (epoch SECONDS, delays in SECONDS). */
 export interface TimingFields {
@@ -238,6 +238,10 @@ export function pickDirection(
 /** Stable per-row key that survives refetches (no vehicle id: it appears once a bus is assigned). */
 export function mzkRowKey(courseId: number | string, orderInCourse: number | null | undefined): string {
   return `mzk:${courseId}#${orderInCourse ?? ""}`;
+}
+/** GZM: the static GTFS trip id (raw, without "gzm:") + the stop_sequence of this visit. */
+export function gzmRowKey(tripId: string, stopSequence: number): string {
+  return `gzm:${tripId}#${stopSequence}`;
 }
 export function kbRowKey(tripExecutionId: unknown, tripIndex: unknown): string {
   return `${tripExecutionId ?? ""}#${tripIndex ?? ""}`;

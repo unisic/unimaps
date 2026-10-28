@@ -1,4 +1,5 @@
-import { etagMatches, upstreamError } from "@/lib/api-helpers";
+import { etagMatches, parseCity, upstreamError, warming } from "@/lib/api-helpers";
+import { getGzm, startGzm } from "@/lib/gzm";
 import { getMergedStopsView, startPoller } from "@/lib/poller-singleton";
 
 export const dynamic = "force-dynamic";
@@ -6,6 +7,17 @@ export const runtime = "nodejs";
 
 /** GET /api/stops — unified stops merged across KB and MZK. */
 export async function GET(req: Request): Promise<Response> {
+  const city = parseCity(req);
+  if (city instanceof Response) return city;
+  if (city === "gzm") {
+    void startGzm();
+    const feed = getGzm().currentFeed();
+    if (!feed) return warming();
+    // the feed swaps once a day; the client revalidates like the BB list (focus, every 15 min)
+    const headers = { "Content-Type": "application/json", ETag: feed.stopsEtag, "Cache-Control": "public, max-age=60" };
+    if (etagMatches(req.headers.get("if-none-match"), feed.stopsEtag)) return new Response(null, { status: 304, headers });
+    return new Response(feed.stopsBody, { headers });
+  }
   try {
     await startPoller();
     const view = getMergedStopsView();

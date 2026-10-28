@@ -33,7 +33,8 @@ const MAX_FLEET_INTERVAL = 500;
 
 interface View {
   trackId: string;
-  marker: L.Marker;
+  /** a DOM pill, or a canvas dot (no element, so no arrow) */
+  marker: L.Marker | L.CircleMarker;
   kind: "fleet" | "tracked";
   arrowEl: HTMLElement | null;
   /** last written (unwrapped) arrow angle */
@@ -197,7 +198,7 @@ export class VehicleAnimator {
 
   /* ------------------------------------------------------------ views */
 
-  addView(viewId: string, trackId: string, marker: L.Marker, kind: "fleet" | "tracked"): void {
+  addView(viewId: string, trackId: string, marker: L.Marker | L.CircleMarker, kind: "fleet" | "tracked"): void {
     const prev = this.views.get(viewId);
     if (prev) {
       if (prev.marker === marker && prev.trackId === trackId) return;

@@ -1,9 +1,10 @@
 "use client";
 
-import { memo, useEffect, useRef } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { useMap } from "react-leaflet";
 import L from "leaflet";
 import { vehiclesClock } from "@/lib/client/api";
+import { fleetMarkers } from "@/lib/client/fleetMarkers";
 import { delayClass, delayTxt, displayStopName, vehColor } from "@/lib/client/format";
 import { makeVehicleIcon } from "@/lib/client/leafletIcons";
 import type { Vehicle } from "@/lib/client/types";
@@ -22,9 +23,13 @@ interface Props {
 }
 
 interface MarkerView {
-  marker: L.Marker;
+  marker: L.Marker | L.CircleMarker;
   iconKey: string;
+  dot: boolean;
 }
+
+/** a dense fleet zoomed in mounts pills only this far around the viewport (StopsLayer's margin) */
+const BOUNDS_PAD = 0.25;
 
 /** Tooltip DOM (textContent only — upstream strings are never parsed as HTML), laid out like TripView's header. */
 function buildVehicleTooltip(v: Vehicle | undefined): HTMLElement {
@@ -75,6 +80,8 @@ function buildVehicleTooltip(v: Vehicle | undefined): HTMLElement {
  * raw fixes + CSS glide when "Płynny ruch pojazdów" is off). Do not convert
  * back to declarative react-leaflet <Marker>s: their `position` prop would
  * snap every animated marker back to the raw fix on each 4 s poll.
+ * A dense fleet (GZM) is canvas dots zoomed out and pills only around the
+ * viewport zoomed in (lib/client/fleetMarkers.ts).
  */
 function VehicleLayer({
   vehicles,
@@ -88,6 +95,9 @@ function VehicleLayer({
   const animRef = useRef<VehicleAnimator | null>(null);
   const groupRef = useRef<L.LayerGroup | null>(null);
   const viewsRef = useRef(new Map<string, MarkerView>());
+  const rendererRef = useRef<L.Canvas | null>(null);
+  // bumped on moveend: the dense-fleet cull box and the dot/pill switch follow the view
+  const [viewTick, setViewTick] = useState(0);
 
   useEffect(() => {
     onClickRef.current = onVehicleClick;
@@ -97,14 +107,21 @@ function VehicleLayer({
   useEffect(() => {
     const anim = acquireVehicleAnimator(map);
     const group = L.layerGroup();
+    const renderer = L.canvas({ tolerance: 4 });
     const views = viewsRef.current;
+    const onMoveEnd = () => setViewTick((n) => n + 1);
     animRef.current = anim;
     groupRef.current = group;
+    rendererRef.current = renderer;
+    map.on("moveend", onMoveEnd);
     return () => {
+      map.off("moveend", onMoveEnd);
       for (const id of views.keys()) anim.removeView(id);
       views.clear();
       group.remove();
+      renderer.remove();
       groupRef.current = null;
+      rendererRef.current = null;
       animRef.current = null;
       releaseVehicleAnimator(map);
     };
@@ -120,7 +137,8 @@ function VehicleLayer({
   useEffect(() => {
     const anim = animRef.current;
     const group = groupRef.current;
-    if (!anim || !group) return;
+    const renderer = rendererRef.current;
+    if (!anim || !group || !renderer) return;
     const views = viewsRef.current;
     if (hidden) {
       for (const id of views.keys()) anim.removeView(id);
@@ -135,34 +153,52 @@ function VehicleLayer({
     if (operatorFilter === "kb") shown = shown.filter((v) => v.operator !== "MZK");
     else if (operatorFilter === "mzk") shown = shown.filter((v) => v.operator === "MZK");
     if (lineFilter) shown = shown.filter((v) => lineFilter.has(v.line));
+    const b = map.getBounds().pad(BOUNDS_PAD);
+    const { dots, list } = fleetMarkers(shown, map.getZoom(), {
+      s: b.getSouth(),
+      w: b.getWest(),
+      n: b.getNorth(),
+      e: b.getEast(),
+    });
 
-    const want = new Set(shown.map((v) => v.id));
+    const want = new Set(list.map((v) => v.id));
     for (const [id, view] of views) {
-      if (want.has(id)) continue;
+      if (want.has(id) && view.dot === dots) continue;
       anim.removeView(id);
       group.removeLayer(view.marker);
       views.delete(id);
     }
 
-    for (const v of shown) {
+    for (const v of list) {
       const color = vehColor(v);
       // heading is applied by the animator, never part of the icon key —
       // rebuilding the DivIcon replays its pop animation and kills the glide
       const hasHeading = anim.headingKnown(v.id) || v.bearing != null;
-      const key = `${v.line}|${color}|${v.operator ?? ""}|${hasHeading ? 1 : 0}`;
+      const key = dots ? color : `${v.line}|${color}|${v.operator ?? ""}|${hasHeading ? 1 : 0}`;
       const existing = views.get(v.id);
       if (!existing) {
         const d = anim.displayed(v.id);
+        const at: L.LatLngExpression = d ? [d.lat, d.lon] : [v.lat, v.lon];
         const heading = hasHeading ? (d?.heading ?? v.bearing ?? 0) : null;
-        const marker = L.marker(d ? [d.lat, d.lon] : [v.lat, v.lon], {
-          icon: makeVehicleIcon(v.line, color, heading, v.operator),
-          zIndexOffset: 100,
-          keyboard: false,
-        });
+        const marker = dots
+          ? L.circleMarker(at, {
+              renderer,
+              radius: 5,
+              color: "#fff",
+              weight: 1.5,
+              fillColor: color,
+              fillOpacity: 1,
+              bubblingMouseEvents: false, // like a marker: a tap on a dot is not a map click
+            })
+          : L.marker(at, {
+              icon: makeVehicleIcon(v.line, color, heading, v.operator),
+              zIndexOffset: 100,
+              keyboard: false,
+            });
         const id = v.id;
         marker.bindTooltip(() => buildVehicleTooltip(anim.latest(id) ?? undefined), {
           direction: "top",
-          offset: [0, -16],
+          offset: [0, dots ? -6 : -16],
           opacity: 1, // Leaflet's default 0.9 lets the markers underneath show through the card
           className: "kb-tooltip veh-tooltip",
         });
@@ -171,21 +207,23 @@ function VehicleLayer({
           if (cur) onClickRef.current(cur);
         });
         marker.addTo(group);
-        views.set(id, { marker, iconKey: key });
+        views.set(id, { marker, iconKey: key, dot: dots });
         anim.addView(id, id, marker, "fleet");
         continue;
       }
       if (existing.iconKey !== key) {
-        const d = anim.displayed(v.id);
-        existing.marker.setIcon(makeVehicleIcon(v.line, color, hasHeading ? (d?.heading ?? v.bearing ?? 0) : null, v.operator));
+        if (existing.marker instanceof L.Marker) {
+          const d = anim.displayed(v.id);
+          existing.marker.setIcon(makeVehicleIcon(v.line, color, hasHeading ? (d?.heading ?? v.bearing ?? 0) : null, v.operator));
+          anim.refreshViewDom(v.id);
+        } else existing.marker.setStyle({ fillColor: color });
         existing.iconKey = key;
-        anim.refreshViewDom(v.id);
       }
       // keep an open tooltip's text (delay, headsign) current
       const tip = existing.marker.getTooltip();
       if (tip?.isOpen()) tip.update();
     }
-  }, [vehicles, hidden, lineFilter, operatorFilter, map]);
+  }, [vehicles, hidden, lineFilter, operatorFilter, map, viewTick]);
 
   return null;
 }

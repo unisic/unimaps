@@ -44,7 +44,7 @@ function TripLayer({ trip, desktop, vehMeta, liveVehicle }: Props) {
   const tripOp = trip?.operator ?? lastLive?.operator ?? vehMeta?.operator;
   const isMzkTrip = isMzk(tripOp, trip?.line);
   const lineColor = trip ? operatorColor(tripOp, trip.line === "…" ? null : trip.line) : "";
-  const op: "KB" | "MZK" = isMzkTrip ? "MZK" : "KB";
+  const op: "KB" | "MZK" | "GZM" = tripOp === "GZM" ? "GZM" : isMzkTrip ? "MZK" : "KB";
 
   /* The tracked bus marker. A live fleet vehicle → an animator view bound to
    * the SAME track as its fleet marker (it continues from where it was drawn,

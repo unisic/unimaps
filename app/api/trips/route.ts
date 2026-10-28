@@ -1,4 +1,6 @@
-import { badRequest, isValidId, upstreamError } from "@/lib/api-helpers";
+import { badRequest, isGzmId, isValidId, upstreamError } from "@/lib/api-helpers";
+import { GZM_ENABLED } from "@/lib/config";
+import { getGzm, startGzm } from "@/lib/gzm";
 import { getApi, kbShapeRef, startPoller } from "@/lib/poller-singleton";
 import { allowRequest, clientIp, tooManyRequests } from "@/lib/rate-limit";
 
@@ -23,16 +25,28 @@ export async function GET(req: Request): Promise<Response> {
   }
 
   const api = getApi();
-  const kbIds = rawIds.filter((id) => !id.startsWith("mzk:"));
+  const gzmIds = rawIds.filter(isGzmId);
+  const kbIds = rawIds.filter((id) => !id.startsWith("mzk:") && !isGzmId(id));
   const mzkIds = rawIds.filter((id) => id.startsWith("mzk:"));
   // one token per id that costs an upstream fetch (MZK ids always do), so a batch is not a 300x amplifier
   const cost = Math.max(1, mzkIds.length + kbIds.filter((id) => !api.hasCachedTrip(id)).length);
   if (!allowRequest(clientIp(req), cost)) return tooManyRequests();
 
   try {
-    await startPoller();
+    // a GZM-only batch needs neither BB poller
+    if (kbIds.length || mzkIds.length) await startPoller();
     const trips: Record<string, unknown> = {};
     let failed = 0;
+    // GZM trips come from the local feed (no upstream fetch, no token); while it loads they are absent and uncached
+    let gzmLoading = false;
+    if (gzmIds.length > 0 && GZM_ENABLED) {
+      void startGzm();
+      for (const id of gzmIds) {
+        const t = getGzm().trip(id);
+        if (t === null) gzmLoading = true;
+        else if (t !== "unknown") trips[id] = t;
+      }
+    }
 
     if (kbIds.length > 0) {
       const kb = await api.fetchTripsBatch(kbIds);
@@ -74,7 +88,7 @@ export async function GET(req: Request): Promise<Response> {
     // a failed fetch is not "no such trip": never cache it, and with nothing resolved let the client fall back
     if (failed === rawIds.length) return upstreamError("trips", new Error(`all ${failed} trip fetches failed`));
     const pending = Object.values(trips).some((t) => (t as { shape_status?: string } | null)?.shape_status === "pending");
-    const cacheControl = failed > 0 ? "no-store" : `public, max-age=${pending ? 300 : 3600}`;
+    const cacheControl = failed > 0 || gzmLoading ? "no-store" : `public, max-age=${pending ? 300 : 3600}`;
     return Response.json({ count: Object.keys(trips).length, trips }, { headers: { "Cache-Control": cacheControl } });
   } catch (err) {
     return upstreamError("trips", err);

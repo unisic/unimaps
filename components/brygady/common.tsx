@@ -1,7 +1,34 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import type { FleetCity } from "@/lib/client/fleet";
 import { classifyDelay, type DelayClass, type FleetFuelType, type FleetLengthCategory, type VehicleFeatures } from "@/lib/shared/fleet";
+
+/** Brand and wording of each city's fleet: MZK runs buses only, GZM buses, trams and trolleybuses. */
+export const FLEET_CITY = {
+  bb: {
+    operator: "MZK",
+    name: "MZK Bielsko-Biała",
+    short: "MZK",
+    veh: "autobus",
+    vehGen: "autobusu",
+    vehs: "autobusy",
+    Vehs: "Autobusy",
+    vehsGen: "autobusów",
+    distSource: "z systemu MZK",
+  },
+  gzm: {
+    operator: "GZM",
+    name: "Metropolia GZM",
+    short: "GZM",
+    veh: "pojazd",
+    vehGen: "pojazdu",
+    vehs: "pojazdy",
+    Vehs: "Pojazdy",
+    vehsGen: "pojazdów",
+    distSource: "z rozkładu GZM",
+  },
+} as const satisfies Record<FleetCity, { operator: "MZK" | "GZM" } & Record<string, string>>;
 
 /* ── punctuality palette (charts) ────────────────────────────────────────────
  * Diverging around a neutral midpoint, following the map's semantics (violet = early,

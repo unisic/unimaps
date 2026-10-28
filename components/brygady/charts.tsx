@@ -49,9 +49,12 @@ const TL_M = { l: 36, r: 10, t: 12, b: 24 };
 export const PunctualityTimeline = memo(function PunctualityTimeline({
   points,
   slotSecs,
+  fleetName = "MZK",
 }: {
   points: FleetTimelinePoint[];
   slotSecs: number;
+  /** the operator in the chart's accessible title */
+  fleetName?: string;
 }) {
   const [width, setRef] = useElementWidth();
   const [mode, setMode] = useState<TimelineMode>("count");
@@ -203,8 +206,8 @@ export const PunctualityTimeline = memo(function PunctualityTimeline({
           >
             <title id={titleId}>
               {mode === "count"
-                ? "Pojazdy MZK w trasie według punktualności, w ciągu dnia. Strzałki przesuwają kursor."
-                : "Udział pojazdów MZK według punktualności, w ciągu dnia. Strzałki przesuwają kursor."}
+                ? `Pojazdy ${fleetName} w trasie według punktualności, w ciągu dnia. Strzałki przesuwają kursor.`
+                : `Udział pojazdów ${fleetName} według punktualności, w ciągu dnia. Strzałki przesuwają kursor.`}
             </title>
             {geo.yTicks.map((v) => (
               <g key={v}>

@@ -30,7 +30,7 @@ export interface Vehicle {
   next_stop_lon: number | null;
   timestamp: number;
   updated_at: number;
-  operator?: "KB" | "MZK";
+  operator?: "KB" | "MZK" | "GZM";
   side_number?: string;
   model?: string;
   features?: VehicleFeatures;
@@ -74,8 +74,8 @@ export interface Stop {
   dirs?: number[];
   isStation?: boolean;
   showPlatforms?: boolean;
-  operator?: "KB" | "MZK" | "BOTH";
-  operators?: ("KB" | "MZK")[];
+  operator?: "KB" | "MZK" | "GZM" | "BOTH";
+  operators?: ("KB" | "MZK" | "GZM")[];
   symbol?: string;
   onRequest?: boolean;
   gettingOut?: boolean;
@@ -103,7 +103,7 @@ export interface LineInfo {
   name: string;
   /** route_long_name — the terminus, e.g. "KANIÓW" */
   terminus: string;
-  operator?: "KB" | "MZK";
+  operator?: "KB" | "MZK" | "GZM";
 }
 
 export interface LinesResponse {
@@ -138,7 +138,7 @@ export interface DepartureRow {
   platform?: string;
   line_name?: string;
   symbol?: string;
-  operator?: "KB" | "MZK";
+  operator?: "KB" | "MZK" | "GZM";
   side_number?: string;
   model?: string;
   features?: VehicleFeatures;
@@ -147,7 +147,7 @@ export interface DepartureRow {
 export interface DeparturesResponse {
   rows?: DepartureRow[];
   /** upstream sources that failed ("kb" / "mzk"): the list is incomplete, not empty */
-  warnings?: Array<"kb" | "mzk">;
+  warnings?: Array<"kb" | "mzk" | "gzm">;
   /** server clock (epoch s) when the rows were built — lets the client count down on the server's clock */
   server_ts?: number;
 }
@@ -158,14 +158,14 @@ export interface TimetableDeparture {
   platform?: string;
   line?: string;
   direction?: string;
-  operator?: "KB" | "MZK";
+  operator?: "KB" | "MZK" | "GZM";
 }
 
 export interface TimetableResponse {
   departures?: TimetableDeparture[];
   main_direction?: { name?: string };
   /** upstream sources that failed ("kb" / "mzk"): the day is incomplete, not empty (and must not be cached) */
-  warnings?: Array<"kb" | "mzk">;
+  warnings?: Array<"kb" | "mzk" | "gzm">;
 }
 
 export interface TripTime {
@@ -182,7 +182,7 @@ export interface Trip {
   times?: TripTime[];
   direction?: string;
   line?: { name?: string };
-  operator?: "KB" | "MZK";
+  operator?: "KB" | "MZK" | "GZM";
   shape?: LatLng[];
   /** stored road geometry id (GET /api/shapes) */
   shape_id?: string;
@@ -235,6 +235,8 @@ export interface TripView {
   status: TripStatus;
   /** Extra notice, e.g. vehicle has not departed yet. */
   note: string | null;
+  /** status "error": the text shown instead of the generic one (GZM data still loading) */
+  errorMsg?: string;
   line: string;
   direction: string;
   rawTimes: TripTime[];
@@ -249,7 +251,7 @@ export interface TripView {
   execId: string | null;
   /** GTFS trip id for static routes — matches live vehicles sharing this trip */
   tripId?: string | number | null;
-  operator?: "KB" | "MZK";
+  operator?: "KB" | "MZK" | "GZM";
   /** stored road-shape id `routed` came from (null = browser routing / straight) */
   shapeId?: string | null;
   /** the server's shape reference for this trip (kept so a rebuild can reuse it) */
@@ -286,7 +288,7 @@ export interface ConnectionLeg {
   walkMins?: number;
   /** stored road geometry of the leg's trip (GET /api/shapes) */
   shape_id?: string;
-  operator?: "KB" | "MZK";
+  operator?: "KB" | "MZK" | "GZM";
 }
 
 export interface ConnectionItinerary {

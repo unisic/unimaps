@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowRightIcon,
   ArrowsClockwiseIcon,
@@ -18,7 +18,8 @@ import {
   ShieldCheckIcon,
 } from "@/components/icons";
 import { CloseIcon, ErrorState, IconButton, LineBadge, StarIcon } from "@/components/ui";
-import { getConnections } from "@/lib/client/api";
+import { getConnections, isWarming } from "@/lib/client/api";
+import { CityContext, GZM_LOADING } from "@/lib/client/city";
 import { useFavorites } from "@/lib/client/favorites";
 import {
   addMinutesToHHMM,
@@ -189,7 +190,9 @@ function ConnectionsDialog({
   const [sortBy, setSortBy] = useState<"departure" | "duration">("departure");
 
   const [connections, setConnections] = useState<ConnectionItinerary[] | null>(null);
-  const [connErr, setConnErr] = useState(false);
+  /* "warming": the server is still loading the GZM data (503) */
+  const [connErr, setConnErr] = useState<false | "error" | "warming">(false);
+  const city = useContext(CityContext);
   const [searchTick, setSearchTick] = useState(0);
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
 
@@ -254,14 +257,15 @@ function ConnectionsDialog({
           minTransfer: minTransfer5 ? 5 : undefined,
           sortBy,
           signal: ac.signal,
+          city,
         });
         if (!cancelled) {
           setConnections(list);
           setConnErr(false);
         }
-      } catch {
+      } catch (err) {
         if (!cancelled && !ac.signal.aborted) {
-          setConnErr(true);
+          setConnErr(city === "gzm" && isWarming(err) ? "warming" : "error");
         }
       }
     })();
@@ -280,6 +284,7 @@ function ConnectionsDialog({
     minTransfer5,
     sortBy,
     searchTick,
+    city,
   ]);
 
   const handleRefresh = useCallback(() => {
@@ -503,7 +508,9 @@ function ConnectionsDialog({
         <header className="flex items-center justify-between gap-3 border-b border-hairline py-2.5 pl-4 pr-2.5">
           <div className="min-w-0">
             <h2 className="text-[15px] font-semibold tracking-tight text-text">Wyszukaj połączenie</h2>
-            <p className="text-[12px] text-text-faint">Rozkład jazdy KB i MZK Bielsko-Biała</p>
+            <p className="text-[12px] text-text-faint">
+              {city === "gzm" ? "Rozkład jazdy ZTM Metropolii GZM" : "Rozkład jazdy KB i MZK Bielsko-Biała"}
+            </p>
           </div>
           <IconButton label="Zamknij" onClick={onClose}>
             <CloseIcon />
@@ -844,7 +851,10 @@ function ConnectionsDialog({
               ))}
             </div>
           ) : connErr ? (
-            <ErrorState onRetry={handleRefresh} />
+            <ErrorState
+              onRetry={handleRefresh}
+              message={connErr === "warming" ? GZM_LOADING : undefined}
+            />
           ) : connections ? (
             connections.length === 0 ? (
               <div className="px-4 py-10 text-center animate-fade">
@@ -1076,7 +1086,9 @@ function ConnectionsDialog({
               </span>
               <p className="mt-3 text-[14px] font-medium text-text">Wybierz przystanek początkowy i docelowy</p>
               <p className="mx-auto mt-1 max-w-sm text-[13px] text-text-mute">
-                Wyszukiwarka znajdzie najszybsze połączenia autobusowe w sieciach KB i MZK Bielsko-Biała.
+                {city === "gzm"
+                  ? "Wyszukiwarka znajdzie najszybsze połączenia w sieci ZTM Metropolii GZM."
+                  : "Wyszukiwarka znajdzie najszybsze połączenia autobusowe w sieciach KB i MZK Bielsko-Biała."}
               </p>
             </div>
           )}

@@ -36,8 +36,8 @@ import {
   type Polyline,
 } from "./shared/polyline";
 
-export type ShapeSrc = "osrm" | "partial" | "straight" | "mzk";
-const RANK: Record<ShapeSrc, number> = { straight: 1, partial: 2, osrm: 3, mzk: 3 };
+export type ShapeSrc = "osrm" | "partial" | "straight" | "mzk" | "gtfs";
+const RANK: Record<ShapeSrc, number> = { straight: 1, partial: 2, osrm: 3, mzk: 3, gtfs: 3 };
 /** Bump when the build pipeline changes output (entries rebuild gradually). */
 export const ALGO_VERSION = 3;
 const FORMAT = "kb-map/route-shapes";

@@ -1,5 +1,6 @@
 /**
- * Vehicle fleet tracker ("brygady") for MZK Bielsko-Biała.
+ * Vehicle fleet tracker ("brygady") for MZK Bielsko-Biała, and (constructed with GZM options by
+ * lib/gzm-fleet.ts) for Metropolia GZM.
  *
  * Fed by the MZK poller (~5 s) with OnTime's running vehicles; keeps per vehicle the course
  * it runs now and the courses it finished/broke off today, plus a 5-minute punctuality
@@ -74,7 +75,49 @@ export interface FleetRunningInput {
     scheduledDeparture: number;
     plannedDeparture: number;
   }>;
+
+  /* GZM (lib/gzm-fleet.ts): what the MZK path derives itself, given by the feed. All absent for MZK. */
+  /** course not begun (skips isMzkNotStarted) */
+  notStarted?: boolean;
+  /** index in stopPoints of the last stop served / of the next one (skips mzkStopIndices) */
+  servedIdx?: number | null;
+  nextIdx?: number | null;
+  /** scheduled departure of each stopPoints entry, service-day seconds, may exceed 86 400 (skips dateToAgencySecs) */
+  stopSecs?: number[];
+  brigade?: string | null;
+  /** the brigade's next scheduled trip; dep in service-day seconds */
+  nextTrip?: { line: string; headsign: string; firstStopName: string; firstStopId: string; dep: number } | null;
+  /** naming read by the details source of a tracker without a static fleet */
+  label?: string;
+  model?: string | null;
+  company?: string;
 }
+
+/** What the tracker knows of a vehicle besides its day: the static fleet entry or the details source. */
+export type FleetVehicleInfo = Pick<
+  FleetVehicleDetail,
+  "sideNumber" | "model" | "producer" | "year" | "lengthCategory" | "fuelType" | "features"
+> &
+  Partial<Pick<FleetVehicleDetail, "label" | "company">>;
+
+/** Defaults reproduce the MZK tracker exactly. */
+export interface FleetTrackerOptions {
+  /** null keeps everything in memory (tests); default OUTPUT_DIR (`KB_OUTPUT_DIR`, else output/ under the cwd) */
+  historyDir?: string | null;
+  operator?: "MZK" | "GZM";
+  /** day files kept on disk; default FLEET_HISTORY_DAYS */
+  keepDays?: number;
+  saveDebounceMs?: number;
+  /** the official fleet, listed idle from the start of the day; null = none, a vehicle appears when first seen live */
+  staticFleet?: (() => FleetVehicleInfo[]) | null;
+  /** info for a vehicle first seen live */
+  details?: (v: FleetRunningInput, staticInfo?: MzkVehicleStatic) => FleetVehicleInfo;
+  /** keep the stop table of finished courses; default true */
+  archiveStops?: boolean;
+}
+
+const mzkDetails = (v: FleetRunningInput, staticInfo?: MzkVehicleStatic): FleetVehicleInfo =>
+  getFleetDetails(String(v.vehicleId), staticInfo);
 
 function pad2(n: number): string {
   return String(n).padStart(2, "0");
@@ -128,6 +171,18 @@ function getTodayKey(): string {
     const d = new Date();
     return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
   }
+}
+
+/** Service-day seconds (GTFS, may exceed 86 400) as seconds since the agency midnight, like dateToAgencySecs. */
+function daySecs(s: number): number {
+  return ((Math.floor(s) % 86400) + 86400) % 86400;
+}
+
+/** GZM keys "<company code>_<fleet number>" in (company, fleet) numeric order; malformed keys by text. */
+function compareGzmSides(a: string, b: string): number {
+  const [ao, af] = a.split("_").map((x) => Number.parseInt(x, 10));
+  const [bo, bf] = b.split("_").map((x) => Number.parseInt(x, 10));
+  return ao - bo || af - bf || (a < b ? -1 : a > b ? 1 : 0);
 }
 
 function finiteNonNeg(x: unknown): number | null {
@@ -241,6 +296,8 @@ const MAX_LAYOVER_SEC = 45 * 60;
 const RESUME_LIVE_MAX_AGE_SEC = 10 * 60;
 const SAVE_DEBOUNCE_MS = 30_000;
 const HISTORY_FORMAT = 2;
+/** a pause below minus half a day is a departure after midnight */
+const HALF_DAY_SEC = 43_200;
 
 const DEFAULT_HISTORY_DIR = OUTPUT_DIR;
 
@@ -257,6 +314,8 @@ function emptyStats(): FleetVehicleStats {
 }
 
 interface SavedVehicle {
+  /** only without a static fleet (GZM): what recreates the vehicle after a restart */
+  info?: FleetVehicleInfo;
   todayCourses?: VehicleCourseRecord[];
   currentCourse?: FleetCurrentCourse | null;
   lastSeenAt?: number;
@@ -272,13 +331,30 @@ export class FleetTracker {
   private lastSaveAt = 0;
   private saveTimeout: NodeJS.Timeout | null = null;
   private currentDay = getTodayKey();
+  /** bumped on every update and day rollover: a cached rendering of this tracker is fresh while it matches */
+  private version = 0;
   private readonly historyDir: string | null;
+  private readonly operator: "MZK" | "GZM";
+  private readonly keepDays: number;
+  private readonly saveDebounceMs: number;
+  private readonly staticFleet: (() => FleetVehicleInfo[]) | null;
+  private readonly details: (v: FleetRunningInput, staticInfo?: MzkVehicleStatic) => FleetVehicleInfo;
+  private readonly archiveStops: boolean;
 
-  /** `historyDir: null` keeps everything in memory (tests); default OUTPUT_DIR (`KB_OUTPUT_DIR`, else output/ under the cwd). */
-  constructor(opts: { historyDir?: string | null } = {}) {
+  constructor(opts: FleetTrackerOptions = {}) {
     this.historyDir = opts.historyDir === undefined ? DEFAULT_HISTORY_DIR : opts.historyDir;
+    this.operator = opts.operator ?? "MZK";
+    this.keepDays = opts.keepDays ?? HISTORY_KEEP_DAYS;
+    this.saveDebounceMs = opts.saveDebounceMs ?? SAVE_DEBOUNCE_MS;
+    this.staticFleet = opts.staticFleet === undefined ? getAllFleetVehicles : opts.staticFleet;
+    this.details = opts.details ?? mzkDetails;
+    this.archiveStops = opts.archiveStops ?? true;
     this.initFromStaticFleet();
     this.loadHistoryFromDisk();
+  }
+
+  getVersion(): number {
+    return this.version;
   }
 
   /**
@@ -289,15 +365,17 @@ export class FleetTracker {
     this.vehicles.clear();
     this.liveFeatures.clear();
     this.timeline.clear();
-    for (const f of getAllFleetVehicles()) {
+    for (const f of this.staticFleet?.() ?? []) {
       this.vehicles.set(f.sideNumber, this.newVehicle(f));
     }
   }
 
-  private newVehicle(f: Pick<FleetVehicleDetail, "sideNumber" | "model" | "producer" | "year" | "lengthCategory" | "fuelType" | "features">): FleetVehicleDetail {
+  private newVehicle(f: FleetVehicleInfo): FleetVehicleDetail {
     return {
       sideNumber: f.sideNumber,
-      operator: "MZK",
+      operator: this.operator,
+      ...(f.label !== undefined ? { label: f.label } : {}),
+      ...(f.company !== undefined ? { company: f.company } : {}),
       model: f.model,
       producer: f.producer,
       year: f.year,
@@ -324,16 +402,17 @@ export class FleetTracker {
     }
     this.saveHistoryToDisk();
     this.currentDay = today;
+    this.version++;
     this.initFromStaticFleet();
     this.loadHistoryFromDisk();
     this.pruneHistory();
   }
 
-  /** Deletes day files older than HISTORY_KEEP_DAYS (exact name pattern only), once per rollover. */
+  /** Deletes day files older than keepDays (exact name pattern only), once per rollover. */
   private pruneHistory(): void {
     if (!this.historyDir) return;
     try {
-      const cutoff = new Date(Date.parse(`${this.currentDay}T00:00:00Z`) - HISTORY_KEEP_DAYS * 86_400_000)
+      const cutoff = new Date(Date.parse(`${this.currentDay}T00:00:00Z`) - this.keepDays * 86_400_000)
         .toISOString()
         .slice(0, 10);
       for (const f of fs.readdirSync(this.historyDir)) {
@@ -359,6 +438,7 @@ export class FleetTracker {
 
     const nowEpoch = Math.floor(Date.now() / 1000);
     this.updatedAt = nowEpoch;
+    this.version++;
     const activeSides = new Set<string>();
 
     for (const v of running) {
@@ -371,12 +451,12 @@ export class FleetTracker {
       const staticInfo = staticVehs?.get(side);
       let detail = this.vehicles.get(side);
       if (!detail) {
-        detail = this.newVehicle(getFleetDetails(side, staticInfo));
+        detail = this.newVehicle(this.details(v, staticInfo));
         this.vehicles.set(side, detail);
         if (staticInfo) this.liveFeatures.add(side);
       } else if (staticInfo && !this.liveFeatures.has(side)) {
         // getVehicles.json knows this bus's real equipment (ticket machine, A/C) — the static list only the model's
-        const info = getFleetDetails(side, staticInfo);
+        const info = this.details(v, staticInfo);
         detail.features = info.features;
         detail.fuelType = info.fuelType;
         this.liveFeatures.add(side);
@@ -389,19 +469,39 @@ export class FleetTracker {
       const totalStops = stopPoints.length;
 
       // course not begun: OnTime's delay / planned times are a placeholder (lib/mzk-state.ts)
-      const firstCoords = totalStops > 0 ? stopsBySymbol?.get(stopPoints[0].symbol) : undefined;
-      const notStarted = isMzkNotStarted(v, firstCoords ? { lat: firstCoords.lat, lon: firstCoords.lon } : null);
+      let notStarted: boolean;
+      if (v.notStarted !== undefined) {
+        notStarted = v.notStarted;
+      } else {
+        const firstCoords = totalStops > 0 ? stopsBySymbol?.get(stopPoints[0].symbol) : undefined;
+        notStarted = isMzkNotStarted(v, firstCoords ? { lat: firstCoords.lat, lon: firstCoords.lon } : null);
+      }
 
       // last stop served + the next one (the same reading the map uses, lib/mzk-shape.ts)
       let order = 0;
       let nextIdx: number | null = totalStops > 1 ? 1 : null;
       if (totalStops > 0 && !notStarted) {
-        const idx = mzkStopIndices(v);
+        const idx =
+          v.servedIdx !== undefined || v.nextIdx !== undefined
+            ? { served: v.servedIdx ?? null, next: v.nextIdx ?? null }
+            : mzkStopIndices(v);
         order = idx.served ?? (idx.next !== null ? Math.max(0, idx.next - 1) : totalStops - 1);
         nextIdx = idx.next;
       }
       // the same reading as the map's at_stop (lib/mzk-poller.ts)
       const atStop = notStarted || Boolean(v.onStopPoint);
+
+      // GZM sends service-day seconds per stop: no Intl call per stop for ~1 350 vehicles
+      const stopSecs = v.stopSecs;
+      const delay = notStarted ? 0 : Math.round(v.delaySec || 0);
+      const schedSecs = (i: number): number =>
+        stopSecs ? daySecs(stopSecs[i] ?? 0) : dateToAgencySecs(stopPoints[i].scheduledDeparture);
+      const plannedSecs = (i: number): number => {
+        if (stopSecs) return daySecs((stopSecs[i] ?? 0) + delay);
+        const sp = stopPoints[i];
+        // no estimate yet (not begun) or none sent (null planned) -> the schedule, never "00:00"
+        return dateToAgencySecs(notStarted || !sp.plannedDeparture ? sp.scheduledDeparture : sp.plannedDeparture);
+      };
 
       let firstStopName = "Początek trasy";
       let lastStopName = v.direction || v.optionalDirection || "Koniec trasy";
@@ -412,18 +512,17 @@ export class FleetTracker {
       if (totalStops > 0) {
         firstStopName = stopPoints[0].name;
         firstStopSymbol = stopPoints[0].symbol;
-        startSecs = dateToAgencySecs(stopPoints[0].scheduledDeparture);
+        startSecs = schedSecs(0);
         lastStopName = stopPoints[totalStops - 1].name;
         lastStopSymbol = stopPoints[totalStops - 1].symbol;
-        endSecs = dateToAgencySecs(stopPoints[totalStops - 1].scheduledDeparture);
+        endSecs = schedSecs(totalStops - 1);
       }
 
       const courseStops: VehicleCourseStop[] = stopPoints.map((sp, idx) => ({
         symbol: sp.symbol,
         name: sp.name,
-        scheduledTime: secsToHHMM(dateToAgencySecs(sp.scheduledDeparture)),
-        // no estimate yet (not begun) or none sent (null planned) -> the schedule, never "00:00"
-        plannedTime: secsToHHMM(dateToAgencySecs(notStarted || !sp.plannedDeparture ? sp.scheduledDeparture : sp.plannedDeparture)),
+        scheduledTime: secsToHHMM(schedSecs(idx)),
+        plannedTime: secsToHHMM(plannedSecs(idx)),
         status: idx < order ? "passed" : idx === order ? "current" : "upcoming",
         distanceMeters: finiteNonNeg(sp.distance) ?? undefined,
       }));
@@ -466,7 +565,8 @@ export class FleetTracker {
         endTime: secsToHHMM(endSecs),
         startSecs,
         endSecs,
-        delaySec: notStarted ? 0 : Math.round(v.delaySec || 0),
+        ...(v.brigade ? { brigade: v.brigade } : {}),
+        delaySec: delay,
         notStarted,
         atStop,
         stopsCount: totalStops,
@@ -490,7 +590,7 @@ export class FleetTracker {
       };
 
       this.recalculateStats(detail);
-      detail.predictedNextCourse = this.predictNextCourse(detail);
+      detail.predictedNextCourse = this.predictNextCourse(detail, v.nextTrip);
     }
 
     // vehicles that left the running list: the course they ran is history now
@@ -544,6 +644,7 @@ export class FleetTracker {
       endTime: prev.endTime,
       startSecs: prev.startSecs,
       endSecs: prev.endSecs,
+      ...(prev.brigade ? { brigade: prev.brigade } : {}),
       delaySec: prev.delaySec,
       stopsCount: prev.stopsCount,
       status: outcome.status,
@@ -552,17 +653,19 @@ export class FleetTracker {
       completedAt: nowEpoch,
       lengthMeters: prev.lengthMeters,
       drivenMeters: completed ? prev.lengthMeters : prev.drivenMeters,
-      stops: completed
-        ? prev.stops?.map((s) => ({ ...s, status: "passed" as const }))
-        : prev.stops?.map((s, idx) => ({
-            ...s,
-            status:
-              idx < prev.currentStopIndex
-                ? ("passed" as const)
-                : idx === prev.currentStopIndex
-                  ? ("current" as const)
-                  : ("upcoming" as const),
-          })),
+      stops: !this.archiveStops
+        ? undefined
+        : completed
+          ? prev.stops?.map((s) => ({ ...s, status: "passed" as const }))
+          : prev.stops?.map((s, idx) => ({
+              ...s,
+              status:
+                idx < prev.currentStopIndex
+                  ? ("passed" as const)
+                  : idx === prev.currentStopIndex
+                    ? ("current" as const)
+                    : ("upcoming" as const),
+            })),
     };
     detail.todayCourses.push(record);
     detail.todayCourses.sort(sortCoursesDesc);
@@ -570,13 +673,34 @@ export class FleetTracker {
   }
 
   /**
-   * "Where next" once the current course ends — an ESTIMATE, labelled as such: OnTime does not
-   * publish duty rosters. Assumes the usual shuttle (same line back from the terminus) after
-   * the layover this vehicle showed today (or a typical one), never earlier than a short
-   * turnaround after the expected (delayed) arrival. None for a course into the depot.
+   * "Where next" once the current course ends. GZM: the brigade's next scheduled trip, when the
+   * feed knows one. Otherwise an ESTIMATE, labelled as such: OnTime does not publish duty
+   * rosters. Assumes the usual shuttle (same line back from the terminus) after the layover
+   * this vehicle showed today (or a typical one), never earlier than a short turnaround after
+   * the expected (delayed) arrival. None for a course into the depot.
    */
-  private predictNextCourse(detail: FleetVehicleDetail): PredictedNextCourse | null {
+  private predictNextCourse(
+    detail: FleetVehicleDetail,
+    nextTrip?: FleetRunningInput["nextTrip"],
+  ): PredictedNextCourse | null {
     const cur = detail.currentCourse;
+    if (cur && nextTrip) {
+      const departureSecs = daySecs(nextTrip.dep);
+      const expectedArrival = cur.endSecs + Math.max(0, cur.notStarted ? 0 : cur.delaySec);
+      let pause = departureSecs - expectedArrival;
+      if (pause < -HALF_DAY_SEC) pause += 86400;
+      return {
+        lineName: nextTrip.line,
+        direction: nextTrip.headsign,
+        departureTime: secsToHHMM(departureSecs),
+        departureSecs,
+        fromStopName: nextTrip.firstStopName,
+        fromStopSymbol: nextTrip.firstStopId,
+        pauseMinutes: Math.max(0, Math.round(pause / 60)),
+        confidence: "high",
+        reason: cur.brigade ? `Według rozkładu brygady ${cur.lineName}/${cur.brigade}.` : "Według rozkładu.",
+      };
+    }
     if (!cur || cur.stopsCount < 2 || !cur.endSecs) return null;
     if (foldText(cur.lastStopName).includes("zajezdnia")) return null;
 
@@ -613,7 +737,9 @@ export class FleetTracker {
       confidence: shuttle ? "medium" : "low",
       reason: shuttle
         ? `Pojazd kursuje dziś wahadłowo na linii ${cur.lineName}, postój na pętli ok. ${layoverMin} min.`
-        : `MZK nie publikuje obiegów brygad. Zakładamy powrót tą samą linią po ok. ${layoverMin} min postoju.`,
+        : this.operator === "MZK"
+          ? `MZK nie publikuje obiegów brygad. Zakładamy powrót tą samą linią po ok. ${layoverMin} min postoju.`
+          : `Rozkład nie podaje kolejnego kursu tej brygady. Zakładamy powrót tą samą linią po ok. ${layoverMin} min postoju.`,
     };
   }
 
@@ -717,6 +843,7 @@ export class FleetTracker {
       const r = rank(a) - rank(b);
       if (r !== 0) return r;
       if (a.lineName && b.lineName && a.lineName !== b.lineName) return compareLineNames(a.lineName, b.lineName);
+      if (this.operator === "GZM") return compareGzmSides(a.sideNumber, b.sideNumber);
       return Number.parseInt(a.sideNumber, 10) - Number.parseInt(b.sideNumber, 10);
     });
     return list;
@@ -726,6 +853,8 @@ export class FleetTracker {
     const cur = v.currentCourse;
     return {
       sideNumber: v.sideNumber,
+      ...(v.label !== undefined ? { label: v.label } : {}),
+      ...(v.company !== undefined ? { company: v.company } : {}),
       model: v.model,
       producer: v.producer,
       year: v.year,
@@ -735,6 +864,7 @@ export class FleetTracker {
       lines: v.lines,
       lineName: cur?.lineName,
       direction: cur?.direction,
+      ...(cur?.brigade ? { brigade: cur.brigade } : {}),
       startTime: cur?.startTime,
       firstStopName: cur?.firstStopName,
       currentStopName: cur?.currentStopName,
@@ -757,6 +887,14 @@ export class FleetTracker {
   public getVehicleDetail(sideNumber: string): FleetVehicleDetail | null {
     const clean = sideNumber.replace(/^#/, "").trim();
     return this.vehicles.get(clean) ?? null;
+  }
+
+  /** An idle detail for a vehicle this tracker never saw on a course (GZM: on the map, off a trip). Not stored. */
+  public idleDetail(info: FleetVehicleInfo, seen: { at: number; lat: number; lon: number; name: string }): FleetVehicleDetail {
+    const v = this.newVehicle(info);
+    v.lastSeenAt = seen.at;
+    v.lastKnownLocation = { lat: seen.lat, lon: seen.lon, name: seen.name };
+    return v;
   }
 
   /** Today's 5-minute punctuality snapshots of the running fleet, oldest first. */
@@ -830,7 +968,7 @@ export class FleetTracker {
    */
   private scheduleSave(): void {
     if (!this.historyDir || this.saveTimeout) return;
-    const wait = Math.max(0, this.lastSaveAt + SAVE_DEBOUNCE_MS - Date.now());
+    const wait = Math.max(0, this.lastSaveAt + this.saveDebounceMs - Date.now());
     this.saveTimeout = setTimeout(() => {
       this.saveTimeout = null;
       this.saveHistoryToDisk();
@@ -861,6 +999,7 @@ export class FleetTracker {
       for (const [side, v] of this.vehicles) {
         if (v.todayCourses.length === 0 && !v.currentCourse) continue;
         const saved: SavedVehicle = {
+          ...(this.staticFleet ? {} : { info: this.infoOf(v) }),
           todayCourses: v.todayCourses,
           currentCourse: v.status === "active" ? v.currentCourse : null,
           lastSeenAt: v.lastSeenAt,
@@ -875,6 +1014,20 @@ export class FleetTracker {
     } catch (err) {
       log.warn("fleet-tracker", `Failed saving history to disk: ${err}`);
     }
+  }
+
+  private infoOf(v: FleetVehicleDetail): FleetVehicleInfo {
+    return {
+      sideNumber: v.sideNumber,
+      ...(v.label !== undefined ? { label: v.label } : {}),
+      ...(v.company !== undefined ? { company: v.company } : {}),
+      model: v.model,
+      producer: v.producer,
+      year: v.year,
+      lengthCategory: v.lengthCategory,
+      fuelType: v.fuelType,
+      features: v.features,
+    };
   }
 
   private loadHistoryFromDisk(): void {
@@ -893,7 +1046,12 @@ export class FleetTracker {
       for (const [side, raw] of Object.entries(data)) {
         if (side.startsWith("_") || !raw || typeof raw !== "object") continue;
         const saved = raw as SavedVehicle;
-        const v = this.vehicles.get(side);
+        let v = this.vehicles.get(side);
+        // no static fleet (GZM): the file is the only list of the vehicles seen today
+        if (!v && !this.staticFleet && saved.info && typeof saved.info.model === "string") {
+          v = this.newVehicle({ ...saved.info, sideNumber: side, features: saved.info.features ?? {} });
+          this.vehicles.set(side, v);
+        }
         if (!v) continue;
         if (Array.isArray(saved.todayCourses)) {
           v.todayCourses = saved.todayCourses

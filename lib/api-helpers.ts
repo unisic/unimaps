@@ -4,6 +4,7 @@
  */
 import { createHash } from "node:crypto";
 
+import { GZM_ENABLED } from "./config";
 import { log } from "./logger";
 
 /** Upstream-safe id: letters/digits and ':' '.' '_' '-' only, so the value can
@@ -17,8 +18,8 @@ export function isValidId(v: string): boolean {
   return ID_RE.test(v) && v !== "." && v !== "..";
 }
 
-/** Road-shape wire id: "kb:<12 hex>" or "mzk:<variant>", optionally ".<rev6>". */
-const SHAPE_ID_RE = /^(?:kb:[0-9a-f]{12}|mzk:[0-9]{1,10})(?:\.[0-9a-f]{6})?$/;
+/** Road-shape wire id: "kb:<12 hex>", "mzk:<variant>" or "gzm:<GTFS shape_id>", optionally ".<rev6>". */
+const SHAPE_ID_RE = /^(?:kb:[0-9a-f]{12}|mzk:[0-9]{1,10}|gzm:[A-Za-z0-9_]{1,16})(?:\.[0-9a-f]{6})?$/;
 
 export function isValidShapeId(v: string): boolean {
   return SHAPE_ID_RE.test(v);
@@ -30,6 +31,31 @@ export function isValidDate(v: string): boolean {
   const [y, m, d] = v.split("-").map(Number);
   const t = new Date(Date.UTC(y, m - 1, d));
   return t.getUTCFullYear() === y && t.getUTCMonth() === m - 1 && t.getUTCDate() === d;
+}
+
+export type City = "bb" | "gzm";
+
+/** `?city=`: absent = "bb" (the BB paths stay exactly as they were), "gzm" while GZM is enabled;
+ *  any other value is a 400, "gzm" with KB_GZM=0 a 404. */
+export function parseCity(req: Request): City | Response {
+  const v = new URL(req.url).searchParams.get("city");
+  if (v === null || v === "bb") return "bb";
+  if (v !== "gzm") return badRequest("Unknown city");
+  return GZM_ENABLED ? "gzm" : notFound();
+}
+
+/** True for an id in the GZM space ("gzm:<id>"). */
+export function isGzmId(v: string): boolean {
+  return v.startsWith("gzm:");
+}
+
+export function notFound(message = "Not found"): Response {
+  return Response.json({ error: message }, { status: 404 });
+}
+
+/** 503 while a city's data is still loading (the GZM feed parses for a few seconds after a start). */
+export function warming(): Response {
+  return Response.json({ error: "Data is loading" }, { status: 503, headers: { "Retry-After": "10" } });
 }
 
 /** 500 for a failure inside our own code (no upstream involved) — logs the

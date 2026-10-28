@@ -1,17 +1,18 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { localUpdatedAt, useFleet, type FleetStats } from "@/lib/client/fleet";
+import { localUpdatedAt, readBrygadyCity, useFleet, type FleetCity, type FleetStats } from "@/lib/client/fleet";
 import { BackIcon } from "./ui";
 import { DEFAULT_FILTERS, FleetList, type FleetFilters } from "./brygady/FleetList";
 import { FleetStatsView } from "./brygady/FleetStatsView";
 import { VehicleSheet } from "./brygady/VehicleSheet";
-import { AlertIcon, ArrowUpIcon, clockFromEpoch, fmtDelayMin, fmtInt, fmtKm, pluralPl, useEpochNow } from "./brygady/common";
+import { AlertIcon, ArrowUpIcon, clockFromEpoch, FLEET_CITY, fmtDelayMin, fmtInt, fmtKm, pluralPl, useEpochNow } from "./brygady/common";
 
 /*
- * /brygady: the MZK Bielsko-Biała fleet, live. View state lives in the URL
+ * /brygady: the MZK Bielsko-Biała fleet (or Metropolia GZM with `?city=gzm` or a saved
+ * `kb:city`), live. View state lives in the URL
  * (`?tabor=<side>` opens a vehicle, `?widok=statystyki` the charts) and is written with
  * the plain History API; Next keeps useSearchParams in sync with pushState/replaceState
  * and preserves our own history.state fields. Opening a vehicle pushes an entry (Android
@@ -52,11 +53,25 @@ export default function BrigadesApp() {
   );
 }
 
+const noSubscribe = () => () => {};
+
+/** Resolves the city above the useFleet caller; localStorage is read only on the client (null while hydrating). */
 function Brigades() {
   const params = useSearchParams();
+  const search = params.toString();
+  const city = useSyncExternalStore(
+    noSubscribe,
+    () => readBrygadyCity(search),
+    () => null,
+  );
+  if (city === null) return <PageFrame header={<HeaderBar />} body={<LoadingBody />} />;
+  return <CityBrigades key={city} city={city} params={params} />;
+}
+
+function CityBrigades({ city, params }: { city: FleetCity; params: URLSearchParams }) {
   const side = cleanSide(params.get("tabor"));
   const tab: Tab = params.get("widok") === "statystyki" ? "statystyki" : "pojazdy";
-  const { data, error, isLoading, mutate } = useFleet(side !== null);
+  const { data, error, isLoading, mutate } = useFleet(side !== null, city);
   const [filters, setFilters] = useState<FleetFilters>(DEFAULT_FILTERS);
   const nowEpoch = useEpochNow(30_000);
   const tabsRef = useRef<HTMLDivElement>(null);
@@ -93,6 +108,16 @@ function Brigades() {
 
   const seed = useMemo(() => (side ? data?.vehicles.find((v) => v.sideNumber === side) : undefined), [data, side]);
 
+  // app/brygady/page.tsx metadata is static (the BB title); GZM retitles on the client
+  useEffect(() => {
+    if (city !== "gzm") return;
+    const prev = document.title;
+    document.title = "Brygady i tabor Metropolii GZM | KB Mapa";
+    return () => {
+      document.title = prev;
+    };
+  }, [city]);
+
   let body: React.ReactNode;
   if (data) {
     body = (
@@ -115,9 +140,16 @@ function Brigades() {
         </div>
         <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`} className="mt-4 animate-fade">
           {tab === "pojazdy" ? (
-            <FleetList vehicles={data.vehicles} filters={filters} onFiltersChange={patchFilters} onOpen={openVehicle} nowEpoch={nowEpoch} />
+            <FleetList
+              vehicles={data.vehicles}
+              filters={filters}
+              onFiltersChange={patchFilters}
+              onOpen={openVehicle}
+              nowEpoch={nowEpoch}
+              city={city}
+            />
           ) : (
-            <FleetStatsView data={data} onPickLine={pickLine} onOpenVehicle={openVehicle} />
+            <FleetStatsView data={data} onPickLine={pickLine} onOpenVehicle={openVehicle} city={city} />
           )}
         </div>
       </>
@@ -142,29 +174,52 @@ function Brigades() {
 
   return (
     <>
-      <PageFrame inert={side !== null} header={<HeaderBar updatedAt={data ? localUpdatedAt(data) : undefined} />} body={body} />
+      <PageFrame
+        inert={side !== null}
+        header={<HeaderBar city={city} updatedAt={data ? localUpdatedAt(data) : undefined} />}
+        body={body}
+        city={city}
+      />
       {side ? <VehicleSheet key={side} side={side} seed={seed} onClose={closeVehicle} /> : null}
       {side === null ? <ScrollTopButton /> : null}
     </>
   );
 }
 
-function PageFrame({ header, body, inert = false }: { header: React.ReactNode; body: React.ReactNode; inert?: boolean }) {
+function PageFrame({
+  header,
+  body,
+  inert = false,
+  city = "bb",
+}: {
+  header: React.ReactNode;
+  body: React.ReactNode;
+  inert?: boolean;
+  /** the pre-JS frame (city unknown on the server) stays the BB one, byte for byte */
+  city?: FleetCity;
+}) {
   return (
     <div inert={inert} className="min-h-dvh bg-bg text-text">
       {header}
       <main className="mx-auto w-full max-w-6xl px-4 pb-[max(2.5rem,env(safe-area-inset-bottom))] pt-4">
         {body}
-        <footer className="mt-10 border-t border-hairline pt-4 text-[12px] leading-relaxed text-text-faint">
-          Dane na żywo z systemu MZK Bielsko-Biała. Kursy, opóźnienia i kilometry zbieramy od rana, gdy pojazd jest w trasie.
-          MZK nie publikuje numerów brygad ani rozkładów pracy pojazdów, więc następny kurs jest tylko szacunkiem.
-        </footer>
+        {city === "gzm" ? (
+          <footer className="mt-10 border-t border-hairline pt-4 text-[12px] leading-relaxed text-text-faint">
+            Dane na żywo: ZTM / Metropolia GZM (CC BY), zbiorkom.live. Kursy, opóźnienia i kilometry zbieramy od rana, gdy
+            pojazd jest w trasie. Brygady i następny kurs pochodzą z rozkładu GZM, kilometry z długości kursów w rozkładzie.
+          </footer>
+        ) : (
+          <footer className="mt-10 border-t border-hairline pt-4 text-[12px] leading-relaxed text-text-faint">
+            Dane na żywo z systemu MZK Bielsko-Biała. Kursy, opóźnienia i kilometry zbieramy od rana, gdy pojazd jest w trasie.
+            MZK nie publikuje numerów brygad ani rozkładów pracy pojazdów, więc następny kurs jest tylko szacunkiem.
+          </footer>
+        )}
       </main>
     </div>
   );
 }
 
-function HeaderBar({ updatedAt }: { updatedAt?: number }) {
+function HeaderBar({ updatedAt, city = "bb" }: { updatedAt?: number; city?: FleetCity }) {
   return (
     <header className="sticky top-0 z-30 border-b border-hairline bg-bg pt-[env(safe-area-inset-top)]">
       <div className="mx-auto flex h-16 w-full max-w-6xl items-center gap-2 px-2 sm:px-4">
@@ -177,7 +232,7 @@ function HeaderBar({ updatedAt }: { updatedAt?: number }) {
         </Link>
         <div className="min-w-0 flex-1">
           <h1 className="truncate text-[17px] font-bold leading-tight text-text">Brygady i tabor</h1>
-          <p className="truncate text-[12.5px] text-text-mute">MZK Bielsko-Biała, na żywo</p>
+          <p className="truncate text-[12.5px] text-text-mute">{`${FLEET_CITY[city].name}, na żywo`}</p>
         </div>
         {updatedAt !== undefined ? <LiveClock updatedAt={updatedAt} /> : null}
       </div>

@@ -1,4 +1,6 @@
-import { badRequest, upstreamError } from "@/lib/api-helpers";
+import { badRequest, internalError, isGzmId, notFound, upstreamError } from "@/lib/api-helpers";
+import { GZM_ENABLED } from "@/lib/config";
+import { getGzm, startGzm } from "@/lib/gzm";
 import { asRecord, isRecord, parseIntStrict, pyTruthy } from "@/lib/kb-api";
 import { resolveMzkTrip } from "@/lib/mzk-trip";
 import { getApi, getPoller, kbShapeRef, startPoller } from "@/lib/poller-singleton";
@@ -6,6 +8,9 @@ import { allowRequest, clientIp, tooManyRequests } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+
+/** `gzm:<op>_<fleet>`: answered from memory, never sent anywhere, but still validated like every id */
+const GZM_EXEC_RE = /^gzm:\d{1,4}_\d{1,6}$/;
 
 /** GET /api/trip_execution?exec_id=<raw id>&index=0 — upstream trip execution passthrough. */
 export async function GET(req: Request): Promise<Response> {
@@ -16,6 +21,18 @@ export async function GET(req: Request): Promise<Response> {
   const rawIndex = params.get("index");
   const index = rawIndex === null ? 0 : parseIntStrict(rawIndex);
   if (index === null) return badRequest("index must be an integer");
+  if (isGzmId(execId)) {
+    if (!GZM_ENABLED) return notFound();
+    if (!GZM_EXEC_RE.test(execId)) return badRequest("Invalid exec_id");
+    void startGzm();
+    try {
+      return Response.json(getGzm().tripExecution(execId) ?? {}, {
+        headers: { "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0", Pragma: "no-cache" },
+      });
+    } catch (err) {
+      return internalError("gzm-trip-execution", err);
+    }
+  }
   try {
     await startPoller();
 

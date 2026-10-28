@@ -1,7 +1,7 @@
 "use client";
 
 import { memo, useMemo, useState } from "react";
-import { useFleetTimeline, type FleetApiResponse, type FleetSummaryItem } from "@/lib/client/fleet";
+import { useFleetTimeline, type FleetApiResponse, type FleetCity, type FleetSummaryItem } from "@/lib/client/fleet";
 import {
   classifyDelay,
   compareLineNames,
@@ -15,6 +15,7 @@ import { LineBadge } from "../ui";
 import { BarList, DelayLegend, PunctualityTimeline, TwoPartLegend, type BarRow } from "./charts";
 import {
   DELAY_FILL,
+  FLEET_CITY,
   FUEL_LABEL_PLURAL,
   fmtDelayMin,
   fmtInt,
@@ -66,12 +67,15 @@ export const FleetStatsView = memo(function FleetStatsView({
   data,
   onPickLine,
   onOpenVehicle,
+  city = "bb",
 }: {
   data: FleetApiResponse;
   onPickLine: (line: string) => void;
   onOpenVehicle: (side: string) => void;
+  city?: FleetCity;
 }) {
-  const timeline = useFleetTimeline(true);
+  const timeline = useFleetTimeline(true, city);
+  const brand = FLEET_CITY[city];
   const [lineSort, setLineSort] = useState<LineSort>("line");
   const vehicles = data.vehicles;
 
@@ -112,17 +116,29 @@ export const FleetStatsView = memo(function FleetStatsView({
   const composition = useMemo(() => {
     const fuel = new Map<FleetFuelType, { total: number; active: number }>();
     const length = new Map<FleetLengthCategory, { total: number; active: number }>();
+    const companies = new Map<string, { total: number; active: number }>();
     const models = new Map<string, { total: number; active: number; years: Set<string> }>();
     for (const v of vehicles) {
       const on = v.status === "active" ? 1 : 0;
-      const f = fuel.get(v.fuelType) ?? { total: 0, active: 0 };
-      f.total++;
-      f.active += on;
-      fuel.set(v.fuelType, f);
-      const l = length.get(v.lengthCategory) ?? { total: 0, active: 0 };
-      l.total++;
-      l.active += on;
-      length.set(v.lengthCategory, l);
+      // GZM publishes no propulsion or length: null counts in neither chart
+      if (v.fuelType) {
+        const f = fuel.get(v.fuelType) ?? { total: 0, active: 0 };
+        f.total++;
+        f.active += on;
+        fuel.set(v.fuelType, f);
+      }
+      if (v.lengthCategory) {
+        const l = length.get(v.lengthCategory) ?? { total: 0, active: 0 };
+        l.total++;
+        l.active += on;
+        length.set(v.lengthCategory, l);
+      }
+      if (v.company) {
+        const c = companies.get(v.company) ?? { total: 0, active: 0 };
+        c.total++;
+        c.active += on;
+        companies.set(v.company, c);
+      }
       // OnTime's model name usually starts with the producer already ("Solaris Urbino 12 IV")
       const name =
         (v.producer && !foldText(v.model).startsWith(foldText(v.producer)) ? `${v.producer} ${v.model}` : v.model).trim() ||
@@ -146,6 +162,9 @@ export const FleetStatsView = memo(function FleetStatsView({
     return {
       fuel: fuelOrder.filter((k) => fuel.has(k)).map((k) => twoPart(FUEL_LABEL_PLURAL[k], k, fuel.get(k)!)),
       length: lengthOrder.filter((k) => length.has(k)).map((k) => twoPart(LENGTH_LABEL_PLURAL[k], k, length.get(k)!)),
+      companies: [...companies.entries()]
+        .sort((a, b) => b[1].total - a[1].total || a[0].localeCompare(b[0], "pl"))
+        .map(([name, x]) => twoPart(name, name, x)),
       models: [...models.entries()]
         .sort((a, b) => b[1].total - a[1].total || a[0].localeCompare(b[0], "pl"))
         .map(([name, m]): BarRow => {
@@ -188,14 +207,14 @@ export const FleetStatsView = memo(function FleetStatsView({
         <SectionCard
           id="sec-timeline"
           title="Punktualność w ciągu dnia"
-          subtitle="Autobusy MZK w trasie, próbka co 5 minut. Przerwa w wykresie oznacza brak danych (noc albo restart serwera)."
+          subtitle={`${brand.Vehs} ${brand.short} w trasie, próbka co 5 minut. Przerwa w wykresie oznacza brak danych (noc albo restart serwera).`}
         >
           {timeline.data ? (
             timeline.data.points.length > 0 ? (
-              <PunctualityTimeline points={timeline.data.points} slotSecs={timeline.data.slotSecs} />
+              <PunctualityTimeline points={timeline.data.points} slotSecs={timeline.data.slotSecs} fleetName={brand.short} />
             ) : (
               <p className="rounded-xl bg-surface-2 px-4 py-8 text-center text-[13px] text-text-mute">
-                Brak próbek z dzisiaj. Wykres zapełnia się, gdy autobusy MZK są w trasie.
+                Brak próbek z dzisiaj. Wykres zapełnia się, gdy {brand.vehs} {brand.short} są w trasie.
               </p>
             )
           ) : timeline.error ? (
@@ -221,7 +240,7 @@ export const FleetStatsView = memo(function FleetStatsView({
         subtitle={
           histogram.n > 0
             ? `${histogram.n} ${vehicleWord(histogram.n)} w trasie z pomiarem opóźnienia`
-            : "Brak autobusów w trasie z pomiarem opóźnienia"
+            : `Brak ${brand.vehsGen} w trasie z pomiarem opóźnienia`
         }
       >
         {histogram.n > 0 ? (
@@ -243,7 +262,7 @@ export const FleetStatsView = memo(function FleetStatsView({
             />
           </>
         ) : (
-          <p className="py-6 text-center text-[13px] text-text-mute">Wróć, gdy autobusy wyjadą na trasy.</p>
+          <p className="py-6 text-center text-[13px] text-text-mute">Wróć, gdy {brand.vehs} wyjadą na trasy.</p>
         )}
       </SectionCard>
 
@@ -295,7 +314,7 @@ export const FleetStatsView = memo(function FleetStatsView({
                     }${r.onTimePct !== null ? `, punktualnie ${r.onTimePct}%` : ""}. Pokaż pojazdy.`}
                     className="grid min-h-10 w-full grid-cols-[3rem_4rem_5.5rem_1fr] items-center gap-3 rounded-lg px-1.5 text-left text-[12.5px] transition-colors hover:bg-white/5"
                   >
-                    <LineBadge line={r.line} operator="MZK" />
+                    <LineBadge line={r.line} operator={brand.operator} />
                     <span className="text-right text-text tabular-nums">{r.vehicles}</span>
                     <span className="text-right text-text tabular-nums">{r.medianSec !== null ? fmtDelayMin(r.medianSec) : "–"}</span>
                     <span className="flex items-center gap-2">
@@ -312,18 +331,34 @@ export const FleetStatsView = memo(function FleetStatsView({
             </ul>
           </>
         ) : (
-          <p className="py-6 text-center text-[13px] text-text-mute">Żadna linia MZK nie ma teraz autobusu w trasie.</p>
+          <p className="py-6 text-center text-[13px] text-text-mute">
+            Żadna linia {brand.short} nie ma teraz {brand.vehGen} w trasie.
+          </p>
         )}
       </SectionCard>
 
-      <SectionCard id="sec-fleet" title="Skład floty" subtitle={`${fmtInt(data.stats.totalFleet)} pojazdów MZK, ile z nich jest teraz w trasie`}>
+      <SectionCard id="sec-fleet" title="Skład floty" subtitle={`${fmtInt(data.stats.totalFleet)} pojazdów ${brand.short}, ile z nich jest teraz w trasie`}>
         <div className="mb-3">
           <TwoPartLegend partLabel="W trasie" restLabel="Nie kursuje teraz" />
         </div>
-        <h3 className="mb-1 text-[12px] font-semibold text-text-mute">Napęd</h3>
-        <BarList rows={composition.fuel} labelClassName="w-36 sm:w-40" />
-        <h3 className="mb-1 mt-4 text-[12px] font-semibold text-text-mute">Długość</h3>
-        <BarList rows={composition.length} labelClassName="w-36 sm:w-40" />
+        {composition.fuel.length > 0 ? (
+          <>
+            <h3 className="mb-1 text-[12px] font-semibold text-text-mute">Napęd</h3>
+            <BarList rows={composition.fuel} labelClassName="w-36 sm:w-40" />
+          </>
+        ) : null}
+        {composition.length.length > 0 ? (
+          <>
+            <h3 className="mb-1 mt-4 text-[12px] font-semibold text-text-mute">Długość</h3>
+            <BarList rows={composition.length} labelClassName="w-36 sm:w-40" />
+          </>
+        ) : null}
+        {composition.companies.length > 0 ? (
+          <>
+            <h3 className="mb-1 text-[12px] font-semibold text-text-mute">Przewoźnik</h3>
+            <BarList rows={composition.companies} labelClassName="w-36 sm:w-40" />
+          </>
+        ) : null}
       </SectionCard>
 
       <SectionCard id="sec-models" title="Modele" subtitle="Liczba pojazdów danego modelu i rocznik">
@@ -335,21 +370,21 @@ export const FleetStatsView = memo(function FleetStatsView({
         </div>
       </SectionCard>
 
-      <SectionCard id="sec-km" title="Najwięcej kilometrów dziś" subtitle="Długość przejechanych kursów według odległości między przystankami z systemu MZK">
+      <SectionCard id="sec-km" title="Najwięcej kilometrów dziś" subtitle={`Długość przejechanych kursów według odległości między przystankami ${brand.distSource}`}>
         {day.topKm.length > 0 ? (
           <BarList
             rows={day.topKm.map((v) => ({
               key: v.sideNumber,
               label: (
                 <>
-                  <span className="truncate font-semibold text-text tabular-nums">#{v.sideNumber}</span>
-                  <span className="truncate text-[11.5px] text-text-faint">{v.model}</span>
+                  <span className="truncate font-semibold text-text tabular-nums">#{v.label ?? v.sideNumber}</span>
+                  <span className="truncate text-[11.5px] text-text-faint">{v.company ?? v.model}</span>
                 </>
               ),
               value: v.kmToday,
               valueText: fmtKm(v.kmToday),
               onClick: () => onOpenVehicle(v.sideNumber),
-              ariaLabel: `Pojazd ${v.sideNumber}, ${v.model}: ${fmtKm(v.kmToday)}. Otwórz kartę pojazdu.`,
+              ariaLabel: `Pojazd ${v.label ?? v.sideNumber}, ${v.company ?? v.model}: ${fmtKm(v.kmToday)}. Otwórz kartę pojazdu.`,
             }))}
             labelClassName="w-28 sm:w-40"
           />
@@ -372,8 +407,8 @@ export const FleetStatsView = memo(function FleetStatsView({
                   onClick={() => onOpenVehicle(v.sideNumber)}
                   className="flex min-h-11 w-full items-center gap-3 rounded-lg px-1.5 text-left transition-colors hover:bg-white/5"
                 >
-                  <span className="w-14 shrink-0 font-semibold text-text tabular-nums">#{v.sideNumber}</span>
-                  <span className="min-w-0 flex-1 truncate text-[12.5px] text-text-mute">{v.model}</span>
+                  <span className="w-14 shrink-0 font-semibold text-text tabular-nums">#{v.label ?? v.sideNumber}</span>
+                  <span className="min-w-0 flex-1 truncate text-[12.5px] text-text-mute">{v.company ?? v.model}</span>
                   <span className="shrink-0 text-[12.5px] font-semibold text-danger tabular-nums">
                     {v.cancelledCoursesToday} {pluralPl(v.cancelledCoursesToday, "kurs", "kursy", "kursów")}
                   </span>
