@@ -4,10 +4,10 @@ import PwaRegister from "@/components/PwaRegister";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Komunikacja Beskidzka: mapa pojazdów na żywo",
-  applicationName: "KB Mapa",
+  title: "Unimaps: komunikacja miejska na żywo",
+  applicationName: "Unimaps",
   description:
-    "Wszystkie autobusy Komunikacji Beskidzkiej na jednej mapie: pozycje na żywo, opóźnienia, rozkłady przystanków i trasy linii.",
+    "Autobusy, tramwaje i trolejbusy na jednej mapie: Bielsko-Biała (Komunikacja Beskidzka, MZK) i Metropolia GZM. Pozycje na żywo, opóźnienia, rozkłady przystanków i trasy linii.",
   formatDetection: {
     telephone: false,
   },
@@ -16,7 +16,7 @@ export const metadata: Metadata = {
     // not black-translucent: iOS 26 standalone then sizes the web view one status bar
     // short and leaves a dead strip at the bottom (WebKit bug 301108)
     statusBarStyle: "black",
-    title: "KB Mapa",
+    title: "Unimaps",
   },
   icons: {
     icon: [

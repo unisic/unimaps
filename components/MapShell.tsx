@@ -4,16 +4,15 @@ import dynamic from "next/dynamic";
 import { useEffect, useSyncExternalStore } from "react";
 import { CITY, CityContext, loadCity, resolveCity, saveCity, type City } from "@/lib/client/city";
 
-/** The boot splash; `city` null (server render, picker pending) shows the KB brand. */
-function Splash({ city }: { city: City | null }) {
-  const gzm = city === "gzm";
+/** The boot splash: the app logo, identical on the server, during the picker and while MapApp loads. */
+function Splash() {
   return (
     <div className="flex h-dvh w-full items-center justify-center bg-bg">
       <div className="flex flex-col items-center gap-6 animate-fade" role="status" aria-live="polite">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
-          src={gzm ? CITY.gzm.logo : CITY.bb.logo}
-          alt={gzm ? CITY.gzm.name : "Komunikacja Beskidzka"}
+          src="/favicon.svg"
+          alt="Unimaps"
           className="h-14 w-auto"
           draggable={false}
         />
@@ -30,8 +29,7 @@ let chosen: City | "pick" | undefined;
 
 const MapApp = dynamic(() => import("@/components/MapApp"), {
   ssr: false,
-  // only ever rendered after the choice resolved, so `chosen` is set by then
-  loading: () => <Splash city={chosen === "gzm" ? "gzm" : null} />,
+  loading: () => <Splash />,
 });
 const subs = new Set<() => void>();
 
@@ -55,7 +53,9 @@ function CityPicker() {
   return (
     <main className="flex min-h-dvh w-full items-center justify-center bg-bg px-4 py-8">
       <div className="flex w-full max-w-md flex-col gap-6 animate-fade">
-        <div className="text-center">
+        <div className="flex flex-col items-center text-center">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/favicon.svg" alt="Unimaps" className="mb-4 h-14 w-14" draggable={false} />
           <h1 className="text-xl font-semibold text-text">Wybierz miasto</h1>
           <p className="mt-1 text-sm text-text-mute">Mapa pojazdów na żywo. Miasto zmienisz później w menu.</p>
         </div>
@@ -99,7 +99,7 @@ export default function MapShell() {
     if (city && loadCity() == null) saveCity(city);
   }, [city]);
 
-  if (choice === null) return <Splash city={null} />;
+  if (choice === null) return <Splash />;
   if (choice === "pick") return <CityPicker />;
   return (
     <CityContext.Provider value={choice}>

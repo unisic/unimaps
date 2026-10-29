@@ -2,10 +2,10 @@ import type { MetadataRoute } from "next";
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "Komunikacja Beskidzka — mapa pojazdów na żywo",
-    short_name: "KB Mapa",
+    name: "Unimaps: komunikacja miejska na żywo",
+    short_name: "Unimaps",
     description:
-      "Wszystkie autobusy Komunikacji Beskidzkiej na jednej mapie: pozycje na żywo, opóźnienia, rozkłady przystanków i trasy linii.",
+      "Autobusy, tramwaje i trolejbusy na jednej mapie: Bielsko-Biała (Komunikacja Beskidzka, MZK) i Metropolia GZM. Pozycje na żywo, opóźnienia, rozkłady przystanków i trasy linii.",
     id: "/",
     start_url: "/",
     scope: "/",

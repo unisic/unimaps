@@ -1,7 +1,7 @@
 /**
  * HTTP client for the MZK Bielsko-Biała OnTime API (https://rozklady.bielsko.pl).
  */
-import { todayLocalISO } from "./config";
+import { todayLocalISO, USER_AGENT } from "./config";
 import { log } from "./logger";
 import type { MzkVehicleStatic } from "./mzk-fleet";
 
@@ -172,7 +172,7 @@ export class MzkApi {
       const res = await fetch(url, {
         headers: {
           Accept: "application/json, text/plain, */*",
-          "User-Agent": "kb-map/1.0 (MZK Bielsko-Biala client)",
+          "User-Agent": USER_AGENT,
         },
         signal: ac.signal,
       });

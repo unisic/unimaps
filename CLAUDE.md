@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Komunikacja Beskidzka live bus map: a Next.js 16 (App Router, TypeScript strict) app where **one Node process** serves the Leaflet map UI, a JSON API, a GTFS-RT VehiclePositions protobuf feed, and runs the live scraper poller in-process. The upstream is `https://komunikacjabeskidzka.kiedyprzyjedzie.pl` (KiedyPrzyjedzie). The `lib/` layer is a deliberate behavioral-parity TypeScript port of a former Python codebase — see Gotchas. README.md (Polish) documents endpoints and env vars in detail.
+**Unimaps** (repo `unisic/unimaps`, GPL-3.0-or-later), a live transit map for Bielsko-Biała (Komunikacja Beskidzka + MZK) and Metropolia GZM: a Next.js 16 (App Router, TypeScript strict) app where **one Node process** serves the Leaflet map UI, a JSON API, a GTFS-RT VehiclePositions protobuf feed, and runs the live scraper poller in-process. The KB upstream is `https://komunikacjabeskidzka.kiedyprzyjedzie.pl` (KiedyPrzyjedzie). App identity is Unimaps, but the `KB_*` env vars, `kb:*` storage keys, `kb-output` volume and `Symbol.for("kb-gtfs.*")` keep their names on purpose (renaming breaks deployments and user state). The `lib/` layer is a deliberate behavioral-parity TypeScript port of a former Python codebase — see Gotchas. README.md (English) documents endpoints and key env vars; `.env.example` lists all of them.
 
 ## Commands
 

@@ -1,140 +1,142 @@
 <div align="center">
 
-# kb-map
+<img src="public/favicon.svg" width="160" height="160" alt="Unimaps" />
 
-Real-time bus tracking, GTFS / GTFS-RT feed generator, and multi-leg transit journey planner for **Komunikacja Beskidzka** (Bielsko-Biała region, Poland).
+# Unimaps
 
-<p align="center">
-  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/node-20%2B-339933?style=flat-square&logo=node.js&logoColor=white" alt="Node"></a>
-  <a href="https://nextjs.org"><img src="https://img.shields.io/badge/next.js-16-000000?style=flat-square&logo=next.js&logoColor=white" alt="Next.js"></a>
-  <a href="https://www.typescriptlang.org"><img src="https://img.shields.io/badge/typescript-5-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript"></a>
-  <a href="/api/gtfs-rt.pb"><img src="https://img.shields.io/badge/GTFS--RT-protobuf-blue?style=flat-square" alt="GTFS-RT"></a>
-</p>
+A live public transport map for Bielsko-Biała and Metropolia GZM.
 
 </div>
 
-Official passenger portals only show departures one stop at a time. **kb-map** tracks the entire fleet at once: real-time vehicle positions with live delays on an interactive vector map, an automated GTFS / GTFS-RT feed generator, and a journey planner that computes direct and multi-leg transfers across 950+ stops.
+<img width="1280" height="800" alt="Unimaps: live buses in Bielsko-Biała" src="docs/screenshot.png" />
 
-Built with **Next.js 16**, **TypeScript**, and **Leaflet / MapLibre GL**. A background poller runs concurrently in the same Node.js process via `instrumentation.ts` without requiring a separate scraper daemon.
+Operator portals show departures one stop at a time. Unimaps shows the whole
+fleet at once: every running vehicle with its delay, stop departure boards,
+trip timelines on road geometry and a journey planner. It also publishes a
+GTFS feed and a GTFS-Realtime feed.
+
+Unimaps runs as one Node.js process: Next.js 16 serves the map, the JSON API and
+the feeds, and the pollers run in the same process. No separate scraper daemon
+and no database.
 
 ## Features
 
-- **Live Fleet Tracking**: Real-time GPS locations of all running buses updated every 4 s. Headings are computed from actual physical movement (with jitter filtering), with live delay badges (`+4 min`) and active stop progress tracking.
-- **Smooth Vehicle Motion**: Between position updates buses are dead-reckoned along their road shape at their cruise speed — they stop short of the next stop, wait while dwelling, and correct smoothly when a new fix arrives instead of jumping. Per-browser switch in the map settings ("Płynny ruch pojazdów", an early feature, off until switched on).
-- **Multi-leg Journey Planner**: Connection search supporting direct trips and multi-leg transfers with automatic walkable hub transfers (up to 350 m between platforms or opposite street sides). Fuzzy stop resolution handles Polish diacritics, punctuation (`PIETRZYKOWICE, KOŚCIÓŁ`), and street suffixes seamlessly across calendar boundaries.
-- **GTFS & GTFS-Realtime Feeds**: Automatic nightly builds of static multi-day GTFS (`stops`, `routes`, `trips`, `stop_times`, `shapes`, `calendar`) published atomically, plus standard GTFS-RT `VehiclePositions` protobuf at `/api/gtfs-rt.pb`.
-- **Interactive UI & PWA**: Vector base map (OpenFreeMap with dark mode and raster fallback), stop departures boards with live countdowns, route timeline sheets with road geometry routed and stored server-side, keyboard command palette (`Cmd/Ctrl+K`), and installable PWA support.
-- **Self-Healing Poller**: 3-tier polling architecture (full scan every 90 s, smart scan every 30 s, active vehicle refresh every 10 s) with on-demand candidate discovery, ghost vehicle filtering, and health monitoring (`/api/health`).
+- Live positions every 4 to 5 s, with delays. KB delays are corrected from GPS
+  when upstream's stop index stalls behind the bus.
+- Departure boards and full timetables per stop. Nearby departures, departure
+  alerts, and favourite stops kept for offline use.
+- Trip timelines on road-following shapes, routed and stored on the server
+- Journey planner (range RAPTOR) with walking transfers between stops up to
+  350 m apart
+- Fleet and brigade view at `/brygady`
+- Optional smooth motion that dead-reckons buses along their route between
+  fixes, an installable PWA, and a `Ctrl+K` search for stops, lines and
+  vehicles
 
-## Quick Start
+## Cities
 
-Requirements: **Node.js 20+** (tested on Node 24).
+| City | Operators | Sources |
+|---|---|---|
+| Bielsko-Biała | Komunikacja Beskidzka (KB), MZK Bielsko-Biała | KiedyPrzyjedzie (KB), OnTime (MZK), stops of both merged into one list |
+| Metropolia GZM | ZTM: buses, trams, trolleybuses | zbiorkom.live GTFS and positions, SDIP overlay every 5 s |
+
+On first visit the map asks for a city and remembers it. `?city=gzm` opens GZM.
+The two cities are isolated: a GZM failure never touches Bielsko-Biała data.
+
+## Run
+
+Requires Node.js 24 or newer.
 
 ```bash
-# Clone and install dependencies
-git clone https://github.com/DeBondor/kb-map.git
-cd kb-map
+git clone https://github.com/unisic/unimaps.git
+cd unimaps
 npm install
-
-# Run development server (runs scraper + web UI on port 8080)
-npm run dev
-
-# Or build for production
-npm run build
-npm start
+npm run dev          # map + pollers on http://localhost:8080
 ```
 
-### Docker
+Production:
+
+```bash
+npm run build
+npm start            # standalone server on port 8080
+```
+
+Docker:
 
 ```bash
 docker compose up -d --build
 ```
 
-The app is served at `http://localhost:8080`.
+The healthcheck marks the container `unhealthy` when the scan loop stalls or
+upstream goes stale (`/api/health` answers 503). `restart: unless-stopped`
+acts only on process exit, so point an uptime monitor at `/api/health`.
 
-The healthcheck marks the container `unhealthy` when the scan loop stalls or the upstream goes stale (`/api/health` answers 503). Docker does not restart a container for that, `restart: unless-stopped` acts only on process exit, so point an uptime monitor at `/api/health` to get alerted.
+Checks: `npm run typecheck`, `npm run lint`, `npm test`.
 
-## API & Feeds
+## API
 
-| Endpoint | Description |
+| Endpoint | |
 |---|---|
-| `/` | Interactive live fleet map & journey planner UI |
-| `/api/vehicles` | All active vehicle positions with delays and heading (`JSON`) |
-| `/api/gtfs-rt.pb` | Standard **GTFS-RT VehiclePositions** (`protobuf`) |
-| `/api/connections?from=...&to=...` | Transit routing engine (direct & transfer itineraries) |
-| `/api/stops` | KB and MZK stops merged into one list (~1300 entries; `operator` is `KB`, `MZK` or `BOTH`), with coordinates, direction arrows and platform metadata; `ETag` + 304 |
-| `/api/lines` | Active bus lines catalog extracted from GTFS |
-| `/api/stop/:id/departures` | Live & scheduled departures for a specific stop |
-| `/api/shapes?ids=...` | Stored road geometry (encoded polyline, precision 6, + per-stop distances) for the `shape` ids advertised by `/api/vehicles` and trip responses; immutable-cached |
-| `/api/health` | Service health status, vehicle count, feed freshness, MZK / merged stop-list counters (`mzk_stops`, `merged_stops`) and road-shape store counters |
+| `/api/vehicles` | Live vehicles with delay, heading, route shape and along-route distance |
+| `/api/gtfs-rt.pb` | GTFS-Realtime `VehiclePositions` (Bielsko-Biała) |
+| `/api/stops` | Merged stop list with direction arrows, `ETag` + 304 |
+| `/api/stop/:id/departures` | Live and scheduled departures |
+| `/api/stop/:id/timetable` | Full day timetable |
+| `/api/trip/:id`, `/api/trip_execution`, `/api/trips` | Trip timelines |
+| `/api/connections?from=&to=` | Journey planner |
+| `/api/lines` | Line catalogue |
+| `/api/shapes?ids=` | Stored road geometry, immutable-cached |
+| `/api/fleet`, `/api/fleet/:side`, `/api/fleet/timeline` | Fleet and brigades |
+| `/api/announcements` | KB service announcements |
+| `/api/health` | Status, scan counters, feed age, shape store |
 
-## Road Shapes
+List endpoints take `?city=gzm`; without it they answer for Bielsko-Biała.
+GZM ids carry a `gzm:` prefix (`gzm:<stop_id>`, `gzm:<trip_id>`,
+`gzm:<operator>_<fleet>`). While the GZM feed loads, its endpoints answer 503
+with `Retry-After: 10`.
 
-Road-following route geometry is computed **on the server** and stored, instead of every browser calling a router:
+## Configuration
 
-- **KB**: each distinct stop pattern is routed through [OSRM](https://project-osrm.org/) by a single throttled worker (≥ 1 s between requests on the public demo server, identifying User-Agent, circuit breaker on errors). New patterns are queued as soon as a vehicle or GTFS trip uses them; road shapes are re-routed gradually after `KB_SHAPES_MAX_AGE_DAYS`. Bootstrap is ~600 requests (~11 min), then a few dozen a day.
-- **MZK**: the operator's own variant geometry (`getTheoreticalCourseDetails`).
-- Stored in `output/shapes/route-shapes.v1.json` (Docker volume `kb-output`), written atomically with a `.bak`; one process owns it (lock file), others are read-only. Delete the file to rebuild from scratch; `/api/health` → `shapes` shows progress.
-
-| Variable | Default | |
-|---|---|---|
-| `KB_OSRM_URL` | `https://router.project-osrm.org/route/v1/driving` | `off` disables routing (KB buses then move straight towards the next stop) |
-| `KB_OSRM_MIN_INTERVAL_MS` | `1100` | min. spacing between OSRM requests (≥ 1000 on the public host) |
-| `KB_OSRM_USER_AGENT` | `kb-map/2.0 (+https://github.com/DeBondor/kb-map)` | required by the OSRM usage policy |
-| `KB_SHAPES_MAX_AGE_DAYS` | `14` | |
-| `KB_SHAPES_FILE` | `output/shapes/route-shapes.v1.json` | |
-
-## Live Delay (GPS-corrected)
-
-Upstream registers a stop only when one of its GPS samples lands in the stop zone. A bus that passes stops without slowing down is not registered, upstream's `vehicle_trip_index` / `next_departure_index` stall behind the bus and the delay derived from them grows +1 min per minute (observed: +5 → +11 min for a bus running on time). `lib/kb-progress.ts` tracks the bus along its trip's stops from GPS (monotone, upstream's last registered stop as a lower bound) and, only while the bus is already beyond the stop upstream calls "next", replaces `delay` by the schedule deviation at the real position. `/api/vehicles` then carries `delay_src` (`gps` | `gps-held` | `unknown`) and `geo_seq` (GPS index of the last passed stop) for that vehicle; `/api/health` → `stale_index` counts such vehicles.
+All settings are optional `KB_*` environment variables, read once at start.
+`.env.example` documents every one. The ones you are most likely to touch:
 
 | Variable | Default | |
 |---|---|---|
-| `KB_GPS_DELAY` | `1` | `0` restores upstream's raw delay (kill switch) |
-## Stop Merging (KB + MZK)
+| `KB_OSRM_URL` | `https://router.project-osrm.org/route/v1/driving` | `off` disables server-side road routing |
+| `KB_OSRM_MIN_INTERVAL_MS` | `1100` | at least 1000 on the public OSRM host |
+| `KB_USER_AGENT` | `unimaps/2.0 (+https://github.com/unisic/unimaps)` | sent to every upstream |
+| `KB_GPS_DELAY` | `1` | `0` keeps upstream's raw KB delay |
+| `KB_GZM` | `1` | `0` switches Metropolia GZM off |
+| `KB_GZM_SDIP` | `1` | `0` disables the SDIP position overlay |
 
-`/api/stops` pairs the stops of the two operators that are the same physical pole (`lib/stop-merge.ts`): within 35 m, or within 120 m with matching names, one MZK stop per KB stop, opposite carriageways never paired. The pairing is a global assignment (it does not depend on the order the upstreams list their stops) and uses the travel direction of both sides: KB from the GTFS feed, MZK learned from the stop order of running courses and persisted to `output/mzk-stop-dirs.v1.json` (`KB_MZK_STOP_DIRS_FILE`). A bus station (D.A.) pairs only with MZK stops within 35 m (on its premises) and lists the departures of all of them, e.g. Czechowice-Dz. D.A. lists 2366 and 2367. Bielsko-Biała D.A. is a KB station, so it shows KB only: the MZK "Warszawska/Piastowska Dworzec" stops (89-183 m) are stops of their own. The MZK stop list is reloaded daily and as soon as a running course references a stop it does not know. `/api/health` → `mzk_stops` / `merged_stops` show what the current list is made of.
+Generated state lives in `output/` (Docker volume `kb-output`): the static
+GTFS feed, road shapes, learned stop directions and fleet history. Delete a
+file to rebuild it.
 
-## Metropolia GZM (second city)
+## Static GTFS
 
-The same process also serves **Metropolia GZM** (Katowice region), isolated from the BB pollers: a GZM failure never touches the BB data or `/api/health` status. On first visit the map asks which city to show and remembers the choice (`kb:city` in localStorage); the top bar switches it later.
-
-- **Schedule** (stops, lines, trips, shapes, brigades): the merged GZM GTFS from zbiorkom.live api6-open, kept as `output/gzm/gtfs.zip`. Checked every 10 min, downloaded again once the service day changed (after 04:00 Warsaw time); a failed download keeps the last good feed and retries after 30 min.
-- **Live positions**: zbiorkom positions every 20 s (polled just after zbiorkom's own 20 s grid), joined to a GTFS trip only when every upcoming (stop sequence, scheduled departure) pair matches, brigade as the tie-breaker. A vehicle without a trip (after its last trip of the day, or listed without upcoming stops) shows its position only, without a delay.
-- **SDIP** (sdip.transportgzm.pl) overlays fresher positions every 5 s, only while someone requested GZM data within the last 2 min.
-- Departures and timetables come from the local feed with the live delay applied (no upstream request per stop); connections search the GZM feed only (no routing between the cities).
-
-Every endpoint that serves a list takes `?city=gzm` (`vehicles`, `stops`, `lines`, `connections`, `fleet`); without it the answer is the BB one, unchanged. Endpoints keyed by an id take the GZM id space instead:
-
-| Thing | Id |
-|---|---|
-| stop | `gzm:<stop_id>` |
-| trip | `gzm:<trip_id>` |
-| vehicle (`exec_id`) | `gzm:<operator>_<fleet>` |
-| shape | `gzm:<shape_id>.<rev6>` |
-
-An unknown `city` answers 400, `city=gzm` with `KB_GZM=0` answers 404, and stops, lines, trips, departures, timetables and connections answer 503 with `Retry-After: 10` while the feed is still loading (vehicles are served without trip data meanwhile). `/api/health` → `gzm` is informational. `/api/gtfs-rt.pb` stays BB-only.
-
-| Variable | Default | |
-|---|---|---|
-| `KB_GZM` | `1` | `0` switches GZM off |
-| `KB_GZM_GTFS_URL` | `https://api.zbiorkom.live/api6-open/gzm/gtfs/default` | |
-| `KB_GZM_POSITIONS_URL` | `https://api.zbiorkom.live/api6-open/gzm/positions/18.3,49.9,19.7,50.7` | |
-| `KB_GZM_SDIP` | `1` | `0` disables the SDIP overlay |
-| `KB_GZM_SDIP_URL` | `https://sdip.transportgzm.pl/vm/main` | |
-| `KB_GZM_DIR` | `output/gzm` | GTFS zip and GZM fleet history |
-| `KB_GZM_FLEET_HISTORY_DAYS` | `30` | |
-
-Data: ZTM / Metropolia GZM (CC BY), via zbiorkom.live.
-
-## Static GTFS Generation
-
-To build or refresh the static GTFS schedule manually:
+The server rebuilds the Bielsko-Biała GTFS feed every night. To build it by
+hand:
 
 ```bash
-npm run build:gtfs
+npm run build:gtfs -- --date 2026-11-02 --out output/gtfs
 ```
 
-Options: `--date YYYY-MM-DD` (default: today), `--out <dir>` (default: `output/gtfs`), `--concurrency <N>` (default: 40), `--single-day` (default: multi-day full schedule).
+Flags: `--date YYYY-MM-DD` (default today), `--out DIR`, `--concurrency N`,
+`--no-zip`, `--single-day`. Output is written atomically, including
+`kb_gtfs.zip`.
 
-Output is written atomically to `output/gtfs/` (including `kb_gtfs.zip`).
+## Data
+
+Unimaps is an independent project, not affiliated with any operator. Data
+comes from:
+
+- Komunikacja Beskidzka: [komunikacjabeskidzka.kiedyprzyjedzie.pl](https://komunikacjabeskidzka.kiedyprzyjedzie.pl)
+- MZK Bielsko-Biała: [rozklady.bielsko.pl](https://rozklady.bielsko.pl)
+- Metropolia GZM: ZTM / Metropolia GZM (CC BY), via [zbiorkom.live](https://zbiorkom.live), plus SDIP
+- Map: © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors, tiles by [OpenFreeMap](https://openfreemap.org)
+- Road routing: [OSRM](https://project-osrm.org)
+
+## License
+
+GPLv3 or later. See [LICENSE](LICENSE).

@@ -103,6 +103,11 @@ export const GTFS_BUILD_CONCURRENCY = envInt("KB_GTFS_BUILD_CONCURRENCY", 10);
  *  deleted at the midnight rollover. Only today's file is ever read. */
 export const FLEET_HISTORY_DAYS = envInt("KB_FLEET_HISTORY_DAYS", 365);
 
+export const USER_AGENT = envStr(
+  "KB_USER_AGENT",
+  "unimaps/2.0 (+https://github.com/unisic/unimaps)",
+);
+
 /**
  * Server-side road routing for the shape store (lib/shape-store.ts). The
  * public OSRM demo server is shared: its policy requires an identifying
@@ -116,7 +121,7 @@ export const OSRM_URL: string | null = (() => {
 const PUBLIC_OSRM = OSRM_URL !== null && /(^|\/\/)router\.project-osrm\.org\b/.test(OSRM_URL);
 /** Minimum spacing between OSRM requests (clamped to ≥1000 ms on the public demo host). */
 export const OSRM_MIN_INTERVAL_MS = Math.max(PUBLIC_OSRM ? 1000 : 0, envInt("KB_OSRM_MIN_INTERVAL_MS", 1100, 250));
-export const OSRM_USER_AGENT = envStr("KB_OSRM_USER_AGENT", "kb-map/2.0 (+https://github.com/DeBondor/kb-map)");
+export const OSRM_USER_AGENT = envStr("KB_OSRM_USER_AGENT", USER_AGENT);
 /** Road shapes older than this are re-routed gradually (one per 2 min). */
 export const SHAPES_MAX_AGE_DAYS = envInt("KB_SHAPES_MAX_AGE_DAYS", 14);
 /** Persisted shape store (outside output/gtfs, which the builder swaps atomically). */
@@ -144,11 +149,6 @@ export const GZM_SDIP_URL = envStr("KB_GZM_SDIP_URL", "https://sdip.transportgzm
 export const GZM_DIR = envStr("KB_GZM_DIR", path.join(OUTPUT_DIR, "gzm"));
 /** Days of GZM fleet history kept on disk (~12-14 MB per day: ~22 000 finished courses x ~530 B, plus the running ones). */
 export const GZM_FLEET_HISTORY_DAYS = envInt("KB_GZM_FLEET_HISTORY_DAYS", 30);
-
-export const USER_AGENT = envStr(
-  "KB_USER_AGENT",
-  "kb-gtfs/1.0 (+https://komunikacjabeskidzka.kiedyprzyjedzie.pl)",
-);
 
 /** Map an upstream line type to a GTFS route_type (port of route_type_for). */
 export function routeTypeFor(lineType: string | null | undefined, _vehicleType?: number | null): number {

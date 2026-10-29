@@ -112,7 +112,7 @@ function CityBrigades({ city, params }: { city: FleetCity; params: URLSearchPara
   useEffect(() => {
     if (city !== "gzm") return;
     const prev = document.title;
-    document.title = "Brygady i tabor Metropolii GZM | KB Mapa";
+    document.title = "Brygady i tabor Metropolii GZM | Unimaps";
     return () => {
       document.title = prev;
     };

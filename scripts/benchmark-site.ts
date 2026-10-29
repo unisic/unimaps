@@ -132,7 +132,7 @@ async function runBenchmark() {
 
   try {
     const osmTile = await timedFetch("https://tile.openstreetmap.org/11/1126/714.png", {
-      headers: { "User-Agent": "KB-Map-Benchmark/1.0" },
+      headers: { "User-Agent": "Unimaps-Benchmark/1.0" },
     });
     metrics.push({
       name: "OSM Raster Tile Fallback",
