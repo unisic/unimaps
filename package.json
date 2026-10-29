@@ -29,7 +29,7 @@
     "@maplibre/maplibre-gl-leaflet": "^0.1.4",
     "@phosphor-icons/react": "^2.1.10",
     "fflate": "^0.8.3",
-    "geist": "^1.7.2",
+    "geist": "^1.8.2",
     "gtfs-realtime-bindings": "^2.1.0",
     "leaflet": "^1.9.4",
     "maplibre-gl": "^6.15.0",
