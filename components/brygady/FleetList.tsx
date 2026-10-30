@@ -177,7 +177,7 @@ export const FleetList = memo(function FleetList({
               type="button"
               onClick={() => onFiltersChange({ q: "" })}
               aria-label="Wyczyść wyszukiwanie"
-              className="absolute inset-y-0 right-1 my-auto grid h-9 w-9 place-items-center rounded-lg text-text-mute hover:bg-white/8 hover:text-text"
+              className="absolute inset-y-0 right-1 my-auto grid h-9 w-9 place-items-center rounded-lg text-text-mute hover:bg-tint/8 hover:text-text"
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" aria-hidden>
                 <path d="M18 6 6 18M6 6l12 12" />
@@ -271,7 +271,7 @@ export const FleetList = memo(function FleetList({
               <button
                 type="button"
                 onClick={() => setMore({ key: filterKey, rows: limit + PAGE_ROWS })}
-                className="min-h-10 rounded-full bg-surface-3 px-5 text-[13px] font-semibold text-text hover:bg-white/12"
+                className="min-h-10 rounded-full bg-surface-3 px-5 text-[13px] font-semibold text-text hover:bg-tint/12"
               >
                 Pokaż więcej
                 <span className="ml-1.5 font-normal text-text-mute tabular-nums">
@@ -290,7 +290,7 @@ export const FleetList = memo(function FleetList({
           <button
             type="button"
             onClick={() => onFiltersChange({ q: "", status: "all", fuel: "all", line: "" })}
-            className="mt-4 min-h-10 rounded-full bg-surface-3 px-4 text-[13px] font-semibold text-text hover:bg-white/12"
+            className="mt-4 min-h-10 rounded-full bg-surface-3 px-4 text-[13px] font-semibold text-text hover:bg-tint/12"
           >
             Wyczyść filtry
           </button>
@@ -390,7 +390,7 @@ function VehicleCard({
       type="button"
       onClick={() => onOpen(v.sideNumber)}
       className={`flex h-full w-full flex-col gap-2.5 rounded-2xl border p-3.5 text-left transition-[background-color,border-color] ${
-        s === "depot" ? "border-hairline bg-surface/60 hover:bg-surface" : "border-hairline bg-surface hover:border-white/15 hover:bg-surface-2"
+        s === "depot" ? "border-hairline bg-surface/60 hover:bg-surface" : "border-hairline bg-surface hover:border-tint/15 hover:bg-surface-2"
       }`}
     >
       <span className="flex items-start justify-between gap-3">

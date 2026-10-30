@@ -129,7 +129,7 @@ describe("GZM trip alerts", () => {
 });
 
 describe("GZM recorded arrivals", () => {
-  it("reads per-stop estimates in seconds, like MZK", () => {
+  it("reads the server's arrival log; estimates (upcoming stops only) are never a passed stop's time", () => {
     const trip = {
       operator: "GZM" as const,
       times: [
@@ -138,7 +138,10 @@ describe("GZM recorded arrivals", () => {
         { departure_time: "10:10", estimate: { time_diff: 0 } },
       ],
     } as unknown as Parameters<typeof arrivedSecs>[0]["trip"];
-    assert.deepEqual(arrivedSecs({ trip, vehicle_trip_index: 2 }), [36_060, 36_420, null]);
+    // 2026-07-06 10:01 and 10:07 Warsaw (UTC+2)
+    const e = Date.UTC(2026, 6, 6, 8, 1) / 1000;
+    assert.deepEqual(arrivedSecs({ trip, arrived: [e, e + 360], vehicle_trip_index: 2 }), [36_060, 36_420]);
+    assert.equal(arrivedSecs({ trip, vehicle_trip_index: 2 }), null);
   });
 });
 

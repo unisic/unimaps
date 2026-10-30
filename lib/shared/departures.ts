@@ -475,7 +475,8 @@ export function rowKey(row: TimingRow): string {
 const lineOf = (row: TimingRow) => String(row.line_name ?? row.symbol ?? "");
 
 let lineCollator: Intl.Collator | null = null;
-const compareLines = (a: string, b: string): number => {
+/** Natural line order ("2" before "10", "N1" after them). */
+export const compareLines = (a: string, b: string): number => {
   lineCollator ??= new Intl.Collator("pl", { numeric: true });
   return lineCollator.compare(a, b);
 };
@@ -569,7 +570,7 @@ export interface SchedDeparture {
 }
 
 /** A static KB trip id repeats every day: a live row hides the timetable visit of the SAME day only. */
-const SAME_VISIT_SEC = 12 * 3600;
+export const SAME_VISIT_SEC = 12 * 3600;
 
 /**
  * Trip identity shared by timetable rows, board rows and live vehicles: an MZK

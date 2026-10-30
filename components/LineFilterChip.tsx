@@ -23,7 +23,7 @@ function LineFilterChip({ lines, visibleCount, onClear, onOpenPalette }: Props) 
           type="button"
           onClick={onOpenPalette}
           aria-label="Zmień filtr linii"
-          className="tap flex min-w-0 items-center gap-1.5 rounded-full px-1 py-0.5 hover:bg-white/5"
+          className="tap flex min-w-0 items-center gap-1.5 rounded-full px-1 py-0.5 hover:bg-tint/5"
         >
           <span className="flex min-w-0 items-center gap-1 overflow-hidden">
             {lines.map((l) => (
@@ -38,7 +38,7 @@ function LineFilterChip({ lines, visibleCount, onClear, onOpenPalette }: Props) 
           type="button"
           onClick={onClear}
           aria-label="Wyczyść filtr linii"
-          className="tap grid h-8 w-8 shrink-0 place-items-center rounded-full text-[15px] text-text-mute hover:bg-white/8 hover:text-text"
+          className="tap grid h-8 w-8 shrink-0 place-items-center rounded-full text-[15px] text-text-mute hover:bg-tint/8 hover:text-text"
         >
           <XIcon />
         </button>

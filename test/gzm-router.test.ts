@@ -3,8 +3,8 @@ import { describe, it } from "node:test";
 
 import { todayLocalISO } from "../lib/config";
 import { NO_DROP_OFF, NO_PICKUP } from "../lib/gtfs-csv";
-import { gzmStopKey } from "../lib/gzm-feed";
-import { buildRouterIndex, findConnections, stopEvents, type RouterStopInput, type TripEntry } from "../lib/router";
+import { gzmStopKey } from "../lib/shared/gzm-stop-key";
+import { buildRouterIndex, findConnections, lineTimetable, stopEvents, type RouterStopInput, type TripEntry } from "../lib/router";
 
 // GZM-only router paths (dates, pickup flags, keyed pole groups, stopEvents) on a hand-built index;
 // the KB/MZK paths are pinned by router*.test.ts against the fixture feed.
@@ -120,6 +120,69 @@ describe("router on a GZM index", () => {
     assert.equal(res[0]?.date, plusDays(today, 2));
   });
 
+  it("starts from a point at every pole within 800 m, departing when the rider leaves", () => {
+    // the point is ~498 m (8 min) east of Alfa 01, ~213 m (4 min) west of Beta, ~925 m from Gamma
+    const idx = index([
+      trip("gzm:from-a", [["gzm:a1", "08:00"], ["gzm:d", "08:20"]], [DATE]),
+      trip("gzm:from-b", [["gzm:b", "08:10"], ["gzm:d", "08:25"]], [DATE]),
+      trip("gzm:from-c", [["gzm:c", "08:05"], ["gzm:d", "08:15"]], [DATE]),
+    ]);
+    const fromPoint = { lat: 50.25, lon: 19.007 };
+    const res = findConnections({ from: "geo:50.25,19.007", fromPoint, to: "gzm:d", toIds: ["gzm:d"], date: DATE, afterSecs: secs("07:00") }, idx);
+    assert.deepEqual(
+      res.map((c) => [c.legs[0].tripId, c.departureTime, c.accessWalkMins, c.walkMinutes, c.totalDurationMins]),
+      [
+        ["gzm:from-a", "07:52", 8, 8, 28],
+        ["gzm:from-b", "08:06", 4, 4, 19],
+      ],
+    );
+    assert.equal(res[0].legs[0].departureTime, "08:00");
+    // leaving at 07:55 is too late for the 08:00 at Alfa
+    const later = findConnections({ from: "geo:50.25,19.007", fromPoint, to: "gzm:d", toIds: ["gzm:d"], date: DATE, afterSecs: secs("07:55") }, idx);
+    assert.deepEqual(later.map((c) => c.legs[0].tripId), ["gzm:from-b"]);
+    // a rider who walks at most 300 m reaches only Beta
+    const short = findConnections({ from: "geo:50.25,19.007", fromPoint: { ...fromPoint, walkM: 300 }, to: "gzm:d", toIds: ["gzm:d"], date: DATE, afterSecs: secs("07:00") }, idx);
+    assert.deepEqual(short.map((c) => c.legs[0].tripId), ["gzm:from-b"]);
+    // a search from a stop carries no access walk
+    assert.equal(findConnections(q("gzm:a1", "gzm:d", secs("07:00")), idx)[0]?.accessWalkMins, undefined);
+  });
+
+  it("ends at a point: every pole within 800 m, the walk from it counted into the arrival", () => {
+    // the point is ~213 m (4 min) west of Delta, ~498 m (8 min) east of Gamma, ~925 m from Epsilon
+    const idx = index([
+      trip("gzm:to-c", [["gzm:a1", "08:00"], ["gzm:c", "08:10"]], [DATE]),
+      trip("gzm:to-d", [["gzm:a1", "08:05"], ["gzm:d", "08:20"]], [DATE]),
+      trip("gzm:to-e", [["gzm:a1", "08:06"], ["gzm:e", "08:12"]], [DATE]),
+    ]);
+    const toPoint = { lat: 50.25, lon: 19.027 };
+    const res = findConnections({ ...q("gzm:a1", "geo:50.25,19.027", secs("07:00")), toPoint }, idx);
+    assert.deepEqual(
+      res.map((c) => [c.legs[0].tripId, c.arrivalTime, c.legs[0].arrivalTime, c.egressWalkMins, c.walkMinutes, c.totalDurationMins]),
+      [
+        ["gzm:to-c", "08:18", "08:10", 8, 8, 18],
+        ["gzm:to-d", "08:24", "08:20", 4, 4, 19],
+      ],
+    );
+    // a search to a stop carries no egress walk
+    assert.equal(findConnections(q("gzm:a1", "gzm:d", secs("07:00")), idx)[0]?.egressWalkMins, undefined);
+  });
+
+  it("arrive-by: the latest-leaving journeys arriving by the time, the window growing back", () => {
+    const idx = index(
+      ["07:00", "07:30", "08:00", "08:30"].map((t, i) =>
+        trip(`gzm:t${i}`, [["gzm:a1", t], ["gzm:d", t.replace(/:(\d)0$/, ":$12")]], [DATE]),
+      ),
+    );
+    const by = (hhmm: string, limit: number) =>
+      findConnections({ ...q("gzm:a1", "gzm:d", secs(hhmm)), arriveBy: true, limit }, idx).map((c) => `${c.departureTime}-${c.arrivalTime}`);
+    assert.deepEqual(by("08:25", 2), ["07:30-07:32", "08:00-08:02"]);
+    assert.deepEqual(by("08:02", 2), ["07:30-07:32", "08:00-08:02"]);
+    assert.deepEqual(by("08:01", 5), ["07:00-07:02", "07:30-07:32"]);
+    // nothing in the first 2 h before 12:00: the window grows back to the morning
+    assert.deepEqual(by("12:00", 2), ["08:00-08:02", "08:30-08:32"]);
+    assert.deepEqual(by("06:00", 5), []);
+  });
+
   it("walks between poles across a grid cell boundary, not beyond 350 m", () => {
     const cell = 350 / 111320;
     const lat = Math.ceil(50.25 / cell) * cell; // a cell edge
@@ -164,3 +227,25 @@ describe("stopEvents", () => {
     assert.deepEqual(stopEvents(idx, ["gzm:unknown"], DATE, 0, 86400), []);
   });
 });
+
+describe("lineTimetable", () => {
+  it("groups the day's trips of one line by stop pattern, busiest first, each trip's times in minutes", () => {
+    const other = { ...trip("gzm:x", [["gzm:a1", "07:00"], ["gzm:b", "07:05"]], [DATE]), line: "8" };
+    const idx = index([
+      trip("gzm:late", [["gzm:a1", "09:00"], ["gzm:b", "09:05"]], [DATE]),
+      trip("gzm:early", [["gzm:a1", "08:00"], ["gzm:b", "08:04"]], [DATE]),
+      trip("gzm:short", [["gzm:b", "08:30"], ["gzm:c", "08:35"]], [DATE]),
+      trip("gzm:night", [["gzm:b", "23:58"], ["gzm:c", "24:03"]], [DATE]),
+      trip("gzm:tomorrow", [["gzm:c", "08:00"], ["gzm:d", "08:05"]], [plusDays(DATE, 1)]),
+      other,
+    ]);
+    const v = lineTimetable("7", "GZM", DATE, idx)!;
+    assert.deepEqual(v.map((x) => x.stops.map((st) => st.name)), [["Alfa 01", "Beta 01"], ["Beta 01", "Gamma 1t"]]);
+    assert.deepEqual(v[0].times, [[480, 484], [540, 545]]);
+    assert.deepEqual(v[1].times, [[510, 515], [1438, 1443]]);
+    assert.equal(v[0].headsign, "Koniec");
+    assert.deepEqual(lineTimetable("7", "MZK", DATE, idx), []);
+    assert.deepEqual(lineTimetable("7", "GZM", plusDays(DATE, 2), idx), []);
+  });
+});
+

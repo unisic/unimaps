@@ -223,7 +223,7 @@ export const FleetStatsView = memo(function FleetStatsView({
               <button
                 type="button"
                 onClick={() => void timeline.mutate()}
-                className="mt-3 min-h-9 rounded-full bg-surface-3 px-4 text-[12.5px] font-semibold text-text hover:bg-white/12"
+                className="mt-3 min-h-9 rounded-full bg-surface-3 px-4 text-[12.5px] font-semibold text-text hover:bg-tint/12"
               >
                 Spróbuj ponownie
               </button>
@@ -312,7 +312,7 @@ export const FleetStatsView = memo(function FleetStatsView({
                     aria-label={`Linia ${r.line}: ${r.vehicles} ${vehicleWord(r.vehicles)} w trasie${
                       r.medianSec !== null ? `, mediana opóźnienia ${fmtDelayMin(r.medianSec)}` : ""
                     }${r.onTimePct !== null ? `, punktualnie ${r.onTimePct}%` : ""}. Pokaż pojazdy.`}
-                    className="grid min-h-10 w-full grid-cols-[3rem_4rem_5.5rem_1fr] items-center gap-3 rounded-lg px-1.5 text-left text-[12.5px] transition-colors hover:bg-white/5"
+                    className="grid min-h-10 w-full grid-cols-[3rem_4rem_5.5rem_1fr] items-center gap-3 rounded-lg px-1.5 text-left text-[12.5px] transition-colors hover:bg-tint/5"
                   >
                     <LineBadge line={r.line} operator={brand.operator} />
                     <span className="text-right text-text tabular-nums">{r.vehicles}</span>
@@ -405,7 +405,7 @@ export const FleetStatsView = memo(function FleetStatsView({
                 <button
                   type="button"
                   onClick={() => onOpenVehicle(v.sideNumber)}
-                  className="flex min-h-11 w-full items-center gap-3 rounded-lg px-1.5 text-left transition-colors hover:bg-white/5"
+                  className="flex min-h-11 w-full items-center gap-3 rounded-lg px-1.5 text-left transition-colors hover:bg-tint/5"
                 >
                   <span className="w-14 shrink-0 font-semibold text-text tabular-nums">#{v.label ?? v.sideNumber}</span>
                   <span className="min-w-0 flex-1 truncate text-[12.5px] text-text-mute">{v.company ?? v.model}</span>

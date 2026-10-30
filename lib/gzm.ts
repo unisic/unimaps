@@ -20,6 +20,7 @@ import { bearing, metersBetween } from "./geo";
 import { getGzmFeed, gzmFeedHealth, serviceDayBase, startGzmFeed, warsawClock, type GzmFeed, type GzmTrip } from "./gzm-feed";
 import { feedGzmFleet, type GzmFleetSource } from "./gzm-fleet";
 import { isRecord } from "./kb-api";
+import { stepArrivals } from "./kb-progress";
 import { log } from "./logger";
 import { interruptibleSleep, vehicleToJson } from "./poller";
 import { estimateFixAt, kbAheadM, kbDistAlong, nextSpeed, vehicleExtras } from "./route-info";
@@ -624,7 +625,13 @@ export class GzmLive {
       fixAt: fix.fixAt,
     };
     if (trip && feed) this.attachRouteInfo(pos, trip, next, prev, feed);
-    return { rec, pos, feed, match, trip, date: match?.date ?? "", base: match?.base ?? 0, next, notStarted, zbFixAt };
+    const date = match?.date ?? "";
+    // the exec id is the vehicle, not the trip: a new trip (or the same one on another day) starts a new log
+    if (trip) {
+      const same = prev?.trip === trip && prev.date === date ? p?.arrivals : undefined;
+      pos.arrivals = stepArrivals(same, next - 1, nowS, fix.fixAt);
+    }
+    return { rec, pos, feed, match, trip, date, base: match?.base ?? 0, next, notStarted, zbFixAt };
   }
 
   /** Shape key, along-route distance and cruise speed (the MzkPoller pattern). Isolated per vehicle. */
@@ -818,6 +825,7 @@ export class GzmLive {
       ...tripJson(tr.feed, tr.trip, delay !== null ? { from: tr.next, diff: delay } : null),
       vehicle: { lat: tr.pos.lat, lon: tr.pos.lon, ...(tr.pos.bearing !== null ? { bearing: tr.pos.bearing } : {}) },
       vehicle_trip_index: tr.next,
+      ...(tr.pos.arrivals ? { arrived: tr.pos.arrivals.arrived } : {}),
       ...(tr.notStarted ? { not_started: true } : {}),
     };
   }

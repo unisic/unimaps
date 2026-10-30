@@ -257,9 +257,29 @@ export interface GetConnectionsOptions {
   minTransfer?: number;
   sortBy?: "departure" | "duration" | "arrival";
   limit?: number;
+  /** walk radius of a search from or to a point (`geo:`), metres */
+  walk?: number;
+  /** `time` is the latest arrival */
+  arriveBy?: boolean;
   signal?: AbortSignal;
   /** only "gzm" adds a param: BB keeps its original URL */
   city?: City;
+}
+
+/** A street, address or place from /api/geocode. */
+export interface GeoHit {
+  name: string;
+  /** street and town of a place, town of a street */
+  detail: string;
+  lat: number;
+  lon: number;
+}
+
+/** Address search for a connection origin. Throws on HTTP errors (404 = search off) and aborts. */
+export async function geocode(q: string, city: City, signal?: AbortSignal): Promise<GeoHit[]> {
+  const p = new URLSearchParams({ q });
+  if (city === "gzm") p.set("city", "gzm");
+  return (await fetchJSON<{ results: GeoHit[] }>(`/api/geocode?${p.toString()}`, { signal })).results;
 }
 
 export async function getConnections(
@@ -281,6 +301,8 @@ export async function getConnections(
     if (optionsOrTime.minTransfer != null) p.set("minTransfer", String(optionsOrTime.minTransfer));
     if (optionsOrTime.sortBy) p.set("sortBy", optionsOrTime.sortBy);
     if (optionsOrTime.limit != null) p.set("limit", String(optionsOrTime.limit));
+    if (optionsOrTime.walk != null) p.set("walk", String(optionsOrTime.walk));
+    if (optionsOrTime.arriveBy) p.set("arriveBy", "true");
     if (optionsOrTime.signal) signal = optionsOrTime.signal;
     if (optionsOrTime.city === "gzm") p.set("city", "gzm");
   }

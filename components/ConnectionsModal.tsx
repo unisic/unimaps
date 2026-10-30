@@ -5,6 +5,7 @@ import {
   ArrowRightIcon,
   ArrowsClockwiseIcon,
   ArrowsDownUpIcon,
+  BriefcaseIcon,
   BusIcon,
   CalendarBlankIcon,
   CaretDownIcon,
@@ -12,17 +13,23 @@ import {
   CaretUpIcon,
   CheckIcon,
   ClockIcon,
+  CrosshairIcon,
+  HouseIcon,
   LightningIcon,
+  MapPinIcon,
   MapTrifoldIcon,
   PathIcon,
+  PersonSimpleWalkIcon,
   ShieldCheckIcon,
 } from "@/components/icons";
-import { CloseIcon, ErrorState, IconButton, LineBadge, StarIcon } from "@/components/ui";
-import { getConnections, isWarming } from "@/lib/client/api";
+import { CHIP, chip, CHIP_OFF, CloseIcon, ErrorState, IconButton, LineBadge, StarIcon } from "@/components/ui";
+import { geocode, getConnections, isWarming, type GeoHit } from "@/lib/client/api";
 import { CityContext, GZM_LOADING } from "@/lib/client/city";
 import { useFavorites } from "@/lib/client/favorites";
 import {
   addMinutesToHHMM,
+  delayClass,
+  delayTxt,
   displayStopName,
   formatDayLabel,
   hhmmFromSecs,
@@ -33,28 +40,60 @@ import {
   todayISO,
 } from "@/lib/client/format";
 import { formatDistance, haversineMeters, nearestStops } from "@/lib/client/geo";
-import type { ConnectionItinerary, Stop } from "@/lib/client/types";
-import type { GeoPos } from "@/components/hooks";
+import { hasRoute, setPlace, toggleRoute, usePlaces, type Place, type PlaceSlot, type SavedRoute } from "@/lib/client/places";
+import type { ConnectionItinerary, Stop, Vehicle } from "@/lib/client/types";
+import { indexVehicles, legVehicle, transferAtRisk } from "@/lib/client/vehicleIndex";
+import { gzmStopKey } from "@/lib/shared/gzm-stop-key";
+import type { GeoPos, GeoStatus } from "@/components/hooks";
 
 export interface ConnectionsModalProps {
   open: boolean;
   onClose: () => void;
   stops: Stop[];
   geoPos: GeoPos | null;
+  geoStatus?: GeoStatus;
+  /** starts the location watch (from the "Moja lokalizacja" tap, a user gesture) */
+  onLocate?: () => void;
   initialFrom?: Stop | null;
   initialTo?: Stop | null;
   onSelectStop: (s: Stop) => void;
   onSelectConnection?: (conn: ConnectionItinerary, selectedLegIdx?: number | null) => void;
+  /** the live fleet of the city: current delays on today's legs */
+  vehicles?: readonly Vehicle[];
 }
 
-/* Chips: one height, one radius. "On" uses the same accent as a pressed IconButton. */
-const CHIP = "tap inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full text-[12px] font-medium";
-const CHIP_ON = "bg-primary-dim text-primary";
-const CHIP_OFF = "bg-white/6 text-text-mute hover:bg-white/10 hover:text-text";
-const chip = (on: boolean) => `${CHIP} px-3 ${on ? CHIP_ON : CHIP_OFF}`;
+/** walk radius of a search from a point, metres; the choice is kept per browser */
+const WALK_OPTIONS: readonly number[] = [400, 800, 1200];
+const WALK_DEFAULT = 800;
+const WALK_KEY = "kb:walkMax";
+const fmtWalk = (m: number) => (m < 1000 ? `${m} m` : `${(m / 1000).toLocaleString("pl-PL")} km`);
+function storedWalk(): number {
+  try {
+    const v = Number(window.localStorage.getItem(WALK_KEY));
+    return WALK_OPTIONS.includes(v) ? v : WALK_DEFAULT;
+  } catch {
+    return WALK_DEFAULT;
+  }
+}
 /** The one high-emphasis action of a view: neutral, inverted. */
 const CTA =
-  "tap inline-flex items-center justify-center gap-1.5 rounded-full bg-text px-4 font-medium text-bg hover:bg-white";
+  "tap inline-flex items-center justify-center gap-1.5 rounded-full bg-text px-4 font-medium text-bg hover:bg-tint";
+
+/** A search from or to a point: the rider's location (a snapshot of the first fix, "pending" until it
+ *  lands, origin only) or a searched address, which carries its label. */
+type GeoPoint = { lat: number; lon: number; label?: string };
+type GeoOrigin = GeoPoint | "pending" | null;
+// RFC 5870 geo URI; 4 decimals (~11 m) keep the server's memo warm and the trace coarse
+const geoParam = (p: GeoPoint) => `geo:${p.lat.toFixed(4)},${p.lon.toFixed(4)}`;
+/* a GPS point moves with the rider: only a stop or a named point is worth saving */
+const asPlace = (stop: Stop | null, geo: GeoOrigin): Place | null =>
+  geo ? (geo !== "pending" && geo.label ? { lat: geo.lat, lon: geo.lon, label: geo.label } : null) : stop ? { designator: stop.designator } : null;
+
+const PLACE_SLOTS = [
+  { slot: "home", label: "Dom", Icon: HouseIcon },
+  { slot: "work", label: "Praca", Icon: BriefcaseIcon },
+] as const;
+const SLOT_LABEL: Record<PlaceSlot, string> = { home: "Dom", work: "Praca" };
 
 /**
  * 24-Hour Time Input Component
@@ -120,7 +159,7 @@ function TimeInput24H({
   };
 
   return (
-    <div className="flex h-8 items-center rounded-full bg-white/6 px-3 text-text transition-colors focus-within:bg-white/10 focus-within:ring-1 focus-within:ring-primary/50">
+    <div className="flex h-8 items-center rounded-full bg-tint/6 px-3 text-text transition-colors focus-within:bg-tint/10 focus-within:ring-1 focus-within:ring-primary/50">
       <input
         ref={hourRef}
         type="text"
@@ -159,13 +198,22 @@ function ConnectionsDialog({
   onClose,
   stops,
   geoPos,
+  geoStatus,
+  onLocate,
   initialFrom,
   initialTo,
   onSelectStop,
   onSelectConnection,
+  vehicles,
 }: Omit<ConnectionsModalProps, "open">) {
+  const vix = useMemo(() => indexVehicles(vehicles), [vehicles]);
   const [fromStop, setFromStop] = useState<Stop | null>(initialFrom ?? null);
+  const [fromGeo, setFromGeo] = useState<GeoOrigin>(null);
+  // the first fix after "Moja lokalizacja" becomes the origin; later fixes don't re-search
+  if (fromGeo === "pending" && geoPos) setFromGeo({ lat: geoPos.lat, lon: geoPos.lon });
   const [toStop, setToStop] = useState<Stop | null>(initialTo ?? null);
+  const [toGeo, setToGeo] = useState<GeoPoint | null>(null);
+  const hasTo = !!(toStop || toGeo);
   const [fromQuery, setFromQuery] = useState("");
   const [toQuery, setToQuery] = useState("");
   const [activeInput, setActiveInput] = useState<"from" | "to" | null>(
@@ -181,6 +229,8 @@ function ConnectionsDialog({
 
   // 24-hour time selection state
   const [timeMode, setTimeMode] = useState<"now" | "custom">("now");
+  /* the time is the latest arrival */
+  const [arriveBy, setArriveBy] = useState(false);
   const [hour, setHour] = useState(() => nowHHMM().split(":")[0]);
   const [minute, setMinute] = useState(() => nowHHMM().split(":")[1]);
 
@@ -188,6 +238,7 @@ function ConnectionsDialog({
   const [directOnly, setDirectOnly] = useState(false);
   const [minTransfer5, setMinTransfer5] = useState(false);
   const [sortBy, setSortBy] = useState<"departure" | "duration">("departure");
+  const [walkM, setWalkM] = useState(storedWalk);
 
   const [connections, setConnections] = useState<ConnectionItinerary[] | null>(null);
   /* "warming": the server is still loading the GZM data (503) */
@@ -200,9 +251,20 @@ function ConnectionsDialog({
   const toInputRef = useRef<HTMLInputElement>(null);
 
   const { favs, favSet } = useFavorites();
+  const places = usePlaces(city);
+  // "Dom"/"Praca" waiting for the stop or address the next pick names
+  const [assign, setAssign] = useState<PlaceSlot | null>(null);
+  if (assign && !activeInput) setAssign(null);
+
+  /* GZM names every pole ("Katowice Dworzec 01" .. "10"): the search lists the stop once and the
+     router departs from any of its poles; each result names the pole it leaves from */
+  const stopLabel = useCallback((name: string) => (city === "gzm" ? gzmStopKey(name) : name), [city]);
 
   // Pre-normalized stop lookup index
-  const stopIndex = useMemo(() => stops.map((s) => ({ s, n: normalizeText(s.name) })), [stops]);
+  const stopIndex = useMemo(
+    () => stops.map((s) => ({ s, n: normalizeText(s.name), k: normalizeText(stopLabel(s.name)) })),
+    [stops, stopLabel],
+  );
   const byDesig = useMemo(() => {
     const m = new Map<string, Stop>();
     for (const s of stops) m.set(s.designator, s);
@@ -239,13 +301,16 @@ function ConnectionsDialog({
     return formatDayLabel(selectedDate, todayStr);
   }, [dateMode, selectedDate, todayStr]);
 
+  const fromParam = fromGeo && fromGeo !== "pending" ? geoParam(fromGeo) : fromStop ? fromStop.id || fromStop.name : null;
+  const toParam = toGeo ? geoParam(toGeo) : toStop ? toStop.id || toStop.name : null;
+
+  const walkParam = fromParam?.startsWith("geo:") || toGeo ? walkM : undefined;
+
   // Async connection fetcher
   useEffect(() => {
-    if (!fromStop || !toStop || effectiveTimeParam === null) return;
+    if (!fromParam || !toParam || effectiveTimeParam === null) return;
     const ac = new AbortController();
     let cancelled = false;
-    const fromParam = fromStop.id || fromStop.name;
-    const toParam = toStop.id || toStop.name;
 
     (async () => {
       try {
@@ -256,6 +321,8 @@ function ConnectionsDialog({
           directOnly,
           minTransfer: minTransfer5 ? 5 : undefined,
           sortBy,
+          walk: walkParam,
+          arriveBy: arriveBy && !!effectiveTimeParam,
           signal: ac.signal,
           city,
         });
@@ -275,14 +342,16 @@ function ConnectionsDialog({
       ac.abort();
     };
   }, [
-    fromStop,
-    toStop,
+    fromParam,
+    toParam,
     effectiveTimeParam,
+    arriveBy,
     selectedDate,
     effectiveDayLabel,
     directOnly,
     minTransfer5,
     sortBy,
+    walkParam,
     searchTick,
     city,
   ]);
@@ -294,24 +363,32 @@ function ConnectionsDialog({
   }, []);
 
   const handleSwap = useCallback(() => {
+    if (fromGeo === "pending") return;
     setFromStop(toStop);
+    setFromGeo(toGeo);
     setToStop(fromStop);
+    setToGeo(fromGeo);
     setFromQuery("");
     setToQuery("");
     setActiveInput(null);
     setConnections(null);
     setConnErr(false);
     setExpandedIdx(null);
-  }, [fromStop, toStop]);
+  }, [fromStop, toStop, fromGeo, toGeo]);
 
   const handlePickStop = useCallback(
     (s: Stop, target: "from" | "to") => {
+      if (assign) {
+        setPlace(city, assign, { designator: s.designator });
+        setAssign(null);
+      }
       if (target === "from") {
         setFromStop(s);
+        setFromGeo(null);
         setFromQuery("");
         setConnections(null);
         setConnErr(false);
-        if (!toStop) {
+        if (!hasTo) {
           setActiveInput("to");
           setTimeout(() => toInputRef.current?.focus(), 50);
         } else {
@@ -319,14 +396,112 @@ function ConnectionsDialog({
         }
       } else {
         setToStop(s);
+        setToGeo(null);
         setToQuery("");
         setConnections(null);
         setConnErr(false);
         setActiveInput(null);
       }
     },
-    [toStop],
+    [hasTo, assign, city],
   );
+
+  const pickOrigin = useCallback((origin: GeoOrigin) => {
+    if (assign && origin && origin !== "pending") {
+      setPlace(city, assign, { lat: origin.lat, lon: origin.lon, label: origin.label ?? "Zapisana lokalizacja" });
+      setAssign(null);
+    }
+    setFromGeo(origin);
+    setFromStop(null);
+    setFromQuery("");
+    setConnections(null);
+    setConnErr(false);
+    if (!hasTo) {
+      setActiveInput("to");
+      setTimeout(() => toInputRef.current?.focus(), 50);
+    } else {
+      setActiveInput(null);
+    }
+  }, [hasTo, assign, city]);
+
+  const pickDest = useCallback((dest: Required<GeoPoint>) => {
+    if (assign) {
+      setPlace(city, assign, dest);
+      setAssign(null);
+    }
+    setToGeo(dest);
+    setToStop(null);
+    setToQuery("");
+    setConnections(null);
+    setConnErr(false);
+    setActiveInput(null);
+  }, [assign, city]);
+
+  const placeStop = (p: Place): Stop | null => ("designator" in p ? (byDesig.get(p.designator) ?? null) : null);
+  const placeName = (p: Place) =>
+    "designator" in p ? displayStopName(stopLabel(byDesig.get(p.designator)?.name ?? "")) : p.label;
+  const applyPlace = (p: Place, target: "from" | "to", name: string) => {
+    if (!("designator" in p)) {
+      const pt = { lat: p.lat, lon: p.lon, label: name };
+      return target === "from" ? pickOrigin(pt) : pickDest(pt);
+    }
+    const s = placeStop(p);
+    if (s) handlePickStop(s, target);
+  };
+  const applyRoute = (from: Place, to: Place, fromName: string, toName: string) => {
+    const f = placeStop(from);
+    const t = placeStop(to);
+    if (("designator" in from && !f) || ("designator" in to && !t)) return;
+    setFromStop(f);
+    setFromGeo("designator" in from ? null : { lat: from.lat, lon: from.lon, label: fromName });
+    setToStop(t);
+    setToGeo("designator" in to ? null : { lat: to.lat, lon: to.lon, label: toName });
+    setFromQuery("");
+    setToQuery("");
+    setActiveInput(null);
+    setConnections(null);
+    setConnErr(false);
+    setExpandedIdx(null);
+  };
+  const curFrom = asPlace(fromStop, fromGeo);
+  const curTo = asPlace(toStop, toGeo);
+  const curRoute: SavedRoute | null = curFrom && curTo ? { from: curFrom, to: curTo } : null;
+  const quickRoutes: { key: string; from: Place; to: Place; label: string; fromName: string; toName: string }[] = [];
+  if (places.home && places.work) {
+    quickRoutes.push({ key: "hw", from: places.home, to: places.work, label: "Dom → Praca", fromName: "Dom", toName: "Praca" });
+    quickRoutes.push({ key: "wh", from: places.work, to: places.home, label: "Praca → Dom", fromName: "Praca", toName: "Dom" });
+  }
+  for (const r of places.routes) {
+    const fromName = placeName(r.from);
+    const toName = placeName(r.to);
+    quickRoutes.push({ key: JSON.stringify(r), from: r.from, to: r.to, label: `${fromName} → ${toName}`, fromName, toName });
+  }
+
+  const handlePickGeo = useCallback(() => {
+    if (!geoPos) onLocate?.();
+    pickOrigin(geoPos ? { lat: geoPos.lat, lon: geoPos.lon } : "pending");
+  }, [geoPos, onLocate, pickOrigin]);
+
+  // address search, one request per typing pause; a failure just lists no addresses
+  const addrQuery = (activeInput === "from" ? fromQuery : activeInput === "to" ? toQuery : "").replace(/\s+/g, " ").trim();
+  const [addr, setAddr] = useState<{ q: string; hits: GeoHit[] } | null>(null);
+  useEffect(() => {
+    if (addrQuery.length < 3) return;
+    const ac = new AbortController();
+    const t = setTimeout(() => {
+      geocode(addrQuery, city, ac.signal).then(
+        (hits) => setAddr({ q: addrQuery, hits }),
+        () => {
+          if (!ac.signal.aborted) setAddr({ q: addrQuery, hits: [] });
+        },
+      );
+    }, 350);
+    return () => {
+      clearTimeout(t);
+      ac.abort();
+    };
+  }, [addrQuery, city]);
+  const addrHits = addr && addr.q === addrQuery ? addr.hits : [];
 
   const handlePickToday = useCallback(() => {
     setDateMode("today");
@@ -365,16 +540,20 @@ function ConnectionsDialog({
 
   const handleEarlierConnections = useCallback(() => {
     if (!connections || connections.length === 0) return;
+    // arrive-by: arriving by a minute before the earliest arrival shown, the same day
+    if (arriveBy) return searchFrom(selectedDate, Math.max(0, Math.min(...connections.map((c) => c.arrivalSecs)) - 60));
     const first = leaves(connections.reduce((a, b) => (b.departureSecs < a.departureSecs ? b : a)));
     const secs = first.secs - 3600;
     const prevDay = offsetDateISO(first.date, -1);
     if (secs >= 0) searchFrom(first.date, secs);
     else if (prevDay >= todayStr) searchFrom(prevDay, secs + 86400);
     else searchFrom(first.date, 0);
-  }, [connections, leaves, searchFrom, todayStr]);
+  }, [connections, leaves, searchFrom, todayStr, arriveBy, selectedDate]);
 
+  // later ones are departures after the last one shown, also after an arrive-by search
   const handleLaterConnections = useCallback(() => {
     if (!connections || connections.length === 0) return;
+    setArriveBy(false);
     const last = leaves(connections.reduce((a, b) => (b.departureSecs > a.departureSecs ? b : a)));
     const secs = last.secs + 60;
     if (secs < 86400) searchFrom(last.date, secs);
@@ -413,6 +592,23 @@ function ConnectionsDialog({
     [timeMode, hour, minute],
   );
 
+  const handleArriveBy = useCallback(
+    (on: boolean) => {
+      // an unchanged search would never refetch, the list must not drop to a skeleton
+      if (on === arriveBy) return;
+      setArriveBy(on);
+      // arriving "now" means nothing: an hour ahead to start from
+      if (on && timeMode === "now") {
+        const [h, m] = addMinutesToHHMM(nowHHMM(), 60).split(":");
+        setHour(h);
+        setMinute(m);
+        setTimeMode("custom");
+      }
+      setConnections(null);
+    },
+    [timeMode, arriveBy],
+  );
+
   const handleTimeBlur = useCallback(() => {
     let h = parseInt(hour, 10);
     let m = parseInt(minute, 10);
@@ -425,7 +621,8 @@ function ConnectionsDialog({
     setTimeMode("custom");
   }, [hour, minute]);
 
-  const loading = connections === null && !connErr && !!fromStop && !!toStop;
+  const loading = connections === null && !connErr && !!fromParam && !!toParam;
+  const geoFailed = geoStatus === "denied" || geoStatus === "error";
 
   // Suggestions for currently active input (deduplicated by stop display name)
   const suggestions = useMemo(() => {
@@ -441,10 +638,10 @@ function ConnectionsDialog({
       for (const desig of favs) {
         const s = byDesig.get(desig);
         if (s) {
-          const key = normalizeText(s.name);
+          const key = normalizeText(stopLabel(s.name));
           if (!seenNames.has(key)) {
             seenNames.add(key);
-            list.push({ s, label: s.name, fav: true, dist: stopDist(s) });
+            list.push({ s, label: stopLabel(s.name), fav: true, dist: stopDist(s) });
           }
         }
       }
@@ -452,10 +649,10 @@ function ConnectionsDialog({
       if (geoPos) {
         const nearest = nearestStops(stops, geoPos, 12);
         for (const { s, dist } of nearest) {
-          const key = normalizeText(s.name);
+          const key = normalizeText(stopLabel(s.name));
           if (!seenNames.has(key)) {
             seenNames.add(key);
-            list.push({ s, label: s.name, fav: favSet.has(s.designator), dist });
+            list.push({ s, label: stopLabel(s.name), fav: favSet.has(s.designator), dist });
           }
         }
       }
@@ -464,9 +661,9 @@ function ConnectionsDialog({
 
     // Match query
     const hits: Array<{ s: Stop; rank: number; dist: number | null }> = [];
-    for (const { s, n } of stopIndex) {
+    for (const { s, n, k } of stopIndex) {
       let rank = -1;
-      if (n === q) rank = 0;
+      if (n === q || k === q) rank = 0;
       else if (n.startsWith(q)) rank = 1;
       else if (n.includes(q)) rank = 3;
       if (rank < 0) continue;
@@ -479,19 +676,19 @@ function ConnectionsDialog({
     const deduped: Array<{ s: Stop; label: string; fav: boolean; dist: number | null }> = [];
     const seenNames = new Set<string>();
     for (const h of hits) {
-      const key = normalizeText(h.s.name);
+      const key = normalizeText(stopLabel(h.s.name));
       if (seenNames.has(key)) continue;
       seenNames.add(key);
       deduped.push({
         s: h.s,
-        label: h.s.name,
+        label: stopLabel(h.s.name),
         fav: favSet.has(h.s.designator),
         dist: h.dist,
       });
       if (deduped.length >= 10) break;
     }
     return deduped;
-  }, [activeInput, fromQuery, toQuery, geoPos, favs, favSet, byDesig, stops, stopIndex]);
+  }, [activeInput, fromQuery, toQuery, geoPos, favs, favSet, byDesig, stops, stopIndex, stopLabel]);
 
   return (
     <div
@@ -523,16 +720,24 @@ function ConnectionsDialog({
           <div className="flex items-center gap-2">
             <div className="min-w-0 flex-1 space-y-2">
               {/* FROM input */}
-              <div className="relative flex h-11 items-center rounded-xl bg-white/6 pl-3.5 pr-1.5 transition-colors focus-within:bg-white/10 focus-within:ring-1 focus-within:ring-primary/50">
+              <div className="relative flex h-11 items-center rounded-xl bg-tint/6 pl-3.5 pr-1.5 transition-colors focus-within:bg-tint/10 focus-within:ring-1 focus-within:ring-primary/50">
                 <span className="mr-3 h-2 w-2 shrink-0 rounded-full bg-good" aria-hidden />
                 <input
                   ref={fromInputRef}
                   type="text"
-                  placeholder="Skąd: przystanek początkowy…"
-                  value={fromStop && activeInput !== "from" ? displayStopName(fromStop.name) : fromQuery}
+                  placeholder="Skąd: przystanek lub adres…"
+                  value={
+                    activeInput === "from"
+                      ? fromQuery
+                      : fromGeo
+                        ? (fromGeo !== "pending" && fromGeo.label) || "Moja lokalizacja"
+                        : fromStop
+                          ? displayStopName(stopLabel(fromStop.name))
+                          : fromQuery
+                  }
                   onFocus={() => {
                     setActiveInput("from");
-                    if (fromStop) setFromQuery(fromStop.name);
+                    if (fromStop) setFromQuery(stopLabel(fromStop.name));
                   }}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && suggestions.length > 0) {
@@ -542,25 +747,27 @@ function ConnectionsDialog({
                   }}
                   onChange={(e) => {
                     setFromQuery(e.target.value);
-                    if (fromStop) {
+                    if (fromStop || fromGeo) {
                       setFromStop(null);
+                      setFromGeo(null);
                       setConnections(null);
                     }
                   }}
                   className="w-full min-w-0 bg-transparent text-base font-medium text-text outline-none ring-0 placeholder:font-normal placeholder:text-text-faint focus:outline-none focus:ring-0 focus-visible:outline-none md:text-[14px]"
                 />
-                {(fromStop || fromQuery) && (
+                {(fromStop || fromGeo || fromQuery) && (
                   <button
                     type="button"
                     aria-label="Wyczyść przystanek początkowy"
                     onClick={() => {
                       setFromStop(null);
+                      setFromGeo(null);
                       setFromQuery("");
                       setConnections(null);
                       setActiveInput("from");
                       fromInputRef.current?.focus();
                     }}
-                    className="tap grid h-8 w-8 shrink-0 place-items-center rounded-full text-[14px] text-text-faint hover:bg-white/8 hover:text-text"
+                    className="tap grid h-8 w-8 shrink-0 place-items-center rounded-full text-[14px] text-text-faint hover:bg-tint/8 hover:text-text"
                   >
                     <CloseIcon />
                   </button>
@@ -568,16 +775,24 @@ function ConnectionsDialog({
               </div>
 
               {/* TO input */}
-              <div className="relative flex h-11 items-center rounded-xl bg-white/6 pl-3.5 pr-1.5 transition-colors focus-within:bg-white/10 focus-within:ring-1 focus-within:ring-primary/50">
+              <div className="relative flex h-11 items-center rounded-xl bg-tint/6 pl-3.5 pr-1.5 transition-colors focus-within:bg-tint/10 focus-within:ring-1 focus-within:ring-primary/50">
                 <span className="mr-3 h-2 w-2 shrink-0 rounded-full bg-primary" aria-hidden />
                 <input
                   ref={toInputRef}
                   type="text"
-                  placeholder="Dokąd: przystanek docelowy…"
-                  value={toStop && activeInput !== "to" ? displayStopName(toStop.name) : toQuery}
+                  placeholder="Dokąd: przystanek lub adres…"
+                  value={
+                    activeInput === "to"
+                      ? toQuery
+                      : toGeo
+                        ? toGeo.label || "Moja lokalizacja"
+                        : toStop
+                          ? displayStopName(stopLabel(toStop.name))
+                          : toQuery
+                  }
                   onFocus={() => {
                     setActiveInput("to");
-                    if (toStop) setToQuery(toStop.name);
+                    if (toStop) setToQuery(stopLabel(toStop.name));
                   }}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && suggestions.length > 0) {
@@ -587,25 +802,27 @@ function ConnectionsDialog({
                   }}
                   onChange={(e) => {
                     setToQuery(e.target.value);
-                    if (toStop) {
+                    if (toStop || toGeo) {
                       setToStop(null);
+                      setToGeo(null);
                       setConnections(null);
                     }
                   }}
                   className="w-full min-w-0 bg-transparent text-base font-medium text-text outline-none ring-0 placeholder:font-normal placeholder:text-text-faint focus:outline-none focus:ring-0 focus-visible:outline-none md:text-[14px]"
                 />
-                {(toStop || toQuery) && (
+                {(toStop || toGeo || toQuery) && (
                   <button
                     type="button"
                     aria-label="Wyczyść przystanek docelowy"
                     onClick={() => {
                       setToStop(null);
+                      setToGeo(null);
                       setToQuery("");
                       setConnections(null);
                       setActiveInput("to");
                       toInputRef.current?.focus();
                     }}
-                    className="tap grid h-8 w-8 shrink-0 place-items-center rounded-full text-[14px] text-text-faint hover:bg-white/8 hover:text-text"
+                    className="tap grid h-8 w-8 shrink-0 place-items-center rounded-full text-[14px] text-text-faint hover:bg-tint/8 hover:text-text"
                   >
                     <CloseIcon />
                   </button>
@@ -619,7 +836,8 @@ function ConnectionsDialog({
               aria-label="Zamień kierunki"
               title="Zamień kierunki"
               onClick={handleSwap}
-              className="tap grid h-11 w-11 shrink-0 place-items-center rounded-full bg-white/6 text-[18px] text-text-mute hover:bg-white/10 hover:text-text"
+              disabled={fromGeo === "pending"}
+              className="tap grid h-11 w-11 shrink-0 place-items-center rounded-full bg-tint/6 text-[18px] text-text-mute hover:bg-tint/10 hover:text-text disabled:opacity-40"
             >
               <ArrowsDownUpIcon />
             </button>
@@ -675,9 +893,21 @@ function ConnectionsDialog({
           {/* 24-Hour Time selection row */}
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex flex-wrap items-center gap-1.5">
-              <span className="w-[52px] shrink-0 text-[12px] text-text-faint">Odjazd:</span>
+              <span className="w-[52px] shrink-0 text-[12px] text-text-faint">Czas:</span>
+              <button type="button" onClick={() => handleArriveBy(false)} className={chip(!arriveBy)} aria-pressed={!arriveBy}>
+                Odjazd
+              </button>
+              <button
+                type="button"
+                onClick={() => handleArriveBy(true)}
+                className={chip(arriveBy)}
+                aria-pressed={arriveBy}
+                title="Połączenia z przyjazdem najpóźniej o wybranej godzinie"
+              >
+                Przyjazd
+              </button>
 
-              {dateMode === "today" && (
+              {dateMode === "today" && !arriveBy && (
                 <button type="button" onClick={handleSetNow} className={chip(timeMode === "now")}>
                   Teraz
                 </button>
@@ -723,12 +953,12 @@ function ConnectionsDialog({
               </button>
             </div>
 
-            {fromStop && toStop && (
+            {fromParam && toParam && (
               <button
                 type="button"
                 onClick={handleRefresh}
                 disabled={loading}
-                className={`${CHIP} bg-white/8 px-3 text-text hover:bg-white/12 disabled:opacity-50`}
+                className={`${CHIP} bg-tint/8 px-3 text-text hover:bg-tint/12 disabled:opacity-50`}
               >
                 <ArrowsClockwiseIcon className="text-[14px]" />
                 {loading ? "Szukanie…" : "Odśwież"}
@@ -796,6 +1026,33 @@ function ConnectionsDialog({
               <span>{sortBy === "duration" ? "Najszybsza trasa" : "Wg odjazdu"}</span>
             </button>
           </div>
+
+          {(fromGeo || toGeo) && (
+            <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Jak daleko do przystanku">
+              <span className="w-[52px] shrink-0 text-[12px] text-text-faint">Dojście:</span>
+              {WALK_OPTIONS.map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => {
+                    setWalkM(m);
+                    setConnections(null);
+                    try {
+                      window.localStorage.setItem(WALK_KEY, String(m));
+                    } catch {
+                      /* private mode: the choice lasts for this modal only */
+                    }
+                  }}
+                  className={chip(walkM === m)}
+                  aria-pressed={walkM === m}
+                  title={`Przystanki do ${fmtWalk(m)} w linii prostej`}
+                >
+                  <PersonSimpleWalkIcon className="text-[14px]" weight={walkM === m ? "fill" : "bold"} />
+                  <span>do {fmtWalk(m)}</span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Modal body */}
@@ -804,10 +1061,66 @@ function ConnectionsDialog({
           {activeInput ? (
             <div>
               <p className="mb-1.5 px-1 text-[12px] font-medium text-text-faint">
-                {activeInput === "from" ? "Wybierz przystanek początkowy" : "Wybierz przystanek docelowy"}
+                {assign
+                  ? `Ustaw: ${SLOT_LABEL[assign]}. Wybierz ${activeInput === "from" ? "przystanek, adres lub lokalizację" : "przystanek lub adres"}`
+                  : activeInput === "from"
+                    ? "Wybierz przystanek początkowy"
+                    : "Wybierz przystanek docelowy"}
               </p>
+              {!(activeInput === "from" ? fromQuery : toQuery).trim() &&
+                PLACE_SLOTS.map(({ slot, label, Icon }) => {
+                  const p = places[slot];
+                  const setting = assign === slot;
+                  return (
+                    <div key={slot} className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => (p && !setting ? applyPlace(p, activeInput, label) : setAssign(setting ? null : slot))}
+                        className="flex min-h-11 min-w-0 flex-1 items-center gap-3 rounded-xl px-3 py-2 text-left transition-colors hover:bg-tint/6 active:bg-tint/10"
+                      >
+                        <Icon className="w-4 shrink-0 text-[15px] text-primary" weight={p ? "fill" : "bold"} aria-hidden />
+                        <span className="min-w-0">
+                          <span className="block truncate text-[14px] text-text">{label}</span>
+                          <span className="block truncate text-[12px] text-text-faint">
+                            {setting ? "Wybierz poniżej" : p ? placeName(p) : "Dotknij, aby ustawić"}
+                          </span>
+                        </span>
+                      </button>
+                      {p && (
+                        <button
+                          type="button"
+                          onClick={() => setAssign(setting ? null : slot)}
+                          aria-pressed={setting}
+                          className={chip(setting)}
+                        >
+                          {setting ? "Anuluj" : "Zmień"}
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              {activeInput === "from" && onLocate && !fromQuery.trim() && (!assign || geoPos) && (
+                <button
+                  type="button"
+                  onClick={handlePickGeo}
+                  className="flex min-h-11 w-full items-center gap-3 rounded-xl px-3 py-2 text-left transition-colors hover:bg-tint/6 active:bg-tint/10"
+                >
+                  <CrosshairIcon className="w-4 shrink-0 text-[15px] text-primary" weight="bold" aria-hidden />
+                  <span className="min-w-0">
+                    <span className="block truncate text-[14px] text-text">Moja lokalizacja</span>
+                    <span className="block text-[12px] text-text-faint">
+                      {geoStatus === "denied"
+                        ? "Brak zgody na lokalizację w przeglądarce"
+                        : `Ze wszystkich przystanków do ${fmtWalk(walkM)} od Ciebie`}
+                    </span>
+                  </span>
+                </button>
+              )}
               {suggestions.length === 0 ? (
-                <p className="py-8 text-center text-[13px] text-text-faint">Nie znaleziono pasujących przystanków.</p>
+                (activeInput === "from" ? fromQuery : toQuery).trim() &&
+                addrHits.length === 0 && (
+                  <p className="py-8 text-center text-[13px] text-text-faint">Nie znaleziono pasujących przystanków.</p>
+                )
               ) : (
                 <ul>
                   {suggestions.map((item) => (
@@ -815,13 +1128,13 @@ function ConnectionsDialog({
                       <button
                         type="button"
                         onClick={() => handlePickStop(item.s, activeInput)}
-                        className="flex min-h-11 w-full items-center justify-between rounded-xl px-3 py-2 text-left transition-colors hover:bg-white/6 active:bg-white/10"
+                        className="flex min-h-11 w-full items-center justify-between rounded-xl px-3 py-2 text-left transition-colors hover:bg-tint/6 active:bg-tint/10"
                       >
                         <span className="flex min-w-0 items-center gap-3">
                           <span className="grid w-4 shrink-0 place-items-center text-[14px] text-primary" aria-hidden>
-                            {item.fav ? <StarIcon filled /> : <span className="h-1.5 w-1.5 rounded-full bg-white/25" />}
+                            {item.fav ? <StarIcon filled /> : <span className="h-1.5 w-1.5 rounded-full bg-tint/25" />}
                           </span>
-                          <span className="truncate text-[14px] text-text">{displayStopName(item.s.name)}</span>
+                          <span className="truncate text-[14px] text-text">{displayStopName(item.label)}</span>
                         </span>
                         {item.dist != null && (
                           <span className="ml-2 shrink-0 text-[12px] tabular-nums text-text-faint">
@@ -833,12 +1146,54 @@ function ConnectionsDialog({
                   ))}
                 </ul>
               )}
+              {addrHits.length > 0 && (
+                <>
+                  <p className="mb-1.5 mt-3 px-1 text-[12px] font-medium text-text-faint">
+                    Adresy i miejsca (OpenStreetMap)
+                  </p>
+                  <ul>
+                    {addrHits.map((h) => (
+                      <li key={`${h.lat},${h.lon}`}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const pt = { lat: h.lat, lon: h.lon, label: h.detail ? `${h.name}, ${h.detail}` : h.name };
+                            if (activeInput === "from") pickOrigin(pt);
+                            else pickDest(pt);
+                          }}
+                          className="flex min-h-11 w-full items-center gap-3 rounded-xl px-3 py-2 text-left transition-colors hover:bg-tint/6 active:bg-tint/10"
+                        >
+                          <MapPinIcon className="w-4 shrink-0 text-[15px] text-text-faint" aria-hidden />
+                          <span className="min-w-0">
+                            <span className="block truncate text-[14px] text-text">{h.name}</span>
+                            {h.detail && <span className="block truncate text-[12px] text-text-faint">{h.detail}</span>}
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+            </div>
+          ) : fromGeo === "pending" && hasTo ? (
+            <div className="px-4 py-10 text-center animate-fade">
+              <span className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-tint/5 text-[22px] text-text-faint">
+                <CrosshairIcon />
+              </span>
+              <p className="mt-3 text-[14px] font-medium text-text">
+                {geoFailed ? "Brak lokalizacji" : "Ustalanie Twojej lokalizacji…"}
+              </p>
+              {geoFailed && (
+                <p className="mx-auto mt-1 max-w-sm text-[13px] text-text-mute">
+                  Zezwól na lokalizację w przeglądarce albo wybierz przystanek początkowy.
+                </p>
+              )}
             </div>
           ) : loading ? (
             /* Loading skeletons, shaped like the result cards */
             <div aria-hidden className="space-y-2.5">
               {[1, 2, 3].map((i) => (
-                <div key={i} className="space-y-3 rounded-xl bg-white/4 p-3.5">
+                <div key={i} className="space-y-3 rounded-xl bg-tint/4 p-3.5">
                   <div className="flex items-center justify-between">
                     <div className="skeleton h-5 w-32" />
                     <div className="skeleton h-5 w-20 rounded-full" />
@@ -858,7 +1213,7 @@ function ConnectionsDialog({
           ) : connections ? (
             connections.length === 0 ? (
               <div className="px-4 py-10 text-center animate-fade">
-                <span className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-white/5 text-[22px] text-text-faint">
+                <span className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-tint/5 text-[22px] text-text-faint">
                   <BusIcon />
                 </span>
                 <div className="mt-3">
@@ -868,7 +1223,13 @@ function ConnectionsDialog({
                   <p className="mx-auto mt-1 max-w-sm text-[13px] text-text-mute">
                     {directOnly
                       ? "W rozkładzie nie ma bezpośredniego autobusu na wybraną godzinę. Spróbuj wyłączyć filtr, aby zobaczyć połączenia z przesiadką."
-                      : dateMode === "today"
+                      : fromGeo
+                        ? `Z przystanków do ${fmtWalk(walkM)} od ${fromGeo !== "pending" && fromGeo.label ? "tego miejsca" : "Ciebie"} nie ma połączenia na wybraną godzinę.`
+                        : toGeo
+                        ? `Do przystanków do ${fmtWalk(walkM)} od celu nie ma połączenia na wybraną godzinę.`
+                        : arriveBy
+                        ? `Brak połączeń z przyjazdem do ${hour}:${minute} tego dnia.`
+                        : dateMode === "today"
                         ? timeMode === "now"
                           ? "Brak dalszych kursów na dziś. Sprawdź połączenia na jutro."
                           : `Brak dalszych kursów na dziś od godziny ${hour}:${minute}. Sprawdź połączenia na jutro.`
@@ -892,7 +1253,7 @@ function ConnectionsDialog({
                     <button
                       type="button"
                       onClick={handlePickTomorrow}
-                      className="tap inline-flex h-9 items-center rounded-full bg-white/8 px-4 text-[13px] font-medium text-text hover:bg-white/12"
+                      className="tap inline-flex h-9 items-center rounded-full bg-tint/8 px-4 text-[13px] font-medium text-text hover:bg-tint/12"
                     >
                       Szukaj na jutro
                     </button>
@@ -905,7 +1266,22 @@ function ConnectionsDialog({
                   <p className="text-[12px] font-medium text-text-faint">
                     Znalezione połączenia ({connections.length})
                   </p>
-                  <span className="text-[12px] text-text-mute">{effectiveDayLabel}</span>
+                  <div className="flex items-center gap-2">
+                    {curRoute && (
+                      <button
+                        type="button"
+                        onClick={() => toggleRoute(city, curRoute)}
+                        aria-pressed={hasRoute(places, curRoute)}
+                        className={`${chip(hasRoute(places, curRoute))} text-[12px]`}
+                      >
+                        <span className="text-[13px]">
+                          <StarIcon filled={hasRoute(places, curRoute)} />
+                        </span>
+                        <span>{hasRoute(places, curRoute) ? "Zapisana trasa" : "Zapisz trasę"}</span>
+                      </button>
+                    )}
+                    <span className="text-[12px] text-text-mute">{effectiveDayLabel}</span>
+                  </div>
                 </div>
 
                 {/* Earlier connections button */}
@@ -924,11 +1300,16 @@ function ConnectionsDialog({
                   const isExpanded = expandedIdx === idx;
                   const isDirect = conn.type === "direct";
                   const dayBadge = conn.dayLabel || effectiveDayLabel;
+                  const startPole = conn.legs[0]?.fromStopName ?? "";
+                  // the exact pole when the search named a whole stop (GZM) or a location
+                  const showPole =
+                    !!fromGeo || (!!fromStop && normalizeText(startPole) !== normalizeText(stopLabel(fromStop.name)));
+                  const delays = conn.legs.map((l) => legVehicle(l, conn.date, vix)?.delay ?? null);
 
                   return (
                     <div
                       key={`${conn.departureTime}-${conn.arrivalTime}-${idx}`}
-                      className="rounded-xl bg-white/4 p-3.5"
+                      className="rounded-xl bg-tint/4 p-3.5"
                     >
                       {/* Summary row */}
                       <div className="flex items-start justify-between gap-3">
@@ -954,7 +1335,7 @@ function ConnectionsDialog({
                             {dayBadge} · <span className="tabular-nums">{conn.totalDurationMins} min</span>
                           </p>
                         </div>
-                        <span className="shrink-0 rounded-full bg-white/6 px-2.5 py-1 text-[12px] font-medium text-text-mute">
+                        <span className="shrink-0 rounded-full bg-tint/6 px-2.5 py-1 text-[12px] font-medium text-text-mute">
                           {isDirect
                             ? "Bezpośredni"
                             : `${conn.transfersCount} ${conn.transfersCount === 1 ? "przesiadka" : "przesiadki"}`}
@@ -970,9 +1351,45 @@ function ConnectionsDialog({
                             <span className="max-w-[140px] truncate text-[13px] text-text-mute">
                               {displayStopName(leg.headsign)}
                             </span>
+                            {delays[lIdx] != null && (
+                              <span className={`shrink-0 text-[12px] font-medium tabular-nums ${delayClass(delays[lIdx])}`}>
+                                {delayTxt(delays[lIdx])}
+                              </span>
+                            )}
                           </div>
                         ))}
                       </div>
+
+                      {showPole && (
+                        <p className="mt-2 flex items-center gap-1.5 text-[12px] text-text-faint">
+                          {conn.accessWalkMins ? (
+                            <>
+                              <PersonSimpleWalkIcon className="shrink-0 text-[13px]" aria-hidden />
+                              <span>
+                                {conn.accessWalkMins} min pieszo do{" "}
+                                <span className="font-medium text-text-mute">{displayStopName(startPole)}</span>
+                              </span>
+                            </>
+                          ) : (
+                            <span>
+                              Odjazd z: <span className="font-medium text-text-mute">{displayStopName(startPole)}</span>
+                            </span>
+                          )}
+                        </p>
+                      )}
+
+                      {conn.egressWalkMins ? (
+                        <p className="mt-1 flex items-center gap-1.5 text-[12px] text-text-faint">
+                          <PersonSimpleWalkIcon className="shrink-0 text-[13px]" aria-hidden />
+                          <span>
+                            Wysiadka:{" "}
+                            <span className="font-medium text-text-mute">
+                              {displayStopName(conn.legs[conn.legs.length - 1]?.toStopName ?? "")}
+                            </span>
+                            , dalej {conn.egressWalkMins} min pieszo
+                          </span>
+                        </p>
+                      ) : null}
 
                       {/* Transfer info if applicable */}
                       {!isDirect && conn.transferStopName && (
@@ -980,6 +1397,9 @@ function ConnectionsDialog({
                           Przesiadka: <span className="font-medium text-text-mute">{displayStopName(conn.transferStopName)}</span>{" "}
                           (oczekiwanie: {conn.transferWaitMins ?? 0} min)
                         </p>
+                      )}
+                      {transferAtRisk(conn.legs, delays) && (
+                        <p className="mt-1 text-[12px] font-medium text-late">Opóźnienie: możesz nie zdążyć na przesiadkę</p>
                       )}
 
                       {/* Collapsible leg details */}
@@ -999,7 +1419,7 @@ function ConnectionsDialog({
                         {isExpanded && (
                           <div className="mt-1 space-y-2 animate-fade">
                             {conn.legs.map((leg, lIdx) => (
-                              <div key={lIdx} className="rounded-xl bg-white/4 p-3">
+                              <div key={lIdx} className="rounded-xl bg-tint/4 p-3">
                                 <div className="flex items-center justify-between gap-2">
                                   <div className="flex min-w-0 items-center gap-2">
                                     <LineBadge line={leg.line} operator={leg.operator} />
@@ -1011,7 +1431,7 @@ function ConnectionsDialog({
                                     {leg.stopsCount} {przystanekPlural(leg.stopsCount)} · {leg.durationMins} min
                                   </span>
                                 </div>
-                                <div className="ml-1 mt-2.5 space-y-1 border-l-2 border-white/12 pl-2.5 text-[12px] text-text-mute">
+                                <div className="ml-1 mt-2.5 space-y-1 border-l-2 border-tint/12 pl-2.5 text-[12px] text-text-mute">
                                   <p>
                                     <span className="font-medium tabular-nums text-text">{leg.departureTime}</span>{" "}
                                     {displayStopName(leg.fromStopName)}
@@ -1029,7 +1449,7 @@ function ConnectionsDialog({
                                       if (onSelectConnection) onSelectConnection(conn, lIdx);
                                       onClose();
                                     }}
-                                    className={`${CHIP} -mr-1.5 px-3 text-text hover:bg-white/8`}
+                                    className={`${CHIP} -mr-1.5 px-3 text-text hover:bg-tint/8`}
                                   >
                                     <span>Pokaż ten odcinek na mapie</span>
                                     <ArrowRightIcon className="text-[13px]" />
@@ -1080,16 +1500,37 @@ function ConnectionsDialog({
             )
           ) : (
             /* Initial state before picking stops */
-            <div className="px-4 py-10 text-center animate-fade">
-              <span className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-white/5 text-[22px] text-text-faint">
-                <PathIcon />
-              </span>
-              <p className="mt-3 text-[14px] font-medium text-text">Wybierz przystanek początkowy i docelowy</p>
-              <p className="mx-auto mt-1 max-w-sm text-[13px] text-text-mute">
-                {city === "gzm"
-                  ? "Wyszukiwarka znajdzie najszybsze połączenia w sieci ZTM Metropolii GZM."
-                  : "Wyszukiwarka znajdzie najszybsze połączenia autobusowe w sieciach KB i MZK Bielsko-Biała."}
-              </p>
+            <div className="animate-fade">
+              {quickRoutes.length > 0 && (
+                <div className="mb-2">
+                  <p className="mb-1.5 px-1 text-[12px] font-medium text-text-faint">Zapisane trasy</p>
+                  <ul>
+                    {quickRoutes.map((r) => (
+                      <li key={r.key}>
+                        <button
+                          type="button"
+                          onClick={() => applyRoute(r.from, r.to, r.fromName, r.toName)}
+                          className="flex min-h-11 w-full items-center gap-3 rounded-xl px-3 py-2 text-left transition-colors hover:bg-tint/6 active:bg-tint/10"
+                        >
+                          <PathIcon className="w-4 shrink-0 text-[15px] text-primary" aria-hidden />
+                          <span className="truncate text-[14px] text-text">{r.label}</span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              <div className="px-4 py-10 text-center">
+                <span className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-tint/5 text-[22px] text-text-faint">
+                  <PathIcon />
+                </span>
+                <p className="mt-3 text-[14px] font-medium text-text">Wybierz przystanek początkowy i docelowy</p>
+                <p className="mx-auto mt-1 max-w-sm text-[13px] text-text-mute">
+                  {city === "gzm"
+                    ? "Wyszukiwarka znajdzie najszybsze połączenia w sieci ZTM Metropolii GZM."
+                    : "Wyszukiwarka znajdzie najszybsze połączenia autobusowe w sieciach KB i MZK Bielsko-Biała."}
+                </p>
+              </div>
             </div>
           )}
         </div>

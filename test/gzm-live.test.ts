@@ -237,6 +237,17 @@ describe("GzmLive", () => {
     assert.equal(live.trip("gzm:nope"), "unknown");
   });
 
+  it("logs when each stop was passed, per trip: the vehicle id outlives its trip", async () => {
+    const { live, poll } = rig();
+    const arrived = () => (live.tripExecution("gzm:283_4285") as { arrived?: (number | null)[] }).arrived;
+    await poll(at("08:03"), [rec({ ts: at("08:02", 40), calls: [[1, "08:05"], [2, "08:10"]], lon: 19.004 })]);
+    assert.deepEqual(arrived(), [], "the first sighting is a baseline: stops passed before it stay unknown");
+    const v = only(await poll(at("08:03", 20), [rec({ ts: at("08:03"), calls: [[2, "08:10"]], delay: 60, lon: 19.012 })]));
+    assert.deepEqual(arrived(), [null, v.fix_at]);
+    await poll(at("08:13"), [rec({ ts: at("08:12", 40), calls: [[2, "08:10"]], lon: LON.c })]);
+    assert.deepEqual(arrived(), [], "the brigade's next trip starts its own log");
+  });
+
   it("builds the board from the feed with the live delay, hiding visits already passed", async () => {
     const { live, poll } = rig();
     await poll(at("08:03"), [rec({ ts: at("08:02", 40), calls: [[1, "08:05"], [2, "08:10"]], delay: 60, lon: 19.005 })]);

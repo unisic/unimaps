@@ -145,7 +145,7 @@ export interface VehiclePos {
   geoNextSeq?: number | null;
   /** tracker state carried across polls */
   prog?: KbProgState;
-  /** KB: recorded stop arrivals (upstream keeps none for passed stops) */
+  /** KB, GZM: recorded stop arrivals (neither upstream keeps times for passed stops) */
   arrivals?: KbArrivals;
   /** KB: static timetable trip id this execution serves (learned from departures boards) */
   schedTripId?: string;

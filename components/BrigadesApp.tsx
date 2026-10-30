@@ -226,7 +226,7 @@ function HeaderBar({ updatedAt, city = "bb" }: { updatedAt?: number; city?: Flee
         <Link
           href="/"
           aria-label="Wróć do mapy"
-          className="grid h-11 w-11 shrink-0 place-items-center rounded-full text-text-mute transition-colors hover:bg-white/8 hover:text-text"
+          className="grid h-11 w-11 shrink-0 place-items-center rounded-full text-text-mute transition-colors hover:bg-tint/8 hover:text-text"
         >
           <BackIcon />
         </Link>

@@ -106,6 +106,22 @@ export interface LineInfo {
   operator?: "KB" | "MZK" | "GZM";
 }
 
+/** One stop pattern of a line (GET /api/line). */
+export interface LineVariant {
+  headsign: string;
+  stops: Array<{ id: string; name: string; lat?: number; lon?: number }>;
+  /** per trip, by first departure: the departure at each stop in minutes from midnight (past 1440 after midnight) */
+  times: number[][];
+}
+
+export interface LineResponse {
+  line: string;
+  operator: "KB" | "MZK" | "GZM";
+  date: string;
+  /** busiest first */
+  variants: LineVariant[];
+}
+
 export interface LinesResponse {
   count: number;
   lines: LineInfo[];
@@ -301,8 +317,12 @@ export interface ConnectionItinerary {
   transfersCount: number;
   transferWaitMins?: number;
   transferStopName?: string;
-  /** total walking between poles at the transfers, minutes */
+  /** every minute on foot: the walks to the first stop and from the last one (points) plus the transfers */
   walkMinutes?: number;
+  /** walk from the searched location to the first leg's pole, minutes (searches from a location only) */
+  accessWalkMins?: number;
+  /** walk from the last leg's pole to the searched destination point, minutes (searches to a point only) */
+  egressWalkMins?: number;
   date?: string;
   dayLabel?: string;
   arrivesNextDay?: boolean;

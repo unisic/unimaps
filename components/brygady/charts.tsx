@@ -434,7 +434,7 @@ export function BarList({
                 onClick={r.onClick}
                 title={r.title}
                 aria-label={r.ariaLabel}
-                className="flex min-h-8 w-full items-center gap-3 rounded-lg px-1.5 transition-colors hover:bg-white/5"
+                className="flex min-h-8 w-full items-center gap-3 rounded-lg px-1.5 transition-colors hover:bg-tint/5"
               >
                 {body}
               </button>

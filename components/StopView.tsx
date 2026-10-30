@@ -2,9 +2,29 @@
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import BottomSheet from "@/components/BottomSheet";
-import { BellIcon, CaretDownIcon, CaretRightIcon, CaretUpIcon, PathIcon, WarningCircleIcon } from "@/components/icons";
+import {
+  BellIcon,
+  CalendarBlankIcon,
+  CaretDownIcon,
+  CaretRightIcon,
+  CaretUpIcon,
+  PathIcon,
+  RssSimpleIcon,
+  WarningCircleIcon,
+} from "@/components/icons";
 import { removeAlert, useAlerts } from "@/lib/client/alerts";
-import { CloseIcon, EmptyState, ErrorState, IconButton, LineBadge, ShareButton, SkeletonRows, StarIcon } from "@/components/ui";
+import {
+  chip,
+  CloseIcon,
+  EmptyState,
+  ErrorState,
+  IconButton,
+  LineBadge,
+  LiveMark,
+  ShareButton,
+  SkeletonRows,
+  StarIcon,
+} from "@/components/ui";
 import { fetchJSON, isWarming } from "@/lib/client/api";
 import { GZM_LOADING } from "@/lib/client/city";
 import { useFavorites } from "@/lib/client/favorites";
@@ -18,9 +38,9 @@ import {
   displayStopName,
   formatDayLabel,
   formatPlatform,
-  hhmmFromSecs,
   isBusStation,
   offsetDateISO,
+  operatorColor,
 } from "@/lib/client/format";
 import type {
   DepartureRow,
@@ -32,6 +52,7 @@ import {
   AUTO_AHEAD_SEC,
   autoLaterHorizon,
   boardExtension,
+  compareLines,
   etaClock,
   etaLabel,
   hhmm,
@@ -132,15 +153,78 @@ function schedOfDay(date: string, rows: readonly TtRow[]): SchedItem[] {
   return out;
 }
 
-function schedOf(days: ReadonlyMap<string, DayLoad>): SchedItem[] {
+/** The board's timetable rows: today and tomorrow only (a day picked in the "Rozkład" tab never joins the board). */
+function schedOf(days: ReadonlyMap<string, DayLoad>, dates: readonly string[]): SchedItem[] {
   const out: SchedItem[] = [];
-  for (const [date, d] of days) if (d.status === "ok") out.push(...schedOfDay(date, d.rows));
+  for (const date of dates) {
+    const d = days.get(date);
+    if (d?.status === "ok") out.push(...schedOfDay(date, d.rows));
+  }
   return out;
 }
 
+/** Line filter key: operator + line (a KB and an MZK line can share a name). */
+const lineKey = (row: DepartureRow) => `${row.operator ?? ""}:${row.line_name || row.symbol || "?"}`;
+const onLine = (row: DepartureRow, sel: string | null) => sel == null || lineKey(row) === sel;
+
+type Ext = ReturnType<typeof boardExtension<SchedItem>>;
+
+/** Filtered AFTER boardExtension: which timetable rows the live board already lists must not depend on the filter. */
+function filterExt(ext: Ext, sel: string | null): Ext {
+  if (sel == null) return ext;
+  const f = (l: SchedItem[]) => l.filter((s) => onLine(s.row, sel));
+  return { ...ext, earlier: f(ext.earlier), gaps: f(ext.gaps), later: f(ext.later) };
+}
+
 /** boardExtension at the server-aligned current instant; event handlers only, never during render. */
-function extensionNow(days: ReadonlyMap<string, DayLoad>, live: readonly DepartureRow[] | null, skewSec: number) {
-  return boardExtension(schedOf(days), live ?? [], Date.now() / 1000 + skewSec);
+function extensionNow(
+  days: ReadonlyMap<string, DayLoad>,
+  dates: readonly string[],
+  live: readonly DepartureRow[] | null,
+  skewSec: number,
+  sel: string | null,
+) {
+  return filterExt(boardExtension(schedOf(days, dates), live ?? [], Date.now() / 1000 + skewSec), sel);
+}
+
+/**
+ * Right column of a board row: the big text (countdown or clock), a live mark when the time comes from the bus,
+ * under it the clock when the big text is a countdown, and the delay. A timetable-only row is just its time.
+ * `note` replaces the clock line of a row without a live time ("w trasie").
+ */
+function TimeCell({ timing, big, note }: { timing: Timing; big: string; note?: string | null }) {
+  const est = timing.estimated && !timing.canceled;
+  const td = timing.delaySec;
+  const clock = etaClock(timing);
+  const clockLine = clock && clock !== big ? clock : null;
+  const small = timing.canceled
+    ? null
+    : est
+      ? [clockLine, delayTxt(td)].filter(Boolean).join(" · ")
+      : timing.source === "waiting"
+        ? "czeka na odjazd"
+        : (note ?? clockLine);
+  return (
+    <div className="shrink-0 text-right">
+      <p
+        className={`flex items-center justify-end gap-1 text-[15px] font-semibold tabular-nums ${
+          timing.canceled ? "text-text-faint line-through" : est ? delayClass(td) : "text-text"
+        }`}
+      >
+        {est && <LiveMark />}
+        {big}
+      </p>
+      {small && (
+        <p
+          className={`text-[12px] tabular-nums ${
+            est ? `font-medium ${delayClass(td)}` : timing.source === "waiting" ? "font-medium text-late" : "text-text-faint"
+          }`}
+        >
+          {small}
+        </p>
+      )}
+    </div>
+  );
 }
 
 function MoreButton({ dir, busy, err, onClick }: { dir: "earlier" | "later"; busy: boolean; err: boolean; onClick: () => void }) {
@@ -152,7 +236,7 @@ function MoreButton({ dir, busy, err, onClick }: { dir: "earlier" | "later"; bus
         onClick={onClick}
         disabled={busy}
         aria-busy={busy}
-        className={`tap inline-flex h-9 items-center gap-1.5 rounded-full px-4 text-[12.5px] font-medium hover:bg-white/5 disabled:opacity-60 ${
+        className={`tap inline-flex h-9 items-center gap-1.5 rounded-full px-4 text-[12.5px] font-medium hover:bg-tint/5 disabled:opacity-60 ${
           err ? "text-late" : "text-text-mute hover:text-text"
         }`}
       >
@@ -171,7 +255,7 @@ function MoreButton({ dir, busy, err, onClick }: { dir: "earlier" | "later"; bus
 
 /**
  * A timetable departure the live board does not list. Its bus on the road (matched by trip): the plan
- * + the bus's current delay, opens the live trip; otherwise "rozkładowo", opens the static trip.
+ * + the bus's current delay, opens the live trip; otherwise the planned time, opens the static trip.
  */
 function ScheduleRow({
   item,
@@ -196,16 +280,8 @@ function ScheduleRow({
 }) {
   const { row } = item;
   const line = row.line_name || veh?.line || "?";
-  const est = timing.estimated;
-  const td = timing.delaySec;
   const vehDetails = veh?.side_number ? `#${veh.side_number}${veh.model ? ` · ${veh.model}` : ""}` : null;
-  const sub = [
-    dayLabel,
-    veh && past ? "w trasie" : null,
-    veh ? `plan ${hhmm(item.planTs)}` : null,
-    formatPlatform(row.platform, isStation),
-    vehDetails,
-  ]
+  const sub = [dayLabel, veh && past ? "w trasie" : null, formatPlatform(row.platform, isStation), vehDetails]
     .filter(Boolean)
     .join(" · ");
   const dest = row.direction || veh?.headsign;
@@ -215,7 +291,7 @@ function ScheduleRow({
     <button
       type="button"
       onClick={() => (veh ? onShowLive(veh.id, item.trip_id) : onShowStatic(item.trip_id))}
-      className={`tap flex w-full items-center gap-3 rounded-xl px-2 py-2.5 text-left hover:bg-white/5 active:bg-white/8 ${
+      className={`tap flex w-full items-center gap-3 rounded-xl px-2 py-2.5 text-left hover:bg-tint/5 active:bg-tint/8 ${
         past ? "opacity-60" : ""
       }`}
     >
@@ -224,16 +300,7 @@ function ScheduleRow({
         <p className="truncate text-[13.5px] font-medium text-text">{dest ? displayStopName(dest) : `Linia ${line}`}</p>
         {sub && <p className="mt-0.5 truncate text-[12px] tabular-nums text-text-faint">{sub}</p>}
       </div>
-      <div className="shrink-0 text-right">
-        <p className={`text-[15px] font-semibold tabular-nums ${est ? delayClass(td) : "text-text"}`}>{timeText}</p>
-        {est ? (
-          <p className={`text-[12px] font-medium tabular-nums ${delayClass(td)}`}>{delayTxt(td)}</p>
-        ) : timing.source === "waiting" ? (
-          <p className="text-[12px] font-medium text-late">czeka na odjazd</p>
-        ) : (
-          <p className="text-[12px] text-text-faint">{veh ? "w trasie" : "rozkładowo"}</p>
-        )}
-      </div>
+      <TimeCell timing={timing} big={timeText} note={veh && !past ? "w trasie" : null} />
       <Chevron />
     </button>
   );
@@ -350,9 +417,9 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
   }, [tab]);
 
   /* the stop's timetable per date: today (Warsaw date on the server clock, so a sheet left open rolls over
-     at midnight) feeds the "Rozkład dziś" tab and the earlier/later rows of the live board, tomorrow only
-     once "later" runs past today's last departure. Loads live for the whole sheet (one AbortController),
-     so switching tabs never drops a fetch half way. */
+     at midnight) feeds the earlier/later rows of the live board, tomorrow only once "later" runs past
+     today's last departure; the "Rozkład" tab loads the day it shows (today, tomorrow or a picked date).
+     Loads live for the whole sheet (one AbortController), so switching tabs never drops a fetch half way. */
   const todayNow = useMemo(() => warsawDateISO(nowTs), [nowTs]);
   const day0 = todayNow;
   const day1 = offsetDateISO(day0, 1);
@@ -385,10 +452,12 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
       if (hit) return hit;
       const ac = lifeAcRef.current;
       if (!ac || ac.signal.aborted) return Promise.resolve({ status: "error" });
-      const p = loadDay(stop.designator, date, ac.signal, () => {
-        if (!ac.signal.aborted) putDay(date, { status: "trips" });
+      /* a day dropped by pickDate while in flight must not come back */
+      const current = () => !ac.signal.aborted && dayLoadsRef.current.get(date) === p;
+      const p: Promise<DayLoad> = loadDay(stop.designator, date, ac.signal, () => {
+        if (current()) putDay(date, { status: "trips" });
       }).then((res) => {
-        if (ac.signal.aborted) return res;
+        if (!current()) return res;
         if (res.status === "error") dayLoadsRef.current.delete(date);
         putDay(date, res);
         return res;
@@ -405,19 +474,57 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
     void ensureDay(day0);
   }, [day0, ensureDay]);
 
-  const ttLoad = days.get(day0);
+  /* the day shown in the "Rozkład" tab; null = today, following midnight */
+  const [ttDate, setTtDate] = useState<string | null>(null);
+  const ttDay = ttDate ?? day0;
+  useEffect(() => {
+    void ensureDay(ttDay);
+  }, [ttDay, ensureDay]);
+  /* keeps at most today, tomorrow and the picked day (a busy hub is ~450 rows per day) */
+  const pickDate = (date: string | null) => {
+    setTtDate(date);
+    const keep = new Set([day0, day1, date ?? day0]);
+    for (const k of dayLoadsRef.current.keys()) if (!keep.has(k)) dayLoadsRef.current.delete(k);
+    if ([...daysRef.current.keys()].some((k) => !keep.has(k))) {
+      const next = new Map([...daysRef.current].filter(([k]) => keep.has(k)));
+      daysRef.current = next;
+      setDays(next);
+    }
+  };
+
+  const ttLoad = days.get(ttDay);
   const tt = ttLoad?.status === "ok" ? ttLoad.rows : null;
   const ttErr = ttLoad?.status === "error";
   const ttWarn = ttLoad?.status === "ok" ? ttLoad.warnings : NO_WARNINGS;
   const ttOffline = ttLoad?.status === "ok" && ttLoad.offline === true;
 
-  const sched = useMemo(() => schedOf(days), [days]);
-  const ext = useMemo(() => boardExtension(sched, liveRows ?? [], nowTs), [sched, liveRows, nowTs]);
+  /* one line at a time, for both tabs; not remembered (a new sheet starts with every line) */
+  const [lineSel, setLineSel] = useState<string | null>(null);
+  const lines = useMemo(() => {
+    const m = new Map<string, { line: string; operator?: DepartureRow["operator"] }>();
+    const add = (row: DepartureRow) => {
+      const line = row.line_name || row.symbol;
+      const k = lineKey(row);
+      if (line && line !== "?" && !m.has(k)) m.set(k, { line, operator: row.operator });
+    };
+    for (const r of liveRows ?? []) add(r);
+    for (const date of new Set([day0, ttDay])) {
+      const d = days.get(date);
+      if (d?.status === "ok") for (const s of schedOfDay(date, d.rows)) add(s.row);
+    }
+    return [...m].sort(([ka, a], [kb, b]) => compareLines(a.line, b.line) || (ka < kb ? -1 : ka > kb ? 1 : 0));
+  }, [liveRows, days, day0, ttDay]);
+
+  const sched = useMemo(() => schedOf(days, [day0, day1]), [days, day0, day1]);
+  const ext = useMemo(
+    () => filterExt(boardExtension(sched, liveRows ?? [], nowTs), lineSel),
+    [sched, liveRows, nowTs, lineSel],
+  );
   const [earlier, setEarlier] = useState<Reveal>(REVEAL_IDLE);
   const [later, setLater] = useState<Reveal>(REVEAL_IDLE);
 
   /* the extension as of NOW, for the tap handlers (state read after an await would be stale) */
-  const extNow = () => extensionNow(daysRef.current, liveRowsRef.current, skewRef.current);
+  const extNow = () => extensionNow(daysRef.current, [day0, day1], liveRowsRef.current, skewRef.current, lineSel);
 
   const showEarlier = async () => {
     const from = earlier.at;
@@ -468,10 +575,12 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
      after "Pokaż późniejsze". A timetable row whose bus is on the road carries that bus's delay. */
   const { board, laterUntil } = useMemo(() => {
     type Entry = BoardItem<DepartureRow> & { veh: Vehicle | null; sched: SchedItem | null };
-    const items: Entry[] = (liveRows ?? []).map((row) => {
-      const veh = rowVehicle(row, vix);
-      return { row, veh, timing: resolveTiming(row, veh), sched: null };
-    });
+    const items: Entry[] = (liveRows ?? [])
+      .filter((row) => onLine(row, lineSel))
+      .map((row) => {
+        const veh = rowVehicle(row, vix);
+        return { row, veh, timing: resolveTiming(row, veh), sched: null };
+      });
     const addSched = (s: SchedItem) => {
       const veh = schedVehicle(s, vix.bySched, nowTs);
       items.push({ row: s.row, veh, timing: schedTiming(s.planTs, veh), sched: s });
@@ -489,7 +598,7 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
     const sorted = sortBoard(items, nowTs);
     const keys = uniqueKeys(sorted.map((it) => it.row));
     return { board: sorted.map((it, i) => ({ ...it, key: keys[i] })), laterUntil: until };
-  }, [liveRows, vix, nowTs, ext, later.at]);
+  }, [liveRows, vix, nowTs, ext, later.at, lineSel]);
   const earlierDone =
     days.get(day0)?.status === "ok" && (earliestTs == null || (earlier.at != null && earliestTs >= earlier.at));
   const laterDone =
@@ -500,13 +609,42 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
   const liveLoading = liveRows === null && !liveErr;
 
   const staleEmpty =
-    liveRows !== null && liveRows.length > 0 && !board.some((it) => it.sched === null) && nowTs - fetchedTs > 90;
+    liveRows !== null &&
+    liveRows.some((r) => onLine(r, lineSel)) &&
+    !board.some((it) => it.sched === null) &&
+    nowTs - fetchedTs > 90;
+
+  /* "Rozkład" tab: the picked day by hour, the current hour scrolled into view for today */
+  const ttItems = useMemo(
+    () => (tt ? schedOfDay(ttDay, tt).filter((s) => onLine(s.row, lineSel)).sort((a, b) => a.planTs - b.planTs) : null),
+    [tt, ttDay, lineSel],
+  );
+  const ttKeys = useMemo(() => uniqueKeys((ttItems ?? []).map((s) => s.row)), [ttItems]);
+  const ttHours = useMemo(() => {
+    const out: { hour: string; from: number; items: SchedItem[] }[] = [];
+    (ttItems ?? []).forEach((s, i) => {
+      const hour = hhmm(s.planTs).slice(0, 2);
+      const last = out[out.length - 1];
+      if (last?.hour === hour) last.items.push(s);
+      else out.push({ hour, from: i, items: [s] });
+    });
+    return out;
+  }, [ttItems]);
+  const nowHour = ttDay === day0 ? ttItems?.find((s) => s.planTs >= nowTs)?.planTs : undefined;
+  const nowHourLabel = nowHour == null ? null : hhmm(nowHour).slice(0, 2);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const nowHourRef = useRef<HTMLElement>(null);
+  const ttReady = tab === "tt" && ttItems !== null;
+  useEffect(() => {
+    const box = scrollRef.current;
+    if (ttReady && box) box.scrollTop = nowHourRef.current?.offsetTop ?? 0;
+  }, [ttReady, ttDay, lineSel]);
 
   const header = (
     <header className="px-4 pb-3 pt-2 md:pt-4">
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
-          <h2 className="line-clamp-2 text-[17px] font-semibold leading-tight tracking-tight text-text">
+          <h2 className="text-[17px] font-semibold leading-tight tracking-tight text-balance text-text">
             {displayStopName(stop.name)}
             {stop.symbol && <span className="ml-1.5 font-normal text-text-faint">{stop.symbol}</span>}
           </h2>
@@ -554,7 +692,7 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
 
       {/* segmented tabs with sliding thumb */}
       <div
-        className="relative mt-3.5 grid grid-cols-2 rounded-full bg-white/5 p-1"
+        className="relative mt-3.5 grid grid-cols-2 rounded-full bg-tint/5 p-1"
         role="tablist"
         aria-label="Widok przystanku"
       >
@@ -568,7 +706,7 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
         {(
           [
             ["live", "Odjazdy"],
-            ["tt", "Rozkład dziś"],
+            ["tt", "Rozkład"],
           ] as const
         ).map(([key, label]) => (
           <button
@@ -585,6 +723,61 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
           </button>
         ))}
       </div>
+      {lines.length > 1 && (
+        <div
+          role="group"
+          aria-label="Pokaż jedną linię"
+          className="-mx-4 mt-2.5 flex gap-1.5 overflow-x-auto px-4 [scrollbar-width:none]"
+        >
+          <button type="button" aria-pressed={lineSel == null} onClick={() => setLineSel(null)} className={chip(lineSel == null)}>
+            Wszystkie
+          </button>
+          {lines.map(([k, l]) => (
+            <button
+              key={k}
+              type="button"
+              aria-pressed={lineSel === k}
+              onClick={() => setLineSel(lineSel === k ? null : k)}
+              className={`${chip(lineSel === k)} tabular-nums`}
+            >
+              <span className="h-2 w-2 rounded-full" style={{ background: operatorColor(l.operator, l.line) }} aria-hidden />
+              {l.line}
+            </button>
+          ))}
+        </div>
+      )}
+      {tab !== "live" && (
+        <div role="group" aria-label="Dzień rozkładu" className="mt-2 flex gap-1.5">
+          <button type="button" aria-pressed={ttDay === day0} onClick={() => pickDate(null)} className={chip(ttDay === day0)}>
+            Dziś
+          </button>
+          <button type="button" aria-pressed={ttDay === day1} onClick={() => pickDate(day1)} className={chip(ttDay === day1)}>
+            Jutro
+          </button>
+          <label className={`${chip(ttDay !== day0 && ttDay !== day1)} relative overflow-hidden`}>
+            <CalendarBlankIcon aria-hidden />
+            {ttDay !== day0 && ttDay !== day1 ? formatDayLabel(ttDay, day0) : "Inny dzień"}
+            <input
+              type="date"
+              aria-label="Wybierz dzień rozkładu"
+              min={day0}
+              value={ttDay}
+              onClick={(e) => {
+                try {
+                  e.currentTarget.showPicker();
+                } catch {
+                  /* no picker API: the native control still opens on tap */
+                }
+              }}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (v) pickDate(v === day0 ? null : v);
+              }}
+              className="absolute inset-0 h-full w-full min-w-0 cursor-pointer opacity-0"
+            />
+          </label>
+        </div>
+      )}
     </header>
   );
 
@@ -596,12 +789,12 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
       initialSnap="half"
       header={header}
     >
-      <div key={tab} className="kb-scroll h-full overflow-y-auto pb-4 animate-fade">
+      <div key={tab} ref={scrollRef} className="kb-scroll relative h-full overflow-y-auto pb-4 animate-fade">
         {(tab === "live" ? liveWarn.length > 0 && !liveErr : ttWarn.length > 0) && (
           <SourceWarning sources={tab === "live" ? liveWarn : ttWarn} />
         )}
         {tab !== "live" && ttOffline && (
-          <p role="status" className="mx-4 mt-3 rounded-xl bg-white/6 px-3 py-2 text-[12px] text-text-mute">
+          <p role="status" className="mx-4 mt-3 rounded-xl bg-tint/6 px-3 py-2 text-[12px] text-text-mute">
             Bez sieci: zapisany rozkład.
           </p>
         )}
@@ -661,7 +854,7 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
               ttPending ? (
                 <SkeletonRows />
               ) : (
-                <EmptyState text="Brak przyjazdów w najbliższych godzinach." />
+                <EmptyState text={`Brak odjazdów${lineSel ? " tej linii" : ""} w najbliższych godzinach.`} />
               )
             ) : (
             <ul className={`${fresh ? "stagger " : ""}px-2`}>
@@ -687,16 +880,7 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
                 const sideNum = row.side_number || veh?.side_number;
                 const vehModel = row.model || veh?.model;
                 const vehDetails = sideNum ? `#${sideNum}${vehModel ? ` · ${vehModel}` : ""}` : null;
-                const sub = [
-                  timing.planTs != null ? `plan ${hhmm(timing.planTs)}` : "",
-                  plat,
-                  vehDetails,
-                ]
-                  .filter(Boolean)
-                  .join(" · ");
-                const timeText = etaLabel(timing, nowTs, row.time ?? "");
-                const td = timing.delaySec;
-                const est = timing.estimated && !timing.canceled;
+                const sub = [plat, vehDetails].filter(Boolean).join(" · ");
                 /* KB boards carry only direction_id; the server resolves it through the board's
                    `directions` map, the live vehicle's headsign is the fallback */
                 const dest = row.direction || veh?.headsign;
@@ -710,7 +894,7 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
                     <button
                       type="button"
                       onClick={() => onShowLive(row.trip_execution_id || "", row.trip_id ?? null)}
-                      className="tap flex min-w-0 flex-1 items-center gap-3 rounded-xl px-2 py-2.5 text-left hover:bg-white/5 active:bg-white/8"
+                      className="tap flex min-w-0 flex-1 items-center gap-3 rounded-xl px-2 py-2.5 text-left hover:bg-tint/5 active:bg-tint/8"
                     >
                       <LineBadge line={line} operator={row.operator} />
                       <div className="min-w-0 flex-1">
@@ -719,24 +903,7 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
                           <p className="mt-0.5 truncate text-[12px] tabular-nums text-text-faint">{sub}</p>
                         )}
                       </div>
-                      <div className="shrink-0 text-right">
-                        <p
-                          className={`text-[15px] font-semibold tabular-nums ${
-                            timing.canceled ? "text-text-faint line-through" : est ? delayClass(td) : "text-text"
-                          }`}
-                        >
-                          {timeText}
-                        </p>
-                        {timing.canceled ? null : est ? (
-                          <p className={`text-[12px] font-medium tabular-nums ${delayClass(td)}`}>
-                            {delayTxt(td)}
-                          </p>
-                        ) : timing.source === "waiting" ? (
-                          <p className="text-[12px] font-medium text-late">czeka na odjazd</p>
-                        ) : (
-                          <p className="text-[12px] text-text-faint">rozkładowo</p>
-                        )}
-                      </div>
+                      <TimeCell timing={timing} big={etaLabel(timing, nowTs, row.time ?? "")} />
                       <Chevron />
                     </button>
                     {/* set from the trip view; here only shown and cancelled */}
@@ -745,7 +912,7 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
                         type="button"
                         aria-label={`Wyłącz powiadomienie ${al.leadMin} min przed`}
                         onClick={() => removeAlert(ak)}
-                        className="tap grid h-11 w-10 shrink-0 place-items-center rounded-xl text-[17px] text-primary hover:bg-white/5"
+                        className="tap grid h-11 w-10 shrink-0 place-items-center rounded-xl text-[17px] text-primary hover:bg-tint/5"
                       >
                         <BellIcon weight="fill" aria-hidden />
                       </button>
@@ -761,51 +928,74 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
             ) : (
               <MoreButton dir="later" busy={later.busy} err={later.err} onClick={showLater} />
             )}
+            {board.length > 0 && (
+              <p className="flex items-center justify-center gap-1 px-4 pt-1 text-[11.5px] text-text-faint">
+                <RssSimpleIcon aria-hidden className="shrink-0 text-[0.75em]" />
+                na żywo z GPS autobusu, pozostałe według rozkładu
+              </p>
+            )}
           </div>
           )
         ) : ttErr ? (
           <ErrorState
             message={ttLoad.warming ? GZM_LOADING : undefined}
             onRetry={() => {
-              putDay(day0, null);
-              void ensureDay(day0);
+              putDay(ttDay, null);
+              void ensureDay(ttDay);
             }}
           />
-        ) : tt === null ? (
+        ) : ttItems === null ? (
           <>
             <p className="px-4 pt-3 text-center text-[12px] text-text-faint" role="status">
               {ttLoad?.status === "trips" ? "Wczytywanie tras linii…" : "Pobieranie rozkładu…"}
             </p>
             <SkeletonRows />
           </>
-        ) : tt.length === 0 ? (
-          <EmptyState text="Brak odjazdów dziś." />
+        ) : ttItems.length === 0 ? (
+          <EmptyState
+            text={`Brak odjazdów${lineSel ? " tej linii" : ""} ${ttDay === day0 ? "dziś" : "w tym dniu"}.`}
+          />
         ) : (
-          <ul className="stagger px-2" style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 1.25rem)" }}>
-            {tt.map(({ dp, line, dir }, i) => (
-              <li key={`${dp.trip_id}-${i}`}>
-                <button
-                  type="button"
-                  onClick={() => onShowStatic(dp.trip_id)}
-                  className="tap flex w-full items-center gap-3 rounded-xl px-2 py-2.5 text-left hover:bg-white/5 active:bg-white/8"
-                >
-                  <LineBadge line={line} operator={dp.operator} />
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-[13.5px] font-medium text-text">{dir ? displayStopName(dir) : `Linia ${line}`}</p>
-                    {formatPlatform(dp.platform, isStation) && (
-                      <p className="mt-0.5 text-[12px] text-text-faint">
-                        {formatPlatform(dp.platform, isStation)}
-                      </p>
-                    )}
-                  </div>
-                  <p className="shrink-0 text-[15px] font-semibold tabular-nums text-text">
-                    {hhmmFromSecs(dp.departure)}
-                  </p>
-                  <Chevron />
-                </button>
-              </li>
+          <div style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 1.25rem)" }}>
+            {ttHours.map(({ hour, from, items }) => (
+              <section key={`${hour}:${from}`} ref={hour === nowHourLabel ? nowHourRef : undefined}>
+                <h3 className="sticky top-0 z-[1] bg-surface px-4 py-1.5 text-[12px] font-semibold tabular-nums text-text-mute">
+                  {hour}:00
+                </h3>
+                <ul className="px-2">
+                  {items.map((s, j) => {
+                    const line = s.row.line_name || "?";
+                    const dir = s.row.direction;
+                    const plat = formatPlatform(s.row.platform, isStation);
+                    const past = ttDay === day0 && s.planTs < nowTs;
+                    return (
+                      <li key={ttKeys[from + j]}>
+                        <button
+                          type="button"
+                          onClick={() => onShowStatic(s.trip_id)}
+                          className={`tap flex w-full items-center gap-3 rounded-xl px-2 py-2 text-left hover:bg-tint/5 active:bg-tint/8 ${
+                            past ? "opacity-50" : ""
+                          }`}
+                        >
+                          <span className="w-11 shrink-0 text-[15px] font-semibold tabular-nums text-text">
+                            {hhmm(s.planTs)}
+                          </span>
+                          <LineBadge line={line} operator={s.row.operator} />
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-[13.5px] font-medium text-text">
+                              {dir ? displayStopName(dir) : `Linia ${line}`}
+                            </p>
+                            {plat && <p className="mt-0.5 truncate text-[12px] text-text-faint">{plat}</p>}
+                          </div>
+                          <Chevron />
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </section>
             ))}
-          </ul>
+          </div>
         )}
       </div>
     </BottomSheet>

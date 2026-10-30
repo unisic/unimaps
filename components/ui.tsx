@@ -6,6 +6,7 @@ import {
   BusIcon,
   CaretLeftIcon,
   CheckIcon,
+  RssSimpleIcon,
   ShareNetworkIcon,
   StarIcon as PhStarIcon,
   WarningCircleIcon,
@@ -15,6 +16,12 @@ import { operatorColor } from "@/lib/client/format";
 
 /* Shared with /brygady, which has no IconContext: weight and aria-hidden are
    explicit here instead of inherited. Icons size to the button's font-size. */
+
+/* Chips: one height, one radius. "On" uses the same accent as a pressed IconButton. */
+export const CHIP = "tap inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full text-[12px] font-medium";
+export const CHIP_ON = "bg-primary-dim text-primary";
+export const CHIP_OFF = "bg-tint/6 text-text-mute hover:bg-tint/10 hover:text-text";
+export const chip = (on: boolean) => `${CHIP} px-3 ${on ? CHIP_ON : CHIP_OFF}`;
 
 /** Colored line-number pill, size-adjustable. */
 export function LineBadge({
@@ -38,6 +45,16 @@ export function LineBadge({
   );
 }
 
+/** Marks a time that comes from the bus on the road (GPS), not from the timetable. */
+export function LiveMark() {
+  return (
+    <>
+      <RssSimpleIcon size="1em" weight="bold" aria-hidden className="shrink-0 text-[0.75em]" />
+      <span className="sr-only">na żywo, </span>
+    </>
+  );
+}
+
 export function IconButton({
   label,
   onClick,
@@ -56,7 +73,7 @@ export function IconButton({
       onClick={onClick}
       aria-label={label}
       aria-pressed={pressed}
-      className={`tap grid h-11 w-11 shrink-0 place-items-center rounded-full text-[18px] hover:bg-white/8 hover:text-text md:h-9 md:w-9 ${
+      className={`tap grid h-11 w-11 shrink-0 place-items-center rounded-full text-[18px] hover:bg-tint/8 hover:text-text md:h-9 md:w-9 ${
         pressed ? "text-primary" : "text-text-mute"
       }`}
     >
@@ -141,7 +158,7 @@ export function SkeletonRows() {
 export function EmptyState({ text }: { text: string }) {
   return (
     <div className="px-6 py-12 text-center animate-fade">
-      <span className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-white/5 text-[22px] text-text-faint">
+      <span className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-tint/5 text-[22px] text-text-faint">
         <BusIcon size="1em" weight="bold" aria-hidden />
       </span>
       <p className="mt-3 text-[13px] text-text-mute">{text}</p>
@@ -159,7 +176,7 @@ export function ErrorState({ onRetry, message }: { onRetry: () => void; message?
       <button
         type="button"
         onClick={onRetry}
-        className="tap mt-4 inline-flex items-center gap-1.5 rounded-full bg-white/8 px-4 py-2 text-[13px] font-medium text-text hover:bg-white/12"
+        className="tap mt-4 inline-flex items-center gap-1.5 rounded-full bg-tint/8 px-4 py-2 text-[13px] font-medium text-text hover:bg-tint/12"
       >
         <ArrowsClockwiseIcon size="1em" weight="bold" aria-hidden />
         Spróbuj ponownie

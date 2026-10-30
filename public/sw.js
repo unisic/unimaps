@@ -55,6 +55,20 @@ self.addEventListener("message", (event) => {
   if (event.data && event.data.type === "SKIP_WAITING") self.skipWaiting();
 });
 
+// a departure alert pushed by the server (lib/push-alerts.ts) while no page is open
+self.addEventListener("push", (event) => {
+  let m = null;
+  try {
+    m = event.data && event.data.json();
+  } catch {
+    return;
+  }
+  if (!m || typeof m.title !== "string") return;
+  event.waitUntil(
+    self.registration.showNotification(m.title, { body: m.body, tag: m.tag, icon: "/icon-192.png", data: { url: m.url } }),
+  );
+});
+
 // an alert notification (lib/client/alerts.ts) opens its stop: in the app's open tab, else a new one
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();

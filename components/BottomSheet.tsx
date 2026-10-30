@@ -37,6 +37,20 @@ export function openSheetCover(): number {
   return snap ? SNAP_COVER[snap] : 1;
 }
 
+const vh = () => (typeof window !== "undefined" ? window.innerHeight : 800);
+
+/** startRef id of a drag begun in the content (touch ids and pointer ids are separate spaces) */
+const TOUCH_DRAG = -1;
+
+/** The nearest vertical scroller between a touch target and the sheet content, if any. */
+function scrollerOf(el: Element | null, root: Element): Element | null {
+  for (; el && el !== root; el = el.parentElement) {
+    const oy = getComputedStyle(el).overflowY;
+    if ((oy === "auto" || oy === "scroll") && el.scrollHeight > el.clientHeight + 1) return el;
+  }
+  return null;
+}
+
 // Apple WWDC 2018 Fluid Interfaces rubber-band formula
 function rubberband(overshoot: number, dimension: number, constant = 0.45): number {
   return (overshoot * dimension * constant) / (dimension + constant * Math.abs(overshoot));
@@ -70,6 +84,7 @@ export default function BottomSheet({
   const [mounted, setMounted] = useState(false);
 
   const sheetRef = useRef<HTMLElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
   const restoreRef = useRef<HTMLElement | null>(null);
   const snapRef = useRef<Snap>(initialSnap);
 
@@ -81,6 +96,8 @@ export default function BottomSheet({
     target: HTMLElement | null;
   } | null>(null);
   const movesRef = useRef<{ y: number; t: number }[]>([]);
+  /** a touch in the content: undecided, driving the sheet, or left to the browser (scroll, tap) */
+  const touchRef = useRef<{ x: number; y: number; mode: "pending" | "sheet" | "native" } | null>(null);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -100,8 +117,6 @@ export default function BottomSheet({
     return () => restoreRef.current?.focus?.({ preventScroll: true });
   }, []);
 
-  const vh = () => (typeof window !== "undefined" ? window.innerHeight : 800);
-
   // Entrance transition on mount
   useEffect(() => {
     if (desktop) return;
@@ -112,45 +127,29 @@ export default function BottomSheet({
     return () => cancelAnimationFrame(raf);
   }, [desktop, initialSnap]);
 
-  const onPointerDown = useCallback(
-    (e: React.PointerEvent) => {
-      if (desktop) return;
-      if (startRef.current != null || !e.isPrimary) return;
-      if ((e.target as HTMLElement).closest?.("button,a,input,[role='button']")) return;
+  const beginDrag = useCallback((id: number, y: number, t: number, target: HTMLElement | null) => {
+    const curH = sheetRef.current?.offsetHeight ?? (HALF * vh());
+    if (sheetRef.current) {
+      sheetRef.current.style.setProperty("--sheet-height", `${curH}px`);
+      sheetRef.current.style.transition = "none";
+    }
+    startRef.current = { id, y, t, startH: curH, target };
+    movesRef.current = [{ y, t }];
+    setIsDragging(true);
+  }, []);
 
-      const curH = sheetRef.current?.offsetHeight ?? (HALF * vh());
-      if (sheetRef.current) {
-        sheetRef.current.style.setProperty("--sheet-height", `${curH}px`);
-        sheetRef.current.style.transition = "none";
-      }
-
-      startRef.current = {
-        id: e.pointerId,
-        y: e.clientY,
-        t: e.timeStamp,
-        startH: curH,
-        target: e.target as HTMLElement,
-      };
-      movesRef.current = [{ y: e.clientY, t: e.timeStamp }];
-      setIsDragging(true);
-      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    },
-    [desktop],
-  );
-
-  const onPointerMove = useCallback(
-    (e: React.PointerEvent) => {
+  const dragTo = useCallback(
+    (y: number, now: number) => {
       const st = startRef.current;
-      if (!st || e.pointerId !== st.id) return;
+      if (!st) return;
 
-      const now = e.timeStamp;
-      movesRef.current.push({ y: e.clientY, t: now });
+      movesRef.current.push({ y, t: now });
       const cutoff = now - 80;
       while (movesRef.current.length > 0 && movesRef.current[0].t < cutoff) {
         movesRef.current.shift();
       }
 
-      const dy = e.clientY - st.y;
+      const dy = y - st.y;
       // Dragging up (dy < 0) increases height; dragging down (dy > 0) decreases height
       let h = st.startH - dy;
       const v = vh();
@@ -170,18 +169,18 @@ export default function BottomSheet({
     [],
   );
 
-  const onPointerUp = useCallback(
-    (e: React.PointerEvent) => {
+  const endDrag = useCallback(
+    (y: number, t: number, allowTap: boolean) => {
       const st = startRef.current;
-      if (!st || e.pointerId !== st.id) return;
+      if (!st) return;
       startRef.current = null;
       setIsDragging(false);
 
-      const moved = Math.abs(e.clientY - st.y);
-      const elapsed = e.timeStamp - st.t;
+      const moved = Math.abs(y - st.y);
+      const elapsed = t - st.t;
 
       // Quick tap toggle
-      if (moved < 6 && elapsed < 250) {
+      if (allowTap && moved < 6 && elapsed < 250) {
         if (!st.target?.closest?.("button,a,input,[role='button']")) {
           let nextSnap: Snap;
           if (snapRef.current === "peek") nextSnap = "half";
@@ -250,20 +249,102 @@ export default function BottomSheet({
     [dismissOnDrag, onClose],
   );
 
+  const cancelDrag = useCallback(() => {
+    if (!startRef.current) return;
+    startRef.current = null;
+    setIsDragging(false);
+    if (sheetRef.current) {
+      sheetRef.current.style.removeProperty("--sheet-height");
+      sheetRef.current.style.transition = "height 0.35s var(--ease-spring)";
+      sheetRef.current.style.height = SNAP_HEIGHTS[snapRef.current];
+    }
+  }, []);
+
+  const onPointerDown = useCallback(
+    (e: React.PointerEvent) => {
+      if (desktop) return;
+      if (startRef.current != null || !e.isPrimary) return;
+      if ((e.target as HTMLElement).closest?.("button,a,input,[role='button']")) return;
+      beginDrag(e.pointerId, e.clientY, e.timeStamp, e.target as HTMLElement);
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    },
+    [desktop, beginDrag],
+  );
+
+  const onPointerMove = useCallback(
+    (e: React.PointerEvent) => {
+      if (e.pointerId === startRef.current?.id) dragTo(e.clientY, e.timeStamp);
+    },
+    [dragTo],
+  );
+
+  const onPointerUp = useCallback(
+    (e: React.PointerEvent) => {
+      if (e.pointerId === startRef.current?.id) endDrag(e.clientY, e.timeStamp, true);
+    },
+    [endDrag],
+  );
+
   const onPointerCancel = useCallback(
     (e: React.PointerEvent) => {
-      const st = startRef.current;
-      if (!st || e.pointerId !== st.id) return;
-      startRef.current = null;
-      setIsDragging(false);
-      if (sheetRef.current) {
-        sheetRef.current.style.removeProperty("--sheet-height");
-        sheetRef.current.style.transition = "height 0.35s var(--ease-spring)";
-        sheetRef.current.style.height = SNAP_HEIGHTS[snapRef.current];
-      }
+      if (e.pointerId === startRef.current?.id) cancelDrag();
     },
-    [],
+    [cancelDrag],
   );
+
+  /* Pulling the content down while its list is scrolled to the top drags the sheet, so a sheet
+     opened at half can be lowered from anywhere to uncover the map. Native listeners: React's
+     touchmove is passive and could not stop the browser's own pan/overscroll. */
+  useEffect(() => {
+    const root = contentRef.current;
+    if (desktop || !root) return;
+    const onStart = (e: TouchEvent) => {
+      if (touchRef.current?.mode === "sheet") return;
+      const t = e.touches[0];
+      touchRef.current =
+        e.touches.length === 1 && startRef.current == null && !(e.target as Element).closest?.("input,textarea,select")
+          ? { x: t.clientX, y: t.clientY, mode: "pending" }
+          : null;
+    };
+    const onMove = (e: TouchEvent) => {
+      const tr = touchRef.current;
+      if (!tr || tr.mode === "native") return;
+      const t = e.touches[0];
+      if (tr.mode === "pending") {
+        const dx = t.clientX - tr.x;
+        const dy = t.clientY - tr.y;
+        if (Math.abs(dx) < 4 && Math.abs(dy) < 4) return;
+        const scroller = scrollerOf(e.target as Element, root);
+        if (dy <= Math.abs(dx) || !e.cancelable || (scroller && scroller.scrollTop > 0)) {
+          tr.mode = "native";
+          return;
+        }
+        tr.mode = "sheet";
+        beginDrag(TOUCH_DRAG, t.clientY, e.timeStamp, null);
+      }
+      e.preventDefault();
+      dragTo(t.clientY, e.timeStamp);
+    };
+    const onEnd = (e: TouchEvent) => {
+      const tr = touchRef.current;
+      touchRef.current = null;
+      if (tr?.mode !== "sheet" || startRef.current?.id !== TOUCH_DRAG) return;
+      // no click on the row the drag started from
+      if (e.cancelable) e.preventDefault();
+      if (e.type === "touchcancel") cancelDrag();
+      else endDrag(e.changedTouches[0].clientY, e.timeStamp, false);
+    };
+    root.addEventListener("touchstart", onStart, { passive: true });
+    root.addEventListener("touchmove", onMove, { passive: false });
+    root.addEventListener("touchend", onEnd);
+    root.addEventListener("touchcancel", onEnd);
+    return () => {
+      root.removeEventListener("touchstart", onStart);
+      root.removeEventListener("touchmove", onMove);
+      root.removeEventListener("touchend", onEnd);
+      root.removeEventListener("touchcancel", onEnd);
+    };
+  }, [desktop, beginDrag, dragTo, endDrag, cancelDrag]);
 
   if (desktop) {
     return (
@@ -317,11 +398,11 @@ export default function BottomSheet({
         style={{ touchAction: "none" }}
       >
         <div className="flex w-full items-center justify-center pb-1.5 pt-2" aria-hidden>
-          <div className="h-1 w-9 rounded-full bg-white/20 transition-colors hover:bg-white/35 active:bg-white/45" />
+          <div className="h-1 w-9 rounded-full bg-tint/20 transition-colors hover:bg-tint/35 active:bg-tint/45" />
         </div>
         {header}
       </div>
-      <div className="relative min-h-0 flex-1 overflow-hidden" style={{ touchAction: "pan-y" }}>
+      <div ref={contentRef} className="relative min-h-0 flex-1 overflow-hidden" style={{ touchAction: "pan-y" }}>
         <div
           className="pointer-events-none absolute inset-x-0 top-0 z-10 h-3 bg-gradient-to-b from-surface to-transparent"
           aria-hidden

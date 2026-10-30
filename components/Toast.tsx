@@ -35,7 +35,7 @@ function Toast({ text, actionLabel, onAction, onClose }: Props) {
         type="button"
         aria-label="Zamknij powiadomienie"
         onClick={onClose}
-        className="tap grid h-7 w-7 shrink-0 place-items-center rounded-full text-[14px] text-text-mute hover:bg-white/8 hover:text-text"
+        className="tap grid h-7 w-7 shrink-0 place-items-center rounded-full text-[14px] text-text-mute hover:bg-tint/8 hover:text-text"
       >
         <XIcon weight="bold" aria-hidden />
       </button>

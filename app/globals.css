@@ -9,6 +9,8 @@
   --color-surface-2: #1f242a;
   --color-surface-3: #293038;
   --color-hairline: rgba(255, 255, 255, 0.07);
+  /* hover / press / fill overlays (`bg-tint/6`): white on dark, black on light */
+  --color-tint: #ffffff;
 
   /* ---- text ---- */
   --color-text: #e8eaed;
@@ -90,9 +92,34 @@
   }
 }
 
+/* ---------- light theme ----------
+   data-theme is set before first paint by the inline script in app/layout.tsx (kb:theme, else the
+   system setting); without it the app stays dark. Same AA guarantee for text on bg/surface/surface-2. */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --color-bg: #f2f3f5;
+  --color-surface: #ffffff;
+  --color-surface-2: #eef0f3;
+  --color-surface-3: #e2e6ea;
+  --color-hairline: rgba(0, 0, 0, 0.09);
+  --color-tint: #000000;
+  --color-text: #1b1e22;
+  --color-text-mute: #596069;
+  --color-text-faint: #666e77;
+  --color-primary: #b01f35;
+  --color-primary-dim: rgba(176, 31, 53, 0.1);
+  --color-good: #16794a;
+  --color-late: #9c5200;
+  --color-early: #7a3fc8;
+  --color-danger: #c2261b;
+  --shadow-float: 0 1px 2px rgba(0, 0, 0, 0.1), 0 8px 28px -6px rgba(0, 0, 0, 0.18);
+  --shadow-sheet: 0 -4px 32px rgba(0, 0, 0, 0.14);
+}
+
 /* ---------- base ---------- */
 
 html {
+  color-scheme: dark;
   min-height: 100%;
   scroll-behavior: smooth;
   -webkit-tap-highlight-color: transparent;
@@ -372,7 +399,7 @@ body {
   transition: background-color 0.15s ease, color 0.15s ease;
 }
 .leaflet-bar a:last-child { border-bottom: none !important; }
-.leaflet-bar a:hover, .leaflet-bar a:focus { background: var(--color-surface-3) !important; color: #fff !important; }
+.leaflet-bar a:hover, .leaflet-bar a:focus { background: var(--color-surface-3) !important; color: var(--color-text) !important; }
 .leaflet-bar a.leaflet-disabled { background: var(--color-surface) !important; color: var(--color-text-faint) !important; }
 /* align the zoom column with the LocateButton (right-3 = 12px) */
 .leaflet-bottom.leaflet-right .leaflet-control-zoom { margin: 0 12px 12px 0; }
@@ -389,7 +416,7 @@ body {
 }
 
 .leaflet-control-attribution {
-  background: rgba(13, 16, 19, 0.6) !important;
+  background: color-mix(in srgb, var(--color-bg) 60%, transparent) !important;
   color: var(--color-text-faint) !important;
   font-size: 10px !important;
   padding: 2px 8px !important;

@@ -107,7 +107,7 @@ export function VehicleSheet({
         tabIndex={-1}
         className="relative flex max-h-[92dvh] w-full animate-rise flex-col overflow-hidden rounded-t-3xl border border-hairline bg-bg shadow-[var(--shadow-sheet)] focus:outline-none md:max-h-[88dvh] md:max-w-3xl md:rounded-3xl"
       >
-        <div aria-hidden className="mx-auto mt-2 h-1 w-10 shrink-0 rounded-full bg-white/15 md:hidden" />
+        <div aria-hidden className="mx-auto mt-2 h-1 w-10 shrink-0 rounded-full bg-tint/15 md:hidden" />
         <header className="flex shrink-0 items-center gap-2 border-b border-hairline px-4 pb-3 pt-2 md:pt-4">
           <div className="min-w-0 flex-1">
             <h2 id={titleId} className="truncate text-[18px] font-bold text-text tabular-nums">
@@ -127,7 +127,7 @@ export function VehicleSheet({
             type="button"
             onClick={onClose}
             aria-label="Zamknij kartę pojazdu"
-            className="grid h-11 w-11 shrink-0 place-items-center rounded-full text-text-mute transition-colors hover:bg-white/8 hover:text-text"
+            className="grid h-11 w-11 shrink-0 place-items-center rounded-full text-text-mute transition-colors hover:bg-tint/8 hover:text-text"
           >
             <CloseIcon />
           </button>
@@ -155,7 +155,7 @@ export function VehicleSheet({
               <button
                 type="button"
                 onClick={onClose}
-                className="mt-4 min-h-10 rounded-full bg-surface-3 px-4 text-[13px] font-semibold text-text hover:bg-white/12"
+                className="mt-4 min-h-10 rounded-full bg-surface-3 px-4 text-[13px] font-semibold text-text hover:bg-tint/12"
               >
                 Wróć do listy
               </button>
@@ -503,7 +503,7 @@ function StatusBlock({ v, nowEpoch, onShowOnMap }: { v: FleetVehicleDetail; nowE
         <div className="mt-auto pt-3">
           <a
             href={`/?${v.operator === "GZM" ? "city=gzm&" : ""}map=${loc.lat.toFixed(5)},${loc.lon.toFixed(5)},16`}
-            className="inline-flex min-h-10 items-center gap-2 rounded-full bg-surface-3 px-4 text-[13px] font-semibold text-text transition-colors hover:bg-white/12"
+            className="inline-flex min-h-10 items-center gap-2 rounded-full bg-surface-3 px-4 text-[13px] font-semibold text-text transition-colors hover:bg-tint/12"
           >
             <MapIcon size={15} />
             Ostatnia pozycja na mapie
@@ -520,11 +520,11 @@ function PredictionCard({ p, operator }: { p: NonNullable<FleetVehicleDetail["pr
   return (
     <section
       aria-label={scheduled ? "Następny kurs według rozkładu" : "Następny kurs, szacunek"}
-      className={`rounded-2xl border p-4 ${scheduled ? "border-hairline bg-surface" : "border-dashed border-white/15"}`}
+      className={`rounded-2xl border p-4 ${scheduled ? "border-hairline bg-surface" : "border-dashed border-tint/15"}`}
     >
       <div className="mb-2 flex items-center justify-between gap-3">
         <h3 className="text-[14px] font-semibold text-text">{scheduled ? "Następny kurs" : "Następny kurs (szacunek)"}</h3>
-        <span className="rounded-full bg-white/6 px-2 py-0.5 text-[11.5px] font-medium text-text-mute">
+        <span className="rounded-full bg-tint/6 px-2 py-0.5 text-[11.5px] font-medium text-text-mute">
           {scheduled ? "według rozkładu" : p.confidence === "medium" ? "średnia pewność" : "niska pewność"}
         </span>
       </div>
@@ -569,7 +569,7 @@ function CourseRow({
         aria-expanded={open}
         aria-controls={panelId}
         onClick={() => onToggle(c.id)}
-        className="flex min-h-12 w-full items-center gap-3 rounded-lg px-1 py-2 text-left transition-colors hover:bg-white/5"
+        className="flex min-h-12 w-full items-center gap-3 rounded-lg px-1 py-2 text-left transition-colors hover:bg-tint/5"
       >
         <span className="w-[5.5rem] shrink-0 text-[12.5px] text-text-mute tabular-nums">
           {c.startTime}–{c.endTime}
@@ -588,7 +588,7 @@ function CourseRow({
         {cancelled ? (
           <span className="shrink-0 rounded-md bg-danger/12 px-1.5 py-0.5 text-[12px] font-semibold text-danger">Przerwany</span>
         ) : notStarted ? (
-          <span className="shrink-0 rounded-md bg-white/6 px-1.5 py-0.5 text-[12px] font-medium text-text-mute">Czeka</span>
+          <span className="shrink-0 rounded-md bg-tint/6 px-1.5 py-0.5 text-[12px] font-medium text-text-mute">Czeka</span>
         ) : (
           <span className="flex shrink-0 items-center gap-1.5">
             {live ? <span className="text-[11.5px] font-medium text-good">teraz</span> : null}

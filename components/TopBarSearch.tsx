@@ -3,6 +3,7 @@
 import { memo, useCallback, useContext, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useLines, useVehicles, type GeoPos } from "@/components/hooks";
 import {
+  BugIcon,
   BusIcon,
   CheckIcon,
   DropIcon,
@@ -43,7 +44,7 @@ export interface TopBarSearchProps {
   onPickStop: (s: Stop) => void;
   onPickVehicle: (v: Vehicle) => void;
   lineFilter: ReadonlySet<string> | null;
-  onToggleLine: (line: string) => void;
+  onOpenLine: (l: LineInfo) => void;
   onClearLineFilter: () => void;
   onToggleStops: () => void;
   stopsVisible: boolean;
@@ -96,7 +97,7 @@ const CAP = { lines: 4, vehs: 5, fleet: 5, actions: 3, stops: 6 } as const;
 /** Leading tile, as wide as a LineBadge so every row's text starts on one column. */
 function Glyph({ children }: { children: React.ReactNode }) {
   return (
-    <span className="grid h-7 w-9 shrink-0 place-items-center rounded-lg bg-white/6 text-[15px] text-text-mute" aria-hidden>
+    <span className="grid h-7 w-9 shrink-0 place-items-center rounded-lg bg-tint/6 text-[15px] text-text-mute" aria-hidden>
       {children}
     </span>
   );
@@ -129,7 +130,7 @@ function StopGlyph({ operator = "KB", station = false }: { operator?: "KB" | "MZ
 
 function Tag({ icon, children }: { icon?: React.ReactNode; children: React.ReactNode }) {
   return (
-    <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-white/6 px-1.5 py-px text-[10.5px] font-medium text-text-mute">
+    <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-tint/6 px-1.5 py-px text-[10.5px] font-medium text-text-mute">
       {icon}
       {children}
     </span>
@@ -219,7 +220,7 @@ function TopBarSearch({
   onPickStop,
   onPickVehicle,
   lineFilter,
-  onToggleLine,
+  onOpenLine,
   onClearLineFilter,
   onToggleStops,
   stopsVisible,
@@ -382,6 +383,15 @@ function TopBarSearch({
         icon: <BusIcon />,
         run: () => {
           window.location.href = `/brygady${withCity("", city)}`;
+        },
+      },
+      {
+        id: "report",
+        label: "Zgłoś błąd lub pomysł",
+        keywords: "zglos blad problem pomysl kontakt uwagi sugestia github",
+        icon: <BugIcon />,
+        run: () => {
+          window.open("https://github.com/unisic/unimaps/issues/new", "_blank", "noopener");
         },
       },
     ];
@@ -579,14 +589,14 @@ function TopBarSearch({
         window.location.href = `/brygady?tabor=${it.f.sideNumber}`;
         setIsFocused(false);
       } else if (it.kind === "line") {
-        onToggleLine(it.l.name);
+        onOpenLine(it.l);
         setIsFocused(false);
       } else if (it.kind === "action") {
         it.a.run();
         setIsFocused(false);
       }
     },
-    [onPickStop, onPickVehicle, onToggleLine],
+    [onPickStop, onPickVehicle, onOpenLine],
   );
 
   // Keyboard navigation on input
@@ -658,7 +668,7 @@ function TopBarSearch({
               inputRef.current?.focus();
             }}
             aria-label="Wyczyść wyszukiwanie"
-            className="tap grid h-7 w-7 shrink-0 place-items-center rounded-full bg-white/6 text-[13px] text-text-mute hover:bg-white/10 hover:text-text"
+            className="tap grid h-7 w-7 shrink-0 place-items-center rounded-full bg-tint/6 text-[13px] text-text-mute hover:bg-tint/10 hover:text-text"
           >
             <XIcon />
           </button>
@@ -704,7 +714,7 @@ function TopBarSearch({
                               }}
                               onClick={() => pick(it)}
                               className={`flex w-full items-center gap-3 rounded-xl px-2.5 py-2 text-left text-[13px] transition-[background-color,color,scale] duration-150 active:scale-[0.99] ${
-                                isSelected ? "bg-white/8 text-text" : "text-text-mute hover:bg-white/6"
+                                isSelected ? "bg-tint/8 text-text" : "text-text-mute hover:bg-tint/6"
                               }`}
                             >
                               {it.kind === "stop" && (
@@ -735,11 +745,8 @@ function TopBarSearch({
                                     </span>
                                     <span className="mt-0.5 block truncate text-[11.5px] tabular-nums text-text-faint">
                                       {OPERATOR_LABEL[it.l.operator || "KB"]} ·{" "}
-                                      {it.active
-                                        ? "filtr aktywny, kliknij, aby wyłączyć"
-                                        : it.live > 0
-                                          ? `${it.live} ${wozPlural(it.live)} na trasie`
-                                          : "brak wozów na trasie"}
+                                      {it.live > 0 ? `${it.live} ${wozPlural(it.live)} na trasie` : "brak wozów na trasie"}
+                                      {it.active && " · filtr aktywny"}
                                     </span>
                                   </span>
                                   {it.active && <CheckIcon className="shrink-0 text-[15px] text-primary" />}

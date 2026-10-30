@@ -4,6 +4,7 @@ import { memo, useCallback, useContext, useEffect, useId, useRef, useState } fro
 import TopBarSearch, { type TopBarSearchHandle } from "@/components/TopBarSearch";
 import {
   ArrowRightIcon,
+  BugIcon,
   CardsIcon,
   MegaphoneSimpleIcon,
   MoonIcon,
@@ -15,8 +16,9 @@ import {
 import { useAnnouncements } from "@/lib/client/announcements";
 import { CITY, CityContext, saveCity, withCity, type City } from "@/lib/client/city";
 import { useSmoothMotion } from "@/lib/client/smoothMotion";
+import { setThemePref, useThemePref, type ThemePref } from "@/lib/client/theme";
 import type { GeoPos } from "@/components/hooks";
-import type { Stop, Vehicle } from "@/lib/client/types";
+import type { LineInfo, Stop, Vehicle } from "@/lib/client/types";
 
 export type BaseLayerId = "kb" | "dark";
 
@@ -82,7 +84,7 @@ export interface TopBarProps {
   onPickStop: (s: Stop) => void;
   onPickVehicle: (v: Vehicle) => void;
   lineFilter: ReadonlySet<string> | null;
-  onToggleLine: (line: string) => void;
+  onOpenLine: (l: LineInfo) => void;
   onClearLineFilter: () => void;
   onClearView: () => void;
   onOpenNearby: () => void;
@@ -115,13 +117,13 @@ function SwitchRow({
       role="switch"
       aria-checked={checked}
       aria-describedby={hint ? hintId : undefined}
-      className="flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2.5 text-left transition-colors hover:bg-white/5"
+      className="flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2.5 text-left transition-colors hover:bg-tint/5"
     >
       <span className="flex flex-col gap-0.5">
         <span className="flex items-center gap-2 text-text">
           {label}
           {badge && (
-            <span className="shrink-0 rounded-full bg-white/6 px-1.5 py-px text-[10.5px] font-medium text-text-mute">
+            <span className="shrink-0 rounded-full bg-tint/6 px-1.5 py-px text-[10.5px] font-medium text-text-mute">
               {badge}
             </span>
           )}
@@ -134,7 +136,7 @@ function SwitchRow({
       </span>
       <span
         className={`relative inline-flex h-[22px] w-[38px] shrink-0 items-center rounded-full px-[3px] transition-colors duration-200 ${
-          checked ? "bg-primary" : "bg-white/12"
+          checked ? "bg-primary" : "bg-tint/12"
         }`}
         aria-hidden
       >
@@ -161,7 +163,7 @@ function Segmented<T extends string>({
   onChange: (id: T) => void;
 }) {
   return (
-    <div className="flex rounded-full bg-white/5 p-1" role="radiogroup" aria-label={label}>
+    <div className="flex rounded-full bg-tint/5 p-1" role="radiogroup" aria-label={label}>
       {options.map((o) => {
         const on = value === o.id;
         return (
@@ -222,7 +224,7 @@ function AnnouncementsButton({ onClick }: { onClick: () => void }) {
       aria-label={unseen ? "Utrudnienia w ruchu (nowe komunikaty)" : "Utrudnienia w ruchu"}
       title="Utrudnienia w ruchu"
       onClick={onClick}
-      className="tap relative grid h-10 w-10 shrink-0 place-items-center rounded-full text-[19px] text-text-mute hover:bg-white/8 hover:text-text md:h-9 md:w-9 md:text-[18px]"
+      className="tap relative grid h-10 w-10 shrink-0 place-items-center rounded-full text-[19px] text-text-mute hover:bg-tint/8 hover:text-text md:h-9 md:w-9 md:text-[18px]"
     >
       <MegaphoneSimpleIcon />
       {unseen && (
@@ -234,6 +236,12 @@ function AnnouncementsButton({ onClick }: { onClick: () => void }) {
     </button>
   );
 }
+
+const THEME_OPTIONS: Array<{ id: ThemePref; label: string }> = [
+  { id: "system", label: "Auto" },
+  { id: "light", label: "Jasny" },
+  { id: "dark", label: "Ciemny" },
+];
 
 const LAYER_LEAD: Record<BaseLayerId, React.ReactNode> = {
   kb: <SunIcon />,
@@ -254,7 +262,7 @@ function TopBar({
   onPickStop,
   onPickVehicle,
   lineFilter,
-  onToggleLine,
+  onOpenLine,
   onClearLineFilter,
   onClearView,
   onOpenNearby,
@@ -271,6 +279,7 @@ function TopBar({
   const rootRef = useRef<HTMLDivElement>(null);
   /* per-browser preference; only this component re-renders on toggle */
   const [smoothMotion, setSmoothMotion] = useSmoothMotion();
+  const themePref = useThemePref();
   const city = useContext(CityContext);
   const gzm = city === "gzm";
 
@@ -298,7 +307,7 @@ function TopBar({
           onPickStop={onPickStop}
           onPickVehicle={onPickVehicle}
           lineFilter={lineFilter}
-          onToggleLine={onToggleLine}
+          onOpenLine={onOpenLine}
           onClearLineFilter={onClearLineFilter}
           onToggleStops={onToggleStops}
           stopsVisible={stopsVisible}
@@ -319,7 +328,7 @@ function TopBar({
             onClick={() => onOperatorFilter("all")}
             aria-label={`Filtr przewoźnika: ${operatorFilter.toUpperCase()}. Pokaż wszystkich`}
             title="Pokaż wszystkich przewoźników"
-            className="tap flex h-7 shrink-0 items-center gap-1.5 rounded-full bg-white/8 pl-2.5 pr-2 text-[12px] font-semibold text-text hover:bg-white/12"
+            className="tap flex h-7 shrink-0 items-center gap-1.5 rounded-full bg-tint/8 pl-2.5 pr-2 text-[12px] font-semibold text-text hover:bg-tint/12"
           >
             <OperatorDot op={operatorFilter} />
             {operatorFilter.toUpperCase()}
@@ -361,7 +370,7 @@ function TopBar({
             searchRef?.current?.blur();
           }}
           className={`tap grid h-10 w-10 shrink-0 place-items-center rounded-full text-[19px] md:h-9 md:w-9 md:text-[18px] ${
-            menu ? "bg-white/10 text-text" : "text-text-mute hover:bg-white/8 hover:text-text"
+            menu ? "bg-tint/10 text-text" : "text-text-mute hover:bg-tint/8 hover:text-text"
           }`}
         >
           <SlidersHorizontalIcon />
@@ -389,6 +398,11 @@ function TopBar({
               </div>
             </>
           )}
+
+          <MenuLabel>Motyw</MenuLabel>
+          <div className="px-1">
+            <Segmented label="Motyw aplikacji" value={themePref} options={THEME_OPTIONS} onChange={setThemePref} />
+          </div>
 
           {Object.keys(BASE_LAYERS).length > 1 && (
             <>
@@ -421,10 +435,20 @@ function TopBar({
 
           <a
             href={`/brygady${withCity("", city)}`}
-            className="group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-text transition-colors hover:bg-white/5"
+            className="group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-text transition-colors hover:bg-tint/5"
           >
             <CardsIcon className="text-[17px] text-text-mute" />
             <span className="flex-1">Karty brygad i tabor na żywo</span>
+            <ArrowRightIcon className="text-[14px] text-text-faint transition-transform duration-200 group-hover:translate-x-0.5" />
+          </a>
+          <a
+            href="https://github.com/unisic/unimaps/issues/new"
+            target="_blank"
+            rel="noopener"
+            className="group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-text transition-colors hover:bg-tint/5"
+          >
+            <BugIcon className="text-[17px] text-text-mute" />
+            <span className="flex-1">Zgłoś błąd lub pomysł</span>
             <ArrowRightIcon className="text-[14px] text-text-faint transition-transform duration-200 group-hover:translate-x-0.5" />
           </a>
 

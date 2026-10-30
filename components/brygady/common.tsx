@@ -214,7 +214,7 @@ export function DelayBadge({ sec, size = "sm" }: { sec: number; size?: "sm" | "m
   const cls = classifyDelay(sec);
   return (
     <span
-      className={`inline-flex shrink-0 items-center rounded-md bg-white/6 font-semibold tabular-nums ${DELAY_TEXT[cls]} ${
+      className={`inline-flex shrink-0 items-center rounded-md bg-tint/6 font-semibold tabular-nums ${DELAY_TEXT[cls]} ${
         size === "md" ? "px-2 py-1 text-[13px]" : "px-1.5 py-0.5 text-[12px]"
       }`}
       title={`${DELAY_LABEL[cls]} (${DELAY_RANGE[cls]})`}

@@ -21,13 +21,9 @@ import { col, parseCsvLine, pickupFlags } from "./gtfs-csv";
 import { log } from "./logger";
 import { buildRouterIndex, type RouterIndex } from "./router";
 import { finalizeShape, type ShapeGeometry, type ShapePayload, type ShapeStatus } from "./shape-store";
+import { gzmStopKey } from "./shared/gzm-stop-key";
 import { decodePolyline, preparePolyline, type LatLng } from "./shared/polyline";
 import type { WireStop } from "./types";
-
-/** A pole's name without its post number: "Pszczelnik Park 02", "... Pętla Zach. 1t", "Katowice Sądowa 1A". */
-export function gzmStopKey(name: string): string {
-  return name.replace(/\s\d{1,2}[a-z]?$/i, "");
-}
 
 export interface GzmStop {
   /** `gzm:<stop_id>` */

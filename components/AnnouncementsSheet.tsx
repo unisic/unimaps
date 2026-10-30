@@ -32,7 +32,7 @@ function AnnouncementsSheet({ desktop, onClose }: Props) {
   const header = (
     <header className="px-4 pb-3 pt-2 md:pt-4">
       <div className="flex items-center gap-3">
-        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-white/6 text-[18px] text-text-mute">
+        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-tint/6 text-[18px] text-text-mute">
           <MegaphoneSimpleIcon />
         </span>
         <div className="min-w-0 flex-1">
@@ -59,7 +59,7 @@ function AnnouncementsSheet({ desktop, onClose }: Props) {
         ) : status === "ready" ? (
           <ul className="stagger space-y-2">
             {items.map((a) => (
-              <li key={`${a.id}-${a.rev}`} className="rounded-xl bg-white/4 px-4 py-3.5">
+              <li key={`${a.id}-${a.rev}`} className="rounded-xl bg-tint/4 px-4 py-3.5">
                 <p className="max-w-[65ch] whitespace-pre-line text-[13.5px] leading-relaxed text-text">
                   {/* upstream marks headlines with markdown **bold**; the odd split parts are the bold runs */}
                   {a.content_markdown

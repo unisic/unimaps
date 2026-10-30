@@ -4,7 +4,7 @@ import { memo, useEffect, useMemo, useState } from "react";
 import BottomSheet from "@/components/BottomSheet";
 import { CaretRightIcon, PersonSimpleWalkIcon } from "@/components/icons";
 import type { GeoStatus } from "@/components/hooks";
-import { CloseIcon, ErrorState, IconButton, LineBadge, SkeletonRows } from "@/components/ui";
+import { CloseIcon, ErrorState, IconButton, LineBadge, LiveMark, SkeletonRows } from "@/components/ui";
 import { fetchJSON, isWarming } from "@/lib/client/api";
 import { GZM_LOADING } from "@/lib/client/city";
 import { delayClass, displayStopName } from "@/lib/client/format";
@@ -96,7 +96,7 @@ function NearbyView({ desktop, stops, pos, geoStatus, vehicles, onSelectStop, on
   const header = (
     <header className="px-4 pb-3 pt-2 md:pt-4">
       <div className="flex items-center gap-3">
-        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-white/6 text-[18px] text-text-mute">
+        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-tint/6 text-[18px] text-text-mute">
           <PersonSimpleWalkIcon />
         </span>
         <div className="min-w-0 flex-1">
@@ -150,7 +150,7 @@ function NearbyView({ desktop, stops, pos, geoStatus, vehicles, onSelectStop, on
                 <button
                   type="button"
                   onClick={() => onSelectStop(s)}
-                  className="tap flex w-full items-center gap-2 rounded-xl px-2 py-2 text-left hover:bg-white/5 active:bg-white/8"
+                  className="tap flex w-full items-center gap-2 rounded-xl px-2 py-2 text-left hover:bg-tint/5 active:bg-tint/8"
                 >
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-[14.5px] font-semibold text-text">
@@ -180,14 +180,14 @@ function NearbyView({ desktop, stops, pos, geoStatus, vehicles, onSelectStop, on
                           <button
                             type="button"
                             onClick={() => onSelectStop(s)}
-                            className="tap flex w-full items-center gap-3 rounded-xl px-2 py-1.5 text-left hover:bg-white/5 active:bg-white/8"
+                            className="tap flex w-full items-center gap-3 rounded-xl px-2 py-1.5 text-left hover:bg-tint/5 active:bg-tint/8"
                           >
                             <LineBadge line={line} operator={row.operator} />
                             <p className="min-w-0 flex-1 truncate text-[13.5px] text-text">
                               {dest ? displayStopName(dest) : `Linia ${line}`}
                             </p>
                             <p
-                              className={`shrink-0 text-[14px] font-semibold tabular-nums ${
+                              className={`flex shrink-0 items-center gap-1 text-[14px] font-semibold tabular-nums ${
                                 timing.canceled
                                   ? "text-text-faint line-through"
                                   : est
@@ -195,6 +195,7 @@ function NearbyView({ desktop, stops, pos, geoStatus, vehicles, onSelectStop, on
                                     : "text-text"
                               }`}
                             >
+                              {est && <LiveMark />}
                               {etaLabel(timing, nowTs, row.time ?? "")}
                             </p>
                           </button>

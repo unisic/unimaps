@@ -6,8 +6,9 @@
  * The watcher polls that stop's board on its own (`isVisible: () => true`): the 4 s vehicle poll and
  * StopView's board both stop in a hidden tab, an alert must not.
  * Platform ceiling: Chrome throttles a hidden tab's timers to about once a minute after 5 min, iOS
- * suspends JS in the background; there it fires only while the app is open. Real web push would need
- * a push server (VAPID, subscriptions, a POST endpoint).
+ * suspends JS in the background. So an alert also goes to the server as a web push subscription
+ * (lib/push-alerts.ts), which fires it with the app closed; both fire under one tag, the later
+ * notification replaces the earlier one.
  */
 import { useSyncExternalStore } from "react";
 
@@ -15,47 +16,16 @@ import { fetchJSON } from "@/lib/client/api";
 import { cityOfId, type City } from "@/lib/client/city";
 import { nowSecs } from "@/lib/client/format";
 import { createLivePoll, type LivePoll } from "@/lib/client/live-poll";
-import type { DepartureRow, DeparturesResponse } from "@/lib/client/types";
-import { gzmRowKey, kbRowKey, minutesUntil, mzkRowKey, resolveTiming, rowKey } from "@/lib/shared/departures";
+import type { DeparturesResponse } from "@/lib/client/types";
+import { alertAction, alertMessage, MAX_ALERTS, type Alert } from "@/lib/shared/alerts";
+import { gzmRowKey, kbRowKey, mzkRowKey } from "@/lib/shared/departures";
 
-export interface Alert {
-  /** rowKey of the departure: stable across refetches (KB exec + visit, MZK course + order) */
-  key: string;
-  designator: string;
-  stopName: string;
-  line: string;
-  dest: string;
-  leadMin: number;
-  /** epoch s after which the alert is dropped unfired (plan + 30 min) */
-  until: number;
-}
+export { ALERT_LEADS, MAX_ALERTS, alertAction, type Alert, type AlertAction } from "@/lib/shared/alerts";
 
-export const ALERT_LEADS = [3, 5, 10] as const;
-/** per city: both cities share one stored list */
-export const MAX_ALERTS = 3;
 const KEY = "kb:alerts";
 const STORED_MAX = MAX_ALERTS * 2;
 const EXPIRE_AFTER_SEC = 30 * 60;
 const EMPTY: readonly Alert[] = [];
-
-export type AlertAction = { act: "wait" | "cancelled" | "expired" } | { act: "fire"; mins: number };
-
-/**
- * What one board refresh means for an alert. The ETA is the board's own (`resolveTiming` without a
- * vehicle). ponytail: StopView may refine an MZK row with the live bus's delay; the watcher lives
- * outside React and skips that, so it can fire up to that correction early or late.
- */
-export function alertAction(a: Alert, rows: readonly DepartureRow[], nowTs: number): AlertAction {
-  if (nowTs > a.until) return { act: "expired" };
-  const row = rows.find((r) => rowKey(r) === a.key);
-  // not on the board (truncated, or gone): keep waiting until `until`
-  if (!row) return { act: "wait" };
-  const t = resolveTiming(row, null);
-  if (t.canceled) return { act: "cancelled" };
-  const mins = minutesUntil(t, nowTs);
-  // set with less time left than the lead: fires on the first board, with the real minutes
-  return mins <= a.leadMin ? { act: "fire", mins } : { act: "wait" };
-}
 
 /** Epoch s at which an unfired alert gives up: 30 min after the plan, `plannedSecs` being Warsaw
  *  seconds since midnight taken within ±12 h of now (a course across midnight). */
@@ -138,12 +108,15 @@ export function addAlert(a: Alert): boolean {
   const rest = getSnapshot().filter((x) => x.key !== a.key);
   if (rest.filter(mine).length >= MAX_ALERTS) return false;
   mutate([...rest, a]);
+  pushSync("POST", { alert: a });
   return true;
 }
 
 export function removeAlert(key: string): void {
   const cur = getSnapshot();
-  if (cur.some((a) => a.key === key)) mutate(cur.filter((a) => a.key !== key));
+  if (!cur.some((a) => a.key === key)) return;
+  mutate(cur.filter((a) => a.key !== key));
+  pushSync("DELETE", { key });
 }
 
 /* ---- watchers: one board poll per stop that has alerts ---- */
@@ -159,9 +132,8 @@ function onBoard(designator: string, res: DeparturesResponse): void {
     const r = alertAction(a, rows, nowTs);
     if (r.act === "wait") continue;
     done.add(a.key);
-    const where = `${a.dest}, przystanek ${a.stopName}`;
-    if (r.act === "fire") void notify(`${a.line} ${r.mins > 0 ? `za ${r.mins} min` : "odjeżdża"}`, where, a);
-    else if (r.act === "cancelled") void notify(`${a.line}: kurs odwołany`, where, a);
+    const m = alertMessage(a, r);
+    if (m) void notify(m.title, m.body, m.tag, m.url);
   }
   if (done.size > 0) mutate(getSnapshot().filter((a) => !done.has(a.key)));
 }
@@ -194,8 +166,9 @@ export function startAlertWatchers(city: City = "bb"): void {
   syncWatchers();
 }
 
-async function notify(title: string, body: string, a: Alert): Promise<void> {
-  const opts = { body, tag: a.key, icon: "/icon-192.png", data: { url: `/?stop=${encodeURIComponent(a.designator)}` } };
+/** A system notification through the SW (it survives the tab), else a page one; `tag` replaces an earlier one. */
+export async function notify(title: string, body: string, tag: string, url: string): Promise<void> {
+  const opts = { body, tag, icon: "/icon-192.png", data: { url } };
   try {
     // getRegistration, not .ready: .ready never settles without a SW (dev)
     const reg = await navigator.serviceWorker?.getRegistration();
@@ -208,4 +181,38 @@ async function notify(title: string, body: string, a: Alert): Promise<void> {
   } catch {
     /* permission revoked meanwhile */
   }
+}
+
+/* ---- web push: the server fires the same alert with the app closed ---- */
+
+let pushKey: Promise<string | null> | null = null;
+
+async function pushSubscription(create: boolean): Promise<PushSubscription | null> {
+  if (typeof Notification === "undefined" || Notification.permission !== "granted") return null;
+  const reg = await navigator.serviceWorker?.getRegistration();
+  if (!reg?.pushManager) return null;
+  const sub = await reg.pushManager.getSubscription();
+  if (sub || !create) return sub;
+  // 404 = push off on this server
+  pushKey ??= fetchJSON<{ key: string }>("/api/push").then((r) => r.key, () => null);
+  const key = await pushKey;
+  if (!key) return null;
+  const raw = atob(key.replace(/-/g, "+").replace(/_/g, "/"));
+  return reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: Uint8Array.from(raw, (c) => c.charCodeAt(0)) });
+}
+
+function pushSync(method: "POST" | "DELETE", body: object): void {
+  void pushSubscription(method === "POST")
+    .then(
+      (sub) =>
+        sub &&
+        fetch("/api/push", {
+          method,
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ subscription: sub.toJSON(), ...body }),
+        }),
+    )
+    .catch(() => {
+      /* no push (iOS outside an installed app, a blocked push service): the page watcher still fires */
+    });
 }

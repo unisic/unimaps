@@ -122,6 +122,15 @@ const PUBLIC_OSRM = OSRM_URL !== null && /(^|\/\/)router\.project-osrm\.org\b/.t
 /** Minimum spacing between OSRM requests (clamped to ≥1000 ms on the public demo host). */
 export const OSRM_MIN_INTERVAL_MS = Math.max(PUBLIC_OSRM ? 1000 : 0, envInt("KB_OSRM_MIN_INTERVAL_MS", 1100, 250));
 export const OSRM_USER_AGENT = envStr("KB_OSRM_USER_AGENT", USER_AGENT);
+/**
+ * Address search behind /api/geocode (a Photon API, OpenStreetMap data). The
+ * public komoot host is fair-use only: the route caches answers and caps the
+ * requests in flight. KB_GEOCODER_URL=off disables the address search.
+ */
+export const GEOCODER_URL: string | null = (() => {
+  const v = envStr("KB_GEOCODER_URL", "https://photon.komoot.io/api/").trim();
+  return v.toLowerCase() === "off" ? null : v;
+})();
 /** Road shapes older than this are re-routed gradually (one per 2 min). */
 export const SHAPES_MAX_AGE_DAYS = envInt("KB_SHAPES_MAX_AGE_DAYS", 14);
 /** Persisted shape store (outside output/gtfs, which the builder swaps atomically). */
@@ -149,6 +158,15 @@ export const GZM_SDIP_URL = envStr("KB_GZM_SDIP_URL", "https://sdip.transportgzm
 export const GZM_DIR = envStr("KB_GZM_DIR", path.join(OUTPUT_DIR, "gzm"));
 /** Days of GZM fleet history kept on disk (~12-14 MB per day: ~22 000 finished courses x ~530 B, plus the running ones). */
 export const GZM_FLEET_HISTORY_DAYS = envInt("KB_GZM_FLEET_HISTORY_DAYS", 30);
+
+/**
+ * Web push of departure alerts (lib/push-alerts.ts, lib/web-push.ts): KB_PUSH=0 switches it off
+ * (/api/push answers 404, alerts then fire only while the app is open). The VAPID key pair and the
+ * pending alerts live in KB_PUSH_DIR; KB_PUSH_SUBJECT is the contact push services see (mailto: or https:).
+ */
+export const PUSH_ENABLED = envInt("KB_PUSH", 1, 0) !== 0;
+export const PUSH_DIR = envStr("KB_PUSH_DIR", path.join(OUTPUT_DIR, "push"));
+export const PUSH_SUBJECT = envStr("KB_PUSH_SUBJECT", "https://github.com/unisic/unimaps");
 
 /** Map an upstream line type to a GTFS route_type (port of route_type_for). */
 export function routeTypeFor(lineType: string | null | undefined, _vehicleType?: number | null): number {

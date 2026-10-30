@@ -26,8 +26,11 @@ and no database.
 - Departure boards and full timetables per stop. Nearby departures, departure
   alerts, and favourite stops kept for offline use.
 - Trip timelines on road-following shapes, routed and stored on the server
-- Journey planner (range RAPTOR) with walking transfers between stops up to
-  350 m apart
+- Journey planner (range RAPTOR) from and to a stop, an address or your
+  location, leaving at or arriving by a time, with walking transfers between
+  stops up to 350 m apart
+- Line view: every stop pattern a line runs today, with each stop's departures
+- Light and dark theme, following the system setting by default
 - Fleet and brigade view at `/brygady`
 - Optional smooth motion that dead-reckons buses along their route between
   fixes, an installable PWA, and a `Ctrl+K` search for stops, lines and
@@ -83,8 +86,11 @@ Checks: `npm run typecheck`, `npm run lint`, `npm test`.
 | `/api/stop/:id/departures` | Live and scheduled departures |
 | `/api/stop/:id/timetable` | Full day timetable |
 | `/api/trip/:id`, `/api/trip_execution`, `/api/trips` | Trip timelines |
-| `/api/connections?from=&to=` | Journey planner |
+| `/api/connections?from=&to=` | Journey planner; `from=` / `to=geo:LAT,LON` starts or ends at every stop within `walk` metres (200 to 1500, default 800); `time=HH:MM&arriveBy=true` makes `time` the latest arrival |
+| `/api/geocode?q=` | Street, address and place search within the city (Photon, OpenStreetMap) |
+| `/api/push` | Web push for departure alerts: `GET` the VAPID key, `POST {subscription, alert}`, `DELETE {subscription, key}` (`KB_PUSH=0` = 404) |
 | `/api/lines` | Line catalogue |
+| `/api/line?name=` | One line's stop patterns and per-stop departures for a day (`op=KB\|MZK`, `date=YYYY-MM-DD`) |
 | `/api/shapes?ids=` | Stored road geometry, immutable-cached |
 | `/api/fleet`, `/api/fleet/:side`, `/api/fleet/timeline` | Fleet and brigades |
 | `/api/announcements` | KB service announcements |
@@ -104,6 +110,7 @@ All settings are optional `KB_*` environment variables, read once at start.
 |---|---|---|
 | `KB_OSRM_URL` | `https://router.project-osrm.org/route/v1/driving` | `off` disables server-side road routing |
 | `KB_OSRM_MIN_INTERVAL_MS` | `1100` | at least 1000 on the public OSRM host |
+| `KB_GEOCODER_URL` | `https://photon.komoot.io/api/` | `off` disables the address search |
 | `KB_USER_AGENT` | `unimaps/2.0 (+https://github.com/unisic/unimaps)` | sent to every upstream |
 | `KB_GPS_DELAY` | `1` | `0` keeps upstream's raw KB delay |
 | `KB_GZM` | `1` | `0` switches Metropolia GZM off |

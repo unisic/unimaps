@@ -66,7 +66,12 @@ export interface ConnectionItinerary {
   transfersCount: number;
   transferWaitMins?: number;
   transferStopName?: string;
+  /** every minute on foot: the walk to the first stop plus the transfers */
   walkMinutes?: number;
+  /** walk from the query point to the first leg's pole, minutes (searches from a point only) */
+  accessWalkMins?: number;
+  /** walk from the last leg's pole to the destination point, minutes (searches to a point only) */
+  egressWalkMins?: number;
   date?: string;
   dayLabel?: string;
   arrivesNextDay?: boolean;
@@ -78,8 +83,15 @@ export interface RouteQuery {
   to: string;
   /** router stop ids of the origin (KB stop id, `mzk:<symbol>`); `from` is the name fallback when none is known */
   fromIds?: string[];
+  /** origin as a point (the rider's location, an address): every pole within walkM (default ACCESS_MAX_M),
+   *  reached on foot; overrides from/fromIds */
+  fromPoint?: { lat: number; lon: number; walkM?: number };
   toIds?: string[];
+  /** destination as a point: every pole within walkM, the walk from it counted into the arrival; overrides to/toIds */
+  toPoint?: { lat: number; lon: number; walkM?: number };
   afterSecs?: number;
+  /** afterSecs is the latest arrival: the latest-leaving journeys that arrive by then, that day only */
+  arriveBy?: boolean;
   limit?: number;
   directOnly?: boolean;
   minTransferSecs?: number;
@@ -186,6 +198,10 @@ const WALK_MAX_M = 350;
 /** poles closer than this are one stop (the KB and MZK pole of one shelter), no walk; twins of one operator stand >= 5 m apart */
 const SAME_STOP_M = 4;
 const WALK_MPS = 1.1;
+/** a search from a point starts at the nearest ACCESS_MAX_POLES poles within its walk radius, by default
+ *  ACCESS_MAX_M (~12 min on foot) */
+const ACCESS_MAX_M = 800;
+const ACCESS_MAX_POLES = 24;
 /** slack on top of a walk between poles, so a walking transfer is never tighter than walk + 1.5 min */
 const WALK_MARGIN_SECS = 90;
 const DEFAULT_CHANGE_SECS = 180;
@@ -271,6 +287,11 @@ function approxDistMeters(lat1: number, lon1: number, lat2: number, lon2: number
   const dLat = (lat2 - lat1) * 111320;
   const dLon = (lon2 - lon1) * 111320 * Math.cos(((lat1 + lat2) / 2) * (Math.PI / 180));
   return Math.sqrt(dLat * dLat + dLon * dLon);
+}
+
+/** Walk over a straight-line distance, whole minutes; poles of one shelter are 0. */
+function footSecs(d: number): number {
+  return d < SAME_STOP_M ? 0 : 60 * Math.max(1, Math.ceil(d / WALK_MPS / 60));
 }
 
 /** Makes a trip's times non-decreasing: a drop of more than 12 h is a midnight wrap (+24 h), a smaller one is clamped. */
@@ -539,7 +560,7 @@ export function buildRouterIndex(input: RouterInput): RouterIndex {
       const q = located[b];
       const d = approxDistMeters(p.s.lat, p.s.lon, q.s.lat, q.s.lon);
       if (d > WALK_MAX_M) continue;
-      const secs = d < SAME_STOP_M ? 0 : 60 * Math.max(1, Math.ceil(d / WALK_MPS / 60));
+      const secs = footSecs(d);
       foot[p.i].push({ to: q.i, secs });
       foot[q.i].push({ to: p.i, secs });
     }
@@ -633,6 +654,34 @@ function resolvePoles(input: string, idx: RouterIndex): Set<string> {
     }
   }
   return combined;
+}
+
+/** A pole a search starts (or ends) at and the walk between it and the query point (0 for a stop). */
+interface Origin {
+  stop: number;
+  walk: number;
+}
+
+/** The nearest ACCESS_MAX_POLES poles within ACCESS_MAX_M of a point, each with its walk. O(poles) per query. */
+function accessPoles(idx: RouterIndex, at: { lat: number; lon: number; walkM?: number }): Origin[] {
+  const maxM = at.walkM ?? ACCESS_MAX_M;
+  const near: Array<{ stop: number; d: number }> = [];
+  idx.stopIds.forEach((id, stop) => {
+    const s = idx.stops.get(id);
+    if (!s || !s.lat || !s.lon) return;
+    const d = approxDistMeters(at.lat, at.lon, s.lat, s.lon);
+    if (d <= maxM) near.push({ stop, d });
+  });
+  near.sort((a, b) => a.d - b.d);
+  return near.slice(0, ACCESS_MAX_POLES).map(({ stop, d }) => ({ stop, walk: footSecs(d) }));
+}
+
+/** The poles of a stop query, no walk. */
+function stopOrigins(idx: RouterIndex, ids: string[] | undefined, input: string): Origin[] {
+  return [...resolveQueryPoles(ids, input, idx)].flatMap((id) => {
+    const stop = idx.stopNum.get(id);
+    return stop === undefined ? [] : [{ stop, walk: 0 }];
+  });
 }
 
 /** Union of the poles of the given stop ids; falls back to resolving `input` by name when none is known. */
@@ -790,12 +839,53 @@ export function stopEvents(idx: RouterIndex, poleIds: Iterable<string>, date: st
   return out.length > limit ? out.slice(0, limit) : out;
 }
 
+export interface LineVariant {
+  headsign: string;
+  stops: Array<{ id: string; name: string; lat?: number; lon?: number }>;
+  /** per trip, by first departure: the departure at each stop in minutes from the date's midnight (past 1440 after midnight) */
+  times: number[][];
+}
+
+// ponytail: a line's 12 busiest stop patterns; the rest are depot runs and one-off short turns
+const MAX_VARIANTS = 12;
+
+/** The line view: each stop pattern `line` of `operator` runs on `date` (most trips first) with every trip's times. */
+export function lineTimetable(line: string, operator: "KB" | "MZK" | "GZM", date: string, idx: RouterIndex | null = getIndex()): LineVariant[] | null {
+  if (!idx) return null;
+  const wd = weekdayMonday0(date);
+  const prefix = operator === "KB" ? null : `${operator.toLowerCase()}:`;
+  const groups = new Map<string, TripEntry[]>();
+  for (const trip of idx.trips.values()) {
+    if (trip.line !== line || trip.stops.length < 2) continue;
+    if (prefix ? !trip.tripId.startsWith(prefix) : /^(mzk|gzm):/.test(trip.tripId)) continue;
+    if (!isTripActiveOnDay(trip, wd, date, idx)) continue;
+    const key = trip.nums.join(",");
+    const g = groups.get(key);
+    if (g) g.push(trip);
+    else groups.set(key, [trip]);
+  }
+  return [...groups.values()]
+    .sort((a, b) => b.length - a.length)
+    .slice(0, MAX_VARIANTS)
+    .map((trips) => {
+      trips.sort((a, b) => a.stops[0].dep - b.stops[0].dep);
+      return {
+        headsign: trips[0].headsign,
+        stops: trips[0].stops.map(({ stopId }) => {
+          const e = idx.stops.get(stopId);
+          return { id: stopId, name: e?.name || stopId, lat: e?.lat, lon: e?.lon };
+        }),
+        times: trips.map((t) => t.stops.map((st) => Math.round(st.dep / 60))),
+      };
+    });
+}
+
 interface Ride {
   route: Route;
   trip: number;
   board: number;
   alight: number;
-  /** walk from the previous ride's alighting pole to `board`; 0 = same pole, same stop or first ride */
+  /** walk from the previous ride's alighting pole to `board` (0 = same pole or stop); on the first ride, the walk from the query point */
   walkSecs: number;
 }
 
@@ -803,18 +893,20 @@ interface Ride {
  * Range RAPTOR: every Pareto-optimal (departure, arrival, rides) journey from `origins` to a target
  * pole that leaves in [after, end). Departures are processed latest first with labels kept between them,
  * so each one only reports journeys that beat everything leaving later; `end` itself is a silent first
- * run, so the window's last departures are judged against the ones right after it.
+ * run, so the window's last departures are judged against the ones right after it. A departure is the time the
+ * rider leaves: a bus's departure at an origin minus the walk to that origin.
  */
 function rangeSearch(
   idx: RouterIndex,
   table: DayTable,
-  origins: number[],
-  isTarget: Uint8Array,
+  origins: Origin[],
+  egress: Int32Array,
   after: number,
   end: number,
   rides: number,
   change: number,
   probe: boolean,
+  cap = INF,
 ): Ride[][] | null {
   const n = idx.stopIds.length;
   const rounds = (fill: number) => Array.from({ length: rides + 1 }, () => new Int32Array(n).fill(fill));
@@ -826,7 +918,8 @@ function rangeSearch(
   const pBoard = rounds(0);
   const pAlight = rounds(0);
   const pFrom = rounds(0);
-  const tgt = new Int32Array(rides + 1).fill(INF);
+  // best arrival at the destination per round (a target pole's arrival plus its egress walk), never past `cap`
+  const tgt = new Int32Array(rides + 1).fill(cap);
   const tgtStop = new Int32Array(rides + 1);
   const qPos = new Int32Array(table.routes.length).fill(-1);
   const isMarked = new Uint8Array(n);
@@ -862,7 +955,11 @@ function rangeSearch(
       // the fewest rides that still made this boarding; labels only ever drop, so one always exists
       let j = 0;
       while (j < round - 1 && rdy[j][b] > d) j++;
-      if (j === 0) break;
+      if (j === 0) {
+        // only origins carry a round-0 label
+        ride.walkSecs = origins.find((o) => o.stop === b)?.walk ?? 0;
+        break;
+      }
       const q = pFrom[j][b];
       ride.walkSecs = q === b ? 0 : walkSecs(q, b);
       stop = q;
@@ -874,9 +971,9 @@ function rangeSearch(
   const found: Ride[][] = [];
   const run = (tau: number, collect: boolean): void => {
     let marked: number[] = [];
-    for (const o of origins) {
+    for (const { stop: o, walk } of origins) {
       // runs go latest tau first, so this only ever lowers the label
-      setRdy(0, o, tau);
+      setRdy(0, o, tau + walk);
       if (!isMarked[o]) {
         isMarked[o] = 1;
         marked.push(o);
@@ -921,8 +1018,9 @@ function rangeSearch(
                 isArrived[s] = 1;
                 arrived.push(s);
               }
-              if (isTarget[s]) {
-                tgt[k] = a;
+              const e = egress[s];
+              if (e >= 0 && a + e < tgt[k]) {
+                tgt[k] = a + e;
                 tgtStop[k] = s;
                 improved[k] = true;
               }
@@ -971,7 +1069,7 @@ function rangeSearch(
   };
 
   const departures = new Set<number>();
-  for (const o of origins) {
+  for (const { stop: o, walk } of origins) {
     const list = table.at[o];
     for (let i = 0; i < list.length; i += 2) {
       const route = table.routes[list[i]];
@@ -979,7 +1077,7 @@ function rangeSearch(
       const p = list[i + 1];
       if (p === len - 1 || (route.flags && route.flags[p] & NO_PICKUP)) continue;
       for (let t = 0; t < route.trips.length; t++) {
-        const d = route.dep[t * len + p];
+        const d = route.dep[t * len + p] - walk;
         if (d >= after && d < end) departures.add(d);
       }
     }
@@ -989,10 +1087,10 @@ function rangeSearch(
     // earliest-arrival run from `after` misses is out of every window's reach: no need to scan 24 h for nothing
     run(after, false);
     let reached = false;
-    for (let k = 1; k <= rides; k++) if (tgt[k] < INF) reached = true;
+    for (let k = 1; k <= rides; k++) if (tgt[k] < cap) reached = true;
     if (!reached) return null;
     for (const a of [arr, rdy, minArr, minRdy]) for (const r of a) r.fill(INF);
-    tgt.fill(INF);
+    tgt.fill(cap);
   }
   run(end, false);
   for (const tau of [...departures].sort((a, b) => b - a)) run(tau, true);
@@ -1001,6 +1099,7 @@ function rangeSearch(
 
 function toItinerary(
   rides: Ride[],
+  egress: Int32Array,
   idx: RouterIndex,
   date: string,
   dayLabel: string | undefined,
@@ -1049,34 +1148,46 @@ function toItinerary(
 
   const first = legs[0];
   const last = legs[legs.length - 1];
+  // from a point the journey starts when the rider leaves, the walk before the first bus; to a point it ends after the walk
+  const access = rides[0].walkSecs;
+  const depSecs = first.departureSecs - access;
+  const end = rides[rides.length - 1];
+  const egressSecs = Math.max(0, egress[end.route.stops[end.alight]]);
+  const arrSecs = last.arrivalSecs + egressSecs;
   // secs stay relative to the searched date; a journey leaving after midnight belongs to the next day
-  const dayOff = Math.floor(first.departureSecs / 86400);
+  const dayOff = Math.floor(depSecs / 86400);
   const depDate = dayOff === 0 ? date : offsetDate(date, dayOff);
   return {
     type: legs.length === 1 ? "direct" : "transfer",
-    departureTime: first.departureTime,
-    arrivalTime: last.arrivalTime,
-    departureSecs: first.departureSecs,
-    arrivalSecs: last.arrivalSecs,
-    totalDurationMins: Math.max(1, Math.round((last.arrivalSecs - first.departureSecs) / 60)),
+    departureTime: formatHHMM(depSecs),
+    arrivalTime: formatHHMM(arrSecs),
+    departureSecs: depSecs,
+    arrivalSecs: arrSecs,
+    totalDurationMins: Math.max(1, Math.round((arrSecs - depSecs) / 60)),
     transfersCount: legs.length - 1,
     transferWaitMins: legs.length > 1 ? Math.round(waitSecs / 60) : undefined,
     transferStopName: transfers.length > 0 ? transfers.join(" / ") : undefined,
-    walkMinutes,
+    walkMinutes: walkMinutes + Math.round(access / 60) + Math.round(egressSecs / 60),
+    ...(access > 0 ? { accessWalkMins: Math.round(access / 60) } : {}),
+    ...(egressSecs > 0 ? { egressWalkMins: Math.round(egressSecs / 60) } : {}),
     date: depDate,
     dayLabel:
       dayOff === 0 ? dayLabel : dayOff === 1 && isToday ? "Jutro" : PL_WEEKDAYS[weekdayMonday0(depDate)],
-    arrivesNextDay: Math.floor(last.arrivalSecs / 86400) > dayOff,
+    arrivesNextDay: Math.floor(arrSecs / 86400) > dayOff,
     legs,
   };
 }
 
-/** The Pareto set of one service day from `afterSecs`, over a window doubled until it holds `limit` journeys (24 h max). */
+/**
+ * The Pareto set of one service day from `afterSecs`, over a window doubled until it holds `limit` journeys (24 h max).
+ * Arrive-by: the window of departures ends at `afterSecs` and grows back, every arrival capped at it.
+ */
+// ponytail: arrive-by stays on the day's table, a 05:00 arrival misses the previous day's after-midnight trips
 function searchDay(
   query: RouteQuery,
   idx: RouterIndex,
-  origins: number[],
-  isTarget: Uint8Array,
+  origins: Origin[],
+  egress: Int32Array,
   afterSecs: number,
   date: string,
   dayLabel: string | undefined,
@@ -1087,27 +1198,32 @@ function searchDay(
   const rides = query.directOnly ? 1 : MAX_RIDES;
   const change = Number.isFinite(query.minTransferSecs) ? query.minTransferSecs! : DEFAULT_CHANGE_SECS;
   const maxWait = query.maxTransferSecs ?? Infinity;
+  const back = !!query.arriveBy;
   for (let w = FIRST_WINDOW_SECS; ; w *= 2) {
     const span = Math.min(w, 86400);
-    const runs = rangeSearch(idx, table, origins, isTarget, afterSecs, afterSecs + span, rides, change, w === FIRST_WINDOW_SECS);
-    if (!runs) return [];
-    const found = runs
-      .map((r) => toItinerary(r, idx, date, dayLabel, isToday))
+    const start = back ? Math.max(0, afterSecs - span) : afterSecs;
+    // a probe that misses the target: forward, nothing later reaches it either; arrive-by, an earlier start still may
+    const runs = back
+      ? rangeSearch(idx, table, origins, egress, start, afterSecs, rides, change, true, afterSecs + 1)
+      : rangeSearch(idx, table, origins, egress, afterSecs, afterSecs + span, rides, change, w === FIRST_WINDOW_SECS);
+    if (!runs && !back) return [];
+    const found = (runs ?? [])
+      .map((r) => toItinerary(r, egress, idx, date, dayLabel, isToday))
       .filter((it) => it.legs.every((l, i) => i === 0 || l.departureSecs - it.legs[i - 1].arrivalSecs <= maxWait));
-    if (found.length >= limit || span >= 86400) return found;
+    if (found.length >= limit || span >= 86400 || (back && start === 0)) return found;
   }
 }
 
 /**
  * Find the Pareto-optimal connections (direct or with up to MAX_RIDES - 1 transfers, walking between
- * nearby poles and between operators) between two stops.
+ * nearby poles and between operators) between two stops or points, leaving after or arriving by a time.
  */
 export function findConnections(query: RouteQuery, idx: RouterIndex | null = getIndex()): ConnectionItinerary[] {
   if (!idx) return [];
 
-  const fromPoles = resolveQueryPoles(query.fromIds, query.from, idx);
-  const toPoles = resolveQueryPoles(query.toIds, query.to, idx);
-  if (fromPoles.size === 0 || toPoles.size === 0) return [];
+  const origins = query.fromPoint ? accessPoles(idx, query.fromPoint) : stopOrigins(idx, query.fromIds, query.from);
+  const targets = query.toPoint ? accessPoles(idx, query.toPoint) : stopOrigins(idx, query.toIds, query.to);
+  if (origins.length === 0 || targets.length === 0) return [];
 
   const queryDate = query.date || config.todayLocalISO();
   const isTodaySearch = !query.date || query.date === config.todayLocalISO();
@@ -1116,21 +1232,20 @@ export function findConnections(query: RouteQuery, idx: RouterIndex | null = get
   const afterSecs = query.afterSecs ?? (isTodaySearch ? nowSecs() : 0);
   const limit = Number.isFinite(query.limit) ? Math.max(1, Math.min(query.limit!, 20)) : 5;
 
-  const origins = [...fromPoles].flatMap((id) => idx.stopNum.get(id) ?? []);
-  const isTarget = new Uint8Array(idx.stopIds.length);
-  for (const id of toPoles) {
-    const n = idx.stopNum.get(id);
-    if (n !== undefined) isTarget[n] = 1;
-  }
+  // per pole: the walk from it to the destination, -1 = not a target
+  const egress = new Int32Array(idx.stopIds.length).fill(-1);
+  for (const { stop, walk } of targets) egress[stop] = walk;
 
-  let found = searchDay(query, idx, origins, isTarget, afterSecs, queryDate, query.dayLabel, isTodaySearch, limit);
+  let found = searchDay(query, idx, origins, egress, afterSecs, queryDate, query.dayLabel, isTodaySearch, limit);
 
   // Nothing within 24 h of today's query (a line that does not run tomorrow either): try the following days.
-  for (let offset = 1; offset <= (query.fallbackDays ?? 3) && found.length === 0 && isTodaySearch; offset++) {
+  for (let offset = 1; offset <= (query.fallbackDays ?? 3) && found.length === 0 && isTodaySearch && !query.arriveBy; offset++) {
     const nextDate = offsetDate(queryDate, offset);
     const nextLabel = offset === 1 ? "Jutro" : PL_WEEKDAYS[weekdayMonday0(nextDate)];
-    found = searchDay(query, idx, origins, isTarget, 0, nextDate, nextLabel, false, limit);
+    found = searchDay(query, idx, origins, egress, 0, nextDate, nextLabel, false, limit);
   }
+  // arrive-by keeps the latest-leaving journeys
+  if (query.arriveBy) found = found.sort((a, b) => b.departureSecs - a.departureSecs).slice(0, limit);
 
   const byDeparture = (a: ConnectionItinerary, b: ConnectionItinerary): number =>
     a.departureSecs - b.departureSecs || a.arrivalSecs - b.arrivalSecs || a.transfersCount - b.transfersCount;

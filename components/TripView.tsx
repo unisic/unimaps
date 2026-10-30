@@ -96,7 +96,7 @@ const SHOWN_FEATURES = [
 
 function Feature({ icon, label, title }: { icon: React.ReactNode; label: string; title?: string }) {
   return (
-    <span className="inline-flex items-center gap-1 rounded-full bg-white/6 px-2 py-0.5 text-text-mute" title={title}>
+    <span className="inline-flex items-center gap-1 rounded-full bg-tint/6 px-2 py-0.5 text-text-mute" title={title}>
       <span className="text-[12px]">{icon}</span>
       {label}
     </span>
@@ -423,7 +423,7 @@ function TripView({
             aria-expanded={menuAt != null}
             onClick={toggleMenu}
             className={`tap grid h-11 w-11 shrink-0 place-items-center rounded-full text-[18px] md:h-9 md:w-9 ${
-              menuAt ? "bg-white/10 text-text" : "text-text-mute hover:bg-white/8 hover:text-text"
+              menuAt ? "bg-tint/10 text-text" : "text-text-mute hover:bg-tint/8 hover:text-text"
             }`}
           >
             <DotsThreeVerticalIcon weight="bold" />
@@ -462,7 +462,7 @@ function TripView({
                 setMenuAt(null);
                 onOpenVehicleCard(cardSide);
               }}
-              className="group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-text transition-colors hover:bg-white/5"
+              className="group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-text transition-colors hover:bg-tint/5"
             >
               <CardsIcon className="text-[17px] text-text-mute" />
               <span className="min-w-0 flex-1">
@@ -507,7 +507,7 @@ function TripView({
         </p>
       )}
       {eta && (
-        <p className="mt-2.5 rounded-xl bg-white/5 px-3 py-2 text-[12.5px] tabular-nums text-text-mute" aria-live="polite">
+        <p className="mt-2.5 rounded-xl bg-tint/5 px-3 py-2 text-[12.5px] tabular-nums text-text-mute" aria-live="polite">
           {eta}
         </p>
       )}
@@ -574,7 +574,7 @@ function TripView({
                     disabled={!coord}
                     onClick={() => coord && onFocusStop(coord)}
                     className={`flex min-w-0 flex-1 items-stretch gap-3 rounded-xl text-left transition-colors ${
-                      coord ? "hover:bg-white/5 active:bg-white/8" : ""
+                      coord ? "hover:bg-tint/5 active:bg-tint/8" : ""
                     }`}
                   >
                     {/* time: the plan struck through above the actual one when they differ */}
@@ -667,7 +667,7 @@ function TripView({
                       aria-label={al ? `Wyłącz powiadomienie ${al.leadMin} min przed` : "Powiadom przed odjazdem"}
                       aria-expanded={al ? undefined : alertMenu === ak}
                       onClick={() => (al ? removeAlert(ak) : setAlertMenu((m) => (m === ak ? null : ak)))}
-                      className={`tap grid h-11 w-10 shrink-0 place-items-center rounded-xl text-[17px] hover:bg-white/5 ${
+                      className={`tap grid h-11 w-10 shrink-0 place-items-center rounded-xl text-[17px] hover:bg-tint/5 ${
                         al ? "text-primary" : "text-text-mute hover:text-text"
                       }`}
                     >
@@ -694,7 +694,7 @@ function TripView({
                             key={m}
                             type="button"
                             onClick={() => trip.stop && void pickAlert(ak, trip.stop, planned, m)}
-                            className="tap min-h-8 rounded-full bg-white/8 px-3 font-medium text-text hover:bg-white/12"
+                            className="tap min-h-8 rounded-full bg-tint/8 px-3 font-medium text-text hover:bg-tint/12"
                           >
                             {m} min przed
                           </button>

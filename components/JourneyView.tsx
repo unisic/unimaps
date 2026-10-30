@@ -1,11 +1,13 @@
 "use client";
 
-import { Fragment, memo, useState, type CSSProperties, type ReactNode } from "react";
+import { Fragment, memo, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import BottomSheet from "@/components/BottomSheet";
-import { ArrowsLeftRightIcon, CaretDownIcon, PersonSimpleWalkIcon } from "@/components/icons";
+import { ArrowsLeftRightIcon, BellIcon, CaretDownIcon, PersonSimpleWalkIcon } from "@/components/icons";
 import { BackIcon, CloseIcon, IconButton, LineBadge } from "@/components/ui";
 import { displayStopName, przystanekPlural } from "@/lib/client/format";
-import type { ConnectionLeg, ConnectionLegStop, JourneyView as JourneyViewState } from "@/lib/client/types";
+import { notify } from "@/lib/client/alerts";
+import type { ConnectionLeg, ConnectionLegStop, JourneyView as JourneyViewState, Vehicle } from "@/lib/client/types";
+import { alightSoon, indexVehicles, legVehicle, transferAtRisk } from "@/lib/client/vehicleIndex";
 
 interface Props {
   journey: JourneyViewState;
@@ -14,14 +16,17 @@ interface Props {
   onBackToSearch: () => void;
   onSelectLeg: (legIdx: number | null) => void;
   onFocusStop: (lat: number, lon: number) => void;
+  /** the live fleet: the alight alarm follows each leg's bus */
+  vehicles: readonly Vehicle[];
+  onShowToast: (msg: string) => void;
 }
 
 const TAB = "tap inline-flex h-9 shrink-0 items-center gap-2 rounded-full text-[13px] font-medium";
 const tabTone = (on: boolean) =>
-  on ? "bg-primary-dim text-primary" : "bg-white/6 text-text-mute hover:bg-white/10 hover:text-text";
+  on ? "bg-primary-dim text-primary" : "bg-tint/6 text-text-mute hover:bg-tint/10 hover:text-text";
 
 /** a timeline row; the columns (time, rail, text) line up with TripView's */
-const ROW = "flex w-full items-stretch gap-3 rounded-xl text-left transition-colors enabled:hover:bg-white/5 enabled:active:bg-white/8";
+const ROW = "flex w-full items-stretch gap-3 rounded-xl text-left transition-colors enabled:hover:bg-tint/5 enabled:active:bg-tint/8";
 const TIME = "w-12 shrink-0 self-center pl-1 text-right tabular-nums";
 
 /** one half of the rail: a ride in its line colour, the dotted walk, the wait at one stop, or nothing */
@@ -39,7 +44,7 @@ function Half({ seg, bottom }: { seg: Seg; bottom?: boolean }) {
   if (!seg) return null;
   const at = `absolute left-1/2 h-1/2 -translate-x-1/2 ${bottom ? "bottom-0" : "top-0"}`;
   if (seg === "walk") return <span className={`w-1.5 ${at}`} style={WALK_DOTS} />;
-  if (seg === "wait") return <span className={`w-0.5 bg-white/12 ${at}`} />;
+  if (seg === "wait") return <span className={`w-0.5 bg-tint/12 ${at}`} />;
   return <span className={`w-1.5 ${at}`} style={{ background: seg.color }} />;
 }
 
@@ -64,8 +69,38 @@ function Rail({ top, bottom, node, children }: { top: Seg; bottom: Seg; node?: {
 const joinOf = (legs: ConnectionLeg[], i: number): Seg =>
   i <= 0 || i >= legs.length ? null : (legs[i].walkMins ?? 0) > 0 ? "walk" : "wait";
 
-function JourneyView({ journey, desktop, onClose, onBackToSearch, onSelectLeg, onFocusStop }: Props) {
+function JourneyView({ journey, desktop, onClose, onBackToSearch, onSelectLeg, onFocusStop, vehicles, onShowToast }: Props) {
   const [expandedLegs, setExpandedLegs] = useState<Record<number, boolean>>({});
+  /* "Budzik": a nudge one stop before each alighting, while this sheet is open. ponytail: page JS only
+     (iOS suspends it in the background); server push of the same check if riders need it pocketed */
+  const [alarm, setAlarm] = useState(false);
+  const fired = useRef(new Set<number>());
+  const vix = useMemo(() => (alarm ? indexVehicles(vehicles) : null), [alarm, vehicles]);
+  useEffect(() => {
+    if (!vix) return;
+    const { legs, date } = journey.itinerary;
+    const buses = legs.map((l) => legVehicle(l, date, vix));
+    const risk = transferAtRisk(legs, buses.map((v) => v?.delay ?? null));
+    buses.forEach((v, i) => {
+      if (!v || fired.current.has(i) || !alightSoon(legs[i], date, v)) return;
+      fired.current.add(i);
+      const next = legs[i + 1];
+      const title = `Wysiadasz na następnym: ${displayStopName(legs[i].toStopName)}`;
+      const body = next
+        ? `Przesiadka na linię ${next.line} o ${next.departureTime}${risk ? ". Opóźnienie: możesz nie zdążyć" : ""}`
+        : `Linia ${legs[i].line}, koniec podróży`;
+      void notify(title, body, `alight:${journey.gen}:${i}`, "/");
+      navigator.vibrate?.([300, 150, 300]);
+      onShowToast(title);
+    });
+  }, [vix, journey, onShowToast]);
+  const toggleAlarm = async () => {
+    if (alarm) return setAlarm(false);
+    // asked from the tap: browsers drop a permission prompt without a user gesture
+    if (typeof Notification !== "undefined" && Notification.permission === "default") await Notification.requestPermission();
+    setAlarm(true);
+    onShowToast("Powiadomię przystanek przed wysiadaniem. Działa, gdy aplikacja jest otwarta.");
+  };
 
   const toggleLegExpand = (lIdx: number) => {
     setExpandedLegs((prev) => ({ ...prev, [lIdx]: !prev[lIdx] }));
@@ -135,6 +170,9 @@ function JourneyView({ journey, desktop, onClose, onBackToSearch, onSelectLeg, o
             ))}
           </p>
         </div>
+        <IconButton onClick={() => void toggleAlarm()} label="Budzik: powiadom przed wysiadaniem" pressed={alarm}>
+          <BellIcon weight={alarm ? "fill" : "bold"} aria-hidden />
+        </IconButton>
         <IconButton onClick={onClose} label="Zamknij widok trasy">
           <CloseIcon />
         </IconButton>

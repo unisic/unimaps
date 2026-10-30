@@ -164,16 +164,15 @@ export function delayClass(td: number | null | undefined): string {
 
 /**
  * Recorded arrival per trip.times position as Warsaw seconds since midnight (null = unknown or not passed):
- * KB from the server's arrival log (`arrived`, epoch secs; upstream drops passed stops' times), MZK and GZM from the
- * operator's per-stop times of the stops before the vehicle's index.
+ * KB and GZM from the server's arrival log (`arrived`, epoch secs; neither upstream keeps passed stops' times), MZK
+ * from the operator's per-stop times of the stops before the vehicle's index.
  */
 export function arrivedSecs(resp: Pick<TripExecutionResponse, "trip" | "arrived" | "vehicle_trip_index">): (number | null)[] | null {
   if (resp.arrived) return resp.arrived.map((e) => (e == null ? null : nowSecs(new Date(e * 1000))));
   const times = resp.trip?.times;
   const vti = resp.vehicle_trip_index;
   const op = resp.trip?.operator;
-  // GZM speaks the MZK dialect: per-stop estimates in seconds
-  if ((op !== "MZK" && op !== "GZM") || !times || vti == null) return null;
+  if (op !== "MZK" || !times || vti == null) return null;
   return times.map((t, i) => {
     const plan = secsFromHHMM(t.departure_time);
     const diff = t.estimate?.time_diff;

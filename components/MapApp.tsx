@@ -24,6 +24,7 @@ import type {
   JourneyLegResolved,
   JourneyView as JourneyViewState,
   LatLng,
+  LineInfo,
   ShapeStatus,
   Stop,
   Trip,
@@ -41,6 +42,7 @@ import Toast from "@/components/Toast";
 import LineFilterChip from "@/components/LineFilterChip";
 import LocateButton from "@/components/LocateButton";
 import NearbyButton from "@/components/NearbyButton";
+import LineView from "@/components/LineView";
 import NearbyView from "@/components/NearbyView";
 import RouteButton from "@/components/RouteButton";
 import TopBar, { BASE_LAYERS, RASTER_FALLBACK, type BaseLayerId } from "@/components/TopBar";
@@ -197,7 +199,8 @@ export default function MapApp() {
     } catch {
       /* private mode — ignore */
     }
-    return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "kb";
+    // no choice yet: the app theme (set by the pre-paint script in app/layout.tsx)
+    return document.documentElement.dataset.theme === "light" ? "kb" : "dark";
   });
   /* basemap readiness: veil while loading; one silent remount-retry on failure,
      then swap to the raster fallback so the map never stays a blank void */
@@ -212,6 +215,8 @@ export default function MapApp() {
   /* "W pobliżu": the bottom of the sheet stack. A stop, trip or journey opened from it covers it
      and closing that one comes back to it; back closes it last */
   const [nearbyOpen, setNearbyOpen] = useState(false);
+  /* line view (route, stops, today's timetable), opened from search: the bottom of the stack like nearby */
+  const [openLine, setOpenLine] = useState<LineInfo | null>(null);
   /* MZK vehicle card over the map (side number). It has its own history entry: back closes
      the card and leaves the trip under it open. The ref is what the popstate listener reads. */
   const [cardSide, setCardSide] = useState<string | null>(null);
@@ -726,6 +731,7 @@ export default function MapApp() {
   const closeAnnouncements = useCallback(() => setAnnOpen(false), []);
 
   const closeNearby = useCallback(() => setNearbyOpen(false), []);
+  const closeLine = useCallback(() => setOpenLine(null), []);
 
   /* line filter — toggling a line on also frames its live vehicles */
   const toggleLineFilter = useCallback(
@@ -807,6 +813,7 @@ export default function MapApp() {
     ann: false,
     modal: false,
     nearby: false,
+    line: false,
   });
   const tripOpen = trip != null;
   // a live-opened trip keeps exec= even when buildTrip downgrades it to isLive=false
@@ -818,7 +825,7 @@ export default function MapApp() {
     const st = urlSyncRef.current;
     // journey replaces stop/trip as the base sheet; the announcements sheet and
     // the connections modal stack on top, each with a same-URL history entry
-    const overlays = (annOpen ? 1 : 0) + (connModalOpen ? 1 : 0) + (nearbyOpen ? 1 : 0);
+    const overlays = (annOpen ? 1 : 0) + (connModalOpen ? 1 : 0) + (nearbyOpen ? 1 : 0) + (openLine ? 1 : 0);
     const depth = (tripOpen ? 2 : selectedStop || journeyOpen ? 1 : 0) + overlays;
     const prev = st.prevDepth;
     const prevOverlays = st.prevOverlays;
@@ -827,6 +834,7 @@ export default function MapApp() {
     st.journey = journeyOpen;
     st.ann = annOpen;
     st.nearby = nearbyOpen;
+    st.line = openLine != null;
     st.modal = connModalOpen;
     const fromPop = st.fromPop;
     st.fromPop = false;
@@ -863,7 +871,7 @@ export default function MapApp() {
       // same-level change (stop→stop, filter, trip kind) → replace in place
       window.history.replaceState({ kb: true }, "", search || window.location.pathname);
     }
-  }, [selectedStop, tripOpen, tripExecId, tripIsStatic, filterLines, journeyOpen, annOpen, connModalOpen, nearbyOpen, city]);
+  }, [selectedStop, tripOpen, tripExecId, tripIsStatic, filterLines, journeyOpen, annOpen, connModalOpen, nearbyOpen, openLine, city]);
 
   const openVehicleCard = useCallback((side: string) => {
     if (cardRef.current) return;
@@ -942,10 +950,11 @@ export default function MapApp() {
         closeJourney();
         return;
       }
-      if (st.nearby) {
+      if (st.nearby || st.line) {
         st.fromPop = true;
         st.pushed = Math.max(0, st.pushed - 1);
         closeNearby();
+        closeLine();
         return;
       }
       const want = withCity(buildSearch(cur), city);
@@ -955,7 +964,7 @@ export default function MapApp() {
     };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
-  }, [closeTrip, closeJourney, closeConnModal, closeAnnouncements, closeNearby, city]);
+  }, [closeTrip, closeJourney, closeConnModal, closeAnnouncements, closeNearby, closeLine, city]);
 
   /* "Wyczyść widok": close every sheet and drop the line filter */
   const handleClearView = useCallback(() => {
@@ -963,6 +972,7 @@ export default function MapApp() {
     closeJourney();
     setSelectedStop(null);
     setNearbyOpen(false);
+    setOpenLine(null);
     setLineFilter(null);
   }, [closeTrip, closeJourney]);
 
@@ -996,6 +1006,7 @@ export default function MapApp() {
       /* a trip without a stop under it unwinds two history levels on close (trip depth), which
          would take the nearby sheet's entry with it */
       setNearbyOpen(false);
+      setOpenLine(null);
       setVehMeta(v);
       const m = mapRef.current;
       if (m && Number.isFinite(v.lat) && Number.isFinite(v.lon)) {
@@ -1110,9 +1121,28 @@ export default function MapApp() {
     closeTrip();
     closeJourney();
     setSelectedStop(null);
+    setOpenLine(null);
     setNearbyOpen(true);
     if (!geo.pos && geo.status !== "locating") geo.locate();
   }, [closeTrip, closeJourney, geo]);
+
+  /* a line from search replaces whatever sheet is open, like nearby */
+  const openLineView = useCallback(
+    (l: LineInfo) => {
+      closeTrip();
+      closeJourney();
+      setSelectedStop(null);
+      setNearbyOpen(false);
+      setOpenLine(l);
+    },
+    [closeTrip, closeJourney],
+  );
+
+  /* router stop id (KB id, mzk:<symbol>, gzm:<id>) to the map's stop */
+  const resolveStop = useCallback(
+    (id: string) => stopsMaps.byId.get(id) ?? stopsMaps.byDesig.get(id) ?? null,
+    [stopsMaps],
+  );
 
   /* palette "Moja lokalizacja": always fly-to-me — never the LocateButton's
      toggle-off, which would surprise from a search action */
@@ -1253,7 +1283,7 @@ export default function MapApp() {
           onPickStop={pickStopFly}
           onPickVehicle={handleVehicleClick}
           lineFilter={lineFilter}
-          onToggleLine={toggleLineFilter}
+          onOpenLine={openLineView}
           onClearLineFilter={clearLineFilter}
           onClearView={handleClearView}
           onOpenNearby={openNearby}
@@ -1283,7 +1313,7 @@ export default function MapApp() {
 
         <LocateButton status={geo.status} onLocate={handleLocate} />
         <RouteButton onClick={openConnModal} />
-        {geo.status === "active" && !nearbyOpen && !trip && !journey && !liveStop && !annOpen && (
+        {geo.status === "active" && !nearbyOpen && !openLine && !trip && !journey && !liveStop && !annOpen && (
           <NearbyButton onClick={openNearby} />
         )}
 
@@ -1292,9 +1322,12 @@ export default function MapApp() {
           onClose={closeConnModal}
           stops={stops}
           geoPos={geo.pos}
+          geoStatus={geo.status}
+          onLocate={geo.locate}
           initialFrom={connInitialFrom}
           onSelectStop={pickStopFly}
           onSelectConnection={handleSelectConnection}
+          vehicles={vehicles}
         />
 
         {toast && <Toast text={toast} onClose={closeToast} />}
@@ -1305,7 +1338,7 @@ export default function MapApp() {
           </Suspense>
         )}
 
-        {/* one sheet at a time: announcements over trip over stop over nearby; closing the
+        {/* one sheet at a time: announcements over trip over stop over nearby or line; closing the
             top one returns to whichever sheet was underneath */}
         {annOpen ? (
           <AnnouncementsSheet desktop={desktop} onClose={closeAnnouncements} />
@@ -1334,6 +1367,8 @@ export default function MapApp() {
             onBackToSearch={handleBackToConnections}
             onSelectLeg={handleSelectJourneyLeg}
             onFocusStop={handleFocusJourneyStop}
+            vehicles={vehicles}
+            onShowToast={showToast}
           />
         ) : liveStop ? (
           <StopView
@@ -1347,16 +1382,28 @@ export default function MapApp() {
             onPlanRoute={handlePlanRoute}
             walkM={walkM}
           />
+        ) : nearbyOpen ? (
+          <NearbyView
+            desktop={desktop}
+            stops={stops}
+            pos={geo.pos}
+            geoStatus={geo.status}
+            vehicles={vehicles}
+            onSelectStop={pickStopFly}
+            onClose={closeNearby}
+          />
         ) : (
-          nearbyOpen && (
-            <NearbyView
+          openLine && (
+            <LineView
+              key={`${openLine.operator}-${openLine.name}`}
               desktop={desktop}
-              stops={stops}
-              pos={geo.pos}
-              geoStatus={geo.status}
-              vehicles={vehicles}
+              line={openLine}
+              city={city}
+              filterActive={!!lineFilter?.has(openLine.name)}
+              onToggleFilter={toggleLineFilter}
+              resolveStop={resolveStop}
               onSelectStop={pickStopFly}
-              onClose={closeNearby}
+              onClose={closeLine}
             />
           )
         )}
