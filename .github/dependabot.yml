@@ -9,6 +9,10 @@ updates:
       # Next patches land as next + eslint-config-next together; React moves with them
       next-react:
         patterns: ["next", "eslint-config-next", "react", "react-dom"]
+    ignore:
+      # @types/node follows the runtime major (node:24 in the Dockerfile, CI and engines)
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
