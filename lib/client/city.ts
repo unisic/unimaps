@@ -27,6 +27,8 @@ export interface CityConfig {
   stopMinZoom: number;
   /** the operator's mark in the city chooser (a logo under /logos/ sits on a white tile); null = monogram */
   logo: string | null;
+  /** a zbiorkom city's operator colour (vehicle pills, stops, line badges); null = BB, which colours by operator */
+  color: string | null;
   vehiclesRefreshMs: number;
   /** extra data credit, plain text (no markup): rendered in the menu and in the Leaflet attribution */
   attribution: string | null;
@@ -51,6 +53,7 @@ function zbConfig(slug: ZbSlug): CityConfig {
     zoom: c.zoom,
     stopMinZoom: c.stopMinZoom ?? 14,
     logo: LOGO_SVG.has(slug) ? `/logos/${slug}.svg` : LOGO_PNG.has(slug) ? `/logos/${slug}.png` : null,
+    color: c.color ?? "#475569",
     // zbiorkom publishes positions on a 20 s grid and the server polls it only while a page asks
     vehiclesRefreshMs: 10_000,
     attribution: c.agency,
@@ -65,6 +68,7 @@ export const CITY: Record<City, CityConfig> = {
     zoom: 11,
     stopMinZoom: 14,
     logo: "/brand.svg",
+    color: null,
     vehiclesRefreshMs: 4000,
     attribution: null,
   },
@@ -79,6 +83,7 @@ export const CITY: Record<City, CityConfig> = {
     zoom: 11,
     stopMinZoom: 15,
     logo: "/gzm-logo.svg",
+    color: ZB_CITIES.gzm.color,
     // the server's SDIP overlay moves a vehicle every ~5 s (p50); it polls SDIP only while this is requested
     vehiclesRefreshMs: 5000,
     attribution: "ZTM / Metropolia GZM (CC BY), Metrorower (nextbike GBFS)",
@@ -106,7 +111,12 @@ export function isCity(v: unknown): v is City {
 
 /* the page's city for code outside React (the imperative Leaflet icon factory): set once before MapApp mounts */
 let pageCity: City = "bb";
-export const setPageCity = (c: City): void => void (pageCity = c);
+export function setPageCity(c: City): void {
+  pageCity = c;
+  // stop markers draw in var(--color-gzm), the colour of every zbiorkom city's dialect: this city's own
+  const color = CITY[c].color;
+  if (color) document.documentElement.style.setProperty("--color-gzm", color);
+}
 export const getPageCity = (): City => pageCity;
 
 /** A storage key of the city: BB keeps the bare key, every other city suffixes its slug. */

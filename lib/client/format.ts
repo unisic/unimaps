@@ -1,4 +1,5 @@
 import { delayMinutes } from "../shared/departures";
+import { CITY, getPageCity } from "./city";
 import type { Stop, TripExecutionResponse, TripTime, TripView, Vehicle } from "./types";
 
 /**
@@ -71,9 +72,9 @@ export function isMzk(operator?: string | null, line?: string | null): boolean {
   return s.length <= 2 || /^\d{1,2}[A-Z]$/i.test(s) || s.startsWith("N") || s.startsWith("P");
 }
 
-/** Constant brand color: red for KB, characteristic blue for MZK, amber for GZM. */
+/** Constant brand color: red for KB, characteristic blue for MZK, amber for GZM, the page's own for any other zbiorkom city. */
 export function operatorColor(operator?: string | null, line?: string | null): string {
-  if (operator === "GZM") return BRAND_GZM;
+  if (operator === "GZM") return CITY[getPageCity()].color ?? BRAND_GZM;
   return isMzk(operator, line) ? BRAND_MZK : BRAND_KB;
 }
 

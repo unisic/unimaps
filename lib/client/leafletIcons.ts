@@ -42,7 +42,8 @@ const PH_BICYCLE_FILL =
 const BUS_SVG = `<svg viewBox="0 0 256 256" aria-hidden="true"><path d="${PH_BUS_FILL}"/></svg>`;
 const BIKE_SVG = `<svg viewBox="0 0 256 256" aria-hidden="true"><path d="${PH_BICYCLE_FILL}"/></svg>`;
 /* Phosphor has no trolleybus: its bus, scaled down, under two trolley poles */
-const MODE_SVG: Record<Exclude<TransitMode, "bus">, string> = {
+const MODE_SVG: Record<TransitMode, string> = {
+  bus: `<svg class="veh-mode" viewBox="0 0 256 256" aria-hidden="true"><path d="${PH_BUS_FILL}"/></svg>`,
   tram: `<svg class="veh-mode" viewBox="0 0 256 256" aria-hidden="true"><path d="${PH_TRAM_FILL}"/></svg>`,
   trolleybus:
     `<svg class="veh-mode" viewBox="0 0 256 256" aria-hidden="true"><path transform="translate(32 56) scale(0.75)" d="${PH_BUS_FILL}"/>` +
@@ -69,10 +70,12 @@ export function makeVehicleIcon(
   const arrow = hasHeading
     ? `<span class="veh-arrow" style="transform:rotate(${bearing}deg)">${ARROW_SVG}</span>`
     : "";
-  // the pill draws the mark as a 13 px white silhouette: only marks made for that (app, MZK, GZM); a city logo would be a blob
-  const logo = operator === "MZK" ? "/mzk-logo.svg" : operator === "GZM" && getPageCity() === "gzm" ? "/gzm-logo.svg" : "/brand.svg";
+  // the pill draws the mark as a 13 px white silhouette: only marks made for that (app, MZK, GZM); most city logos
+  // would be a blob, so the other zbiorkom cities get the bus glyph on their own colour
+  const logo =
+    operator === "MZK" ? "/mzk-logo.svg" : operator !== "GZM" ? "/brand.svg" : getPageCity() === "gzm" ? "/gzm-logo.svg" : null;
   const brandIcon =
-    mode === "bus" ? `<img class="veh-bus" src="${logo}" alt="" aria-hidden="true" draggable="false"/>` : MODE_SVG[mode];
+    mode === "bus" && logo ? `<img class="veh-bus" src="${logo}" alt="" aria-hidden="true" draggable="false"/>` : MODE_SVG[mode];
   const opClass = operator === "GZM" ? " veh-gzm" : operator === "MZK" ? " veh-mzk" : "";
 
   return L.divIcon({
