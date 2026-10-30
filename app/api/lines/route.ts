@@ -1,5 +1,5 @@
 import { internalError, parseCity, warming } from "@/lib/api-helpers";
-import { getGzm, startGzm } from "@/lib/gzm";
+import { getZb, startZb } from "@/lib/gzm";
 import { getLines } from "@/lib/lines";
 import { getCombinedLines, startPoller } from "@/lib/poller-singleton";
 
@@ -10,10 +10,11 @@ export const runtime = "nodejs";
 export async function GET(req: Request): Promise<Response> {
   const city = parseCity(req);
   if (city instanceof Response) return city;
-  if (city === "gzm") {
-    void startGzm();
-    const feed = getGzm().currentFeed();
+  if (city !== "bb") {
+    void startZb(city);
+    const feed = getZb(city).currentFeed();
     if (!feed) return warming();
+    // "GZM" on the wire = the zbiorkom dialect for every such city; the client labels it from the registry
     const lines = feed.lines.map((l) => ({ id: l.id, name: l.name, terminus: l.terminus, type: l.type, operator: "GZM" as const }));
     return Response.json({ count: lines.length, lines }, { headers: { "Cache-Control": "public, max-age=3600" } });
   }

@@ -840,6 +840,8 @@ export function stopEvents(idx: RouterIndex, poleIds: Iterable<string>, date: st
 }
 
 export interface LineVariant {
+  /** the busiest pattern's first trip (router id), for the route handler's shape lookup */
+  tripId: string;
   headsign: string;
   stops: Array<{ id: string; name: string; lat?: number; lon?: number }>;
   /** per trip, by first departure: the departure at each stop in minutes from the date's midnight (past 1440 after midnight) */
@@ -853,11 +855,12 @@ const MAX_VARIANTS = 12;
 export function lineTimetable(line: string, operator: "KB" | "MZK" | "GZM", date: string, idx: RouterIndex | null = getIndex()): LineVariant[] | null {
   if (!idx) return null;
   const wd = weekdayMonday0(date);
-  const prefix = operator === "KB" ? null : `${operator.toLowerCase()}:`;
+  // "GZM" = a zbiorkom city's own index (every trip in it, whatever its slug prefix)
+  const keep = (id: string): boolean => (operator === "GZM" ? true : operator === "MZK" ? id.startsWith("mzk:") : !/^(mzk|gzm):/.test(id));
   const groups = new Map<string, TripEntry[]>();
   for (const trip of idx.trips.values()) {
     if (trip.line !== line || trip.stops.length < 2) continue;
-    if (prefix ? !trip.tripId.startsWith(prefix) : /^(mzk|gzm):/.test(trip.tripId)) continue;
+    if (!keep(trip.tripId)) continue;
     if (!isTripActiveOnDay(trip, wd, date, idx)) continue;
     const key = trip.nums.join(",");
     const g = groups.get(key);
@@ -870,6 +873,7 @@ export function lineTimetable(line: string, operator: "KB" | "MZK" | "GZM", date
     .map((trips) => {
       trips.sort((a, b) => a.stops[0].dep - b.stops[0].dep);
       return {
+        tripId: trips[0].tripId,
         headsign: trips[0].headsign,
         stops: trips[0].stops.map(({ stopId }) => {
           const e = idx.stops.get(stopId);

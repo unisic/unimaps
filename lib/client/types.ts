@@ -54,6 +54,11 @@ export interface Vehicle {
   not_started?: boolean;
   /** KB: static timetable trip id this bus serves (MZK: `trip_id` already is the course id) */
   sched_trip_id?: string;
+  /** another operator's vehicle in a zbiorkom city (e.g. "OTWOCK" in Warsaw): `line` is that operator's own
+   *  name (Otwock's M1 is not the metro), so it never counts as a line of the city */
+  agency?: string;
+  /** a metro train placed by the timetable, not by GPS (Warsaw: no source sends metro positions) */
+  scheduled?: boolean;
 }
 
 export interface VehiclesResponse {
@@ -109,6 +114,8 @@ export interface LineInfo {
 /** One stop pattern of a line (GET /api/line). */
 export interface LineVariant {
   headsign: string;
+  /** stored road shape of the pattern (wire id); null/absent = draw straight stop-to-stop */
+  shape?: string | null;
   stops: Array<{ id: string; name: string; lat?: number; lon?: number }>;
   /** per trip, by first departure: the departure at each stop in minutes from midnight (past 1440 after midnight) */
   times: number[][];
@@ -225,12 +232,31 @@ export interface Announcement {
   id: number;
   rev: number;
   content_markdown: string;
+  operator?: string;
+  /** the full article (GZM news) */
+  url?: string;
 }
 
 export interface AnnouncementsResponse {
   announcements?: Announcement[];
   /** changes whenever the announcement set changes — drives unread tracking */
   hash?: string;
+}
+
+/** One Metrorower station (GBFS) with the bikes available right now. */
+export interface BikeStation {
+  id: string;
+  name: string;
+  lat: number;
+  lon: number;
+  bikes: number;
+  docks: number;
+  url: string | null;
+}
+
+export interface BikesResponse {
+  stations?: BikeStation[];
+  updated?: number;
 }
 
 export type LatLng = [number, number];

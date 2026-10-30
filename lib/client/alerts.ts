@@ -13,7 +13,7 @@
 import { useSyncExternalStore } from "react";
 
 import { fetchJSON } from "@/lib/client/api";
-import { cityOfId, type City } from "@/lib/client/city";
+import { cityKey, cityOfId, type City } from "@/lib/client/city";
 import { nowSecs } from "@/lib/client/format";
 import { createLivePoll, type LivePoll } from "@/lib/client/live-poll";
 import type { DeparturesResponse } from "@/lib/client/types";
@@ -41,8 +41,10 @@ export function alertUntil(plannedSecs: number, nowTs = Date.now() / 1000): numb
  *  key on the course alone (the vehicle can be assigned later). GZM rows key on the static trip id
  *  (`tripId`, "gzm:<id>") and the stop_sequence, never on the vehicle; null without a trip id. */
 export function tripAlertKey(execId: string, index: number, tripId?: string | number | null): string | null {
-  if (execId.startsWith("gzm:")) {
-    const id = tripId == null ? "" : String(tripId).replace(/^gzm:/, "");
+  const zb = cityOfId(execId);
+  if (zb !== "bb") {
+    const raw = tripId == null ? "" : String(tripId);
+    const id = raw.startsWith(`${zb}:`) ? raw.slice(zb.length + 1) : raw;
     return id ? gzmRowKey(id, index) : null;
   }
   return execId.startsWith("mzk:") ? mzkRowKey(execId.split(":")[1], index) : kbRowKey(execId, index);
@@ -164,6 +166,41 @@ function syncWatchers(): void {
 export function startAlertWatchers(city: City = "bb"): void {
   alertsCity = city;
   syncWatchers();
+  // the server forgets a subscription it could not reach (410) or lost its file: re-announce ours
+  if (newsPushOn(city)) void setNewsPush(city, true);
+}
+
+/* ---- "Powiadamiaj o utrudnieniach": the server pushes new announcements of a city ---- */
+
+const newsKey = (city: City): string => cityKey("kb:newsPush", city);
+
+/** The user's choice for this city (localStorage); the subscription itself lives on the server. */
+export function newsPushOn(city: City): boolean {
+  try {
+    return window.localStorage.getItem(newsKey(city)) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** Subscribe (or unsubscribe) this browser to the city's announcements push; false = no push here. */
+export async function setNewsPush(city: City, on: boolean): Promise<boolean> {
+  try {
+    const sub = await pushSubscription(on);
+    const ok =
+      !!sub &&
+      (
+        await fetch("/api/push/news", {
+          method: on ? "POST" : "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ subscription: sub.toJSON(), city }),
+        })
+      ).ok;
+    window.localStorage.setItem(newsKey(city), on && ok ? "1" : "0");
+    return ok;
+  } catch {
+    return false;
+  }
 }
 
 /** A system notification through the SW (it survives the tab), else a page one; `tag` replaces an earlier one. */

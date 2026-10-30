@@ -278,7 +278,7 @@ export interface GeoHit {
 /** Address search for a connection origin. Throws on HTTP errors (404 = search off) and aborts. */
 export async function geocode(q: string, city: City, signal?: AbortSignal): Promise<GeoHit[]> {
   const p = new URLSearchParams({ q });
-  if (city === "gzm") p.set("city", "gzm");
+  if (city !== "bb") p.set("city", city);
   return (await fetchJSON<{ results: GeoHit[] }>(`/api/geocode?${p.toString()}`, { signal })).results;
 }
 
@@ -304,7 +304,7 @@ export async function getConnections(
     if (optionsOrTime.walk != null) p.set("walk", String(optionsOrTime.walk));
     if (optionsOrTime.arriveBy) p.set("arriveBy", "true");
     if (optionsOrTime.signal) signal = optionsOrTime.signal;
-    if (optionsOrTime.city === "gzm") p.set("city", "gzm");
+    if (optionsOrTime.city && optionsOrTime.city !== "bb") p.set("city", optionsOrTime.city);
   }
 
   // Throws on HTTP/network errors and aborts: a failed search is not "no connections".

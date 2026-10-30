@@ -1,5 +1,6 @@
-import { badRequest, notFound, parseCity, upstreamError, type City } from "@/lib/api-helpers";
+import { badRequest, notFound, parseCity, upstreamError, warming } from "@/lib/api-helpers";
 import { GEOCODER_URL, USER_AGENT } from "@/lib/config";
+import { getGzmFeed } from "@/lib/gzm-feed";
 import { allowRequest, clientIp, tooManyRequests } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
@@ -12,11 +13,18 @@ interface GeoHit {
   lon: number;
 }
 
-/** minLon, minLat, maxLon, maxLat: each city's stops plus the 800 m a search from a point walks */
-const BBOX: Record<City, readonly [number, number, number, number]> = {
+/** minLon, minLat, maxLon, maxLat: each city's stops plus the 800 m a search from a point walks;
+ *  any other zbiorkom city uses its feed's stop extent (null while that feed loads) */
+const BBOX: Record<string, readonly [number, number, number, number]> = {
   bb: [18.8, 49.65, 19.37, 50.06],
   gzm: [18.39, 49.96, 19.49, 50.59],
 };
+function bboxOf(city: string): readonly [number, number, number, number] | null {
+  const fixed = BBOX[city];
+  if (fixed) return fixed;
+  const a = getGzmFeed(city)?.area;
+  return a ? [a.lonMin, a.latMin, a.lonMax, a.latMax] : null;
+}
 const MAX_HITS = 6;
 /** ~1 KB per answer; a street's coordinates don't change within a day */
 const MEMO_MAX = 1000;
@@ -71,7 +79,8 @@ export async function GET(req: Request): Promise<Response> {
   if (cached && now - cached.at < MEMO_TTL_MS) return answer(cached.hits);
   if (inFlight >= MAX_IN_FLIGHT) return tooManyRequests();
 
-  const bbox = BBOX[city];
+  const bbox = bboxOf(city);
+  if (!bbox) return warming();
   const params = new URLSearchParams({ q, limit: "10", lang: "default", bbox: bbox.join(",") });
   inFlight++;
   try {

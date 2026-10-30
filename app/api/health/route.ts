@@ -1,6 +1,6 @@
 import * as config from "@/lib/config";
 import { upstreamError } from "@/lib/api-helpers";
-import { safeGzmHealth } from "@/lib/gzm";
+import { safeGzmHealth, safeZbHealth } from "@/lib/gzm";
 import { getMergedStopsView, getMzkPoller, getPoller, getShapes, startPoller } from "@/lib/poller-singleton";
 import type { HealthResponse } from "@/lib/types";
 
@@ -76,6 +76,7 @@ export async function GET(): Promise<Response> {
       gps_disagree: h.gpsDisagree,
       // informational only: GZM never flips `status` (BB health must not depend on another city's upstreams)
       gzm: safeGzmHealth(),
+      zb: safeZbHealth(),
     };
     return Response.json(body, { status: degraded ? 503 : 200 });
   } catch (err) {

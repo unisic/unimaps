@@ -6,13 +6,16 @@
  * without threading props through MapApp and without touching the 5 s vehicle
  * poll cycle. Fetches at most once per 15 min while the tab is visible.
  * Unread state = upstream's set `hash` vs the last seen hash in localStorage.
+ * One city per page load (lib/client/city.ts): the first subscriber fixes it.
  */
 import { useSyncExternalStore } from "react";
 
 import { fetchJSON } from "./api";
+import { cityKey, cityUrl, type City } from "./city";
 import type { Announcement, AnnouncementsResponse } from "./types";
 
-const SEEN_KEY = "kb:annSeen";
+let city: City = "bb";
+const seenKey = (): string => cityKey("kb:annSeen", city);
 const REFRESH_MS = 15 * 60_000;
 const STALE_ON_OPEN_MS = 5 * 60_000;
 const EMPTY: readonly Announcement[] = [];
@@ -38,7 +41,7 @@ let lastFetchAt = 0;
 
 function loadSeen(): string | null {
   try {
-    return window.localStorage.getItem(SEEN_KEY);
+    return window.localStorage.getItem(seenKey());
   } catch {
     return null;
   }
@@ -59,7 +62,7 @@ export async function refreshAnnouncements(): Promise<void> {
   lastFetchAt = Date.now();
   if (snapshot.status !== "ready") emit({ status: "loading" });
   try {
-    const resp = await fetchJSON<AnnouncementsResponse>("/api/announcements", {
+    const resp = await fetchJSON<AnnouncementsResponse>(cityUrl("/api/announcements", city), {
       cache: "no-store",
       signal: ac.signal,
     });
@@ -90,7 +93,7 @@ export function refreshAnnouncementsIfStale(): void {
 export function markAnnouncementsSeen(): void {
   if (snapshot.hash === null || snapshot.hash === snapshot.seenHash) return;
   try {
-    window.localStorage.setItem(SEEN_KEY, snapshot.hash);
+    window.localStorage.setItem(seenKey(), snapshot.hash);
   } catch {
     /* private mode — keep the in-memory state */
   }
@@ -105,12 +108,13 @@ function tick(): void {
 
 /* cross-tab: another tab opened the sheet → its markSeen clears our dot too */
 function onStorage(e: StorageEvent): void {
-  if (e.key === SEEN_KEY || e.key === null) emit({ seenHash: loadSeen() });
+  if (e.key === seenKey() || e.key === null) emit({ seenHash: loadSeen() });
 }
 
-function subscribe(fn: () => void): () => void {
+function subscribe(fn: () => void, c: City): () => void {
   subs.add(fn);
   if (subs.size === 1) {
+    city = c;
     snapshot = { ...snapshot, seenHash: loadSeen() };
     window.addEventListener("storage", onStorage);
     // catch-up when the tab returns after being hidden through a refresh window
@@ -129,14 +133,22 @@ function subscribe(fn: () => void): () => void {
   };
 }
 
-export function useAnnouncements(): {
+/* one stable subscribe per city: useSyncExternalStore resubscribes when the function identity changes */
+const SUBSCRIBE = new Map<City, (fn: () => void) => () => void>();
+function subscriber(c: City): (fn: () => void) => () => void {
+  let f = SUBSCRIBE.get(c);
+  if (!f) SUBSCRIBE.set(c, (f = (fn) => subscribe(fn, c)));
+  return f;
+}
+
+export function useAnnouncements(c: City): {
   status: AnnouncementsStatus;
   items: readonly Announcement[];
   unseen: boolean;
   refresh: () => void;
   markSeen: () => void;
 } {
-  const snap = useSyncExternalStore(subscribe, getAnnouncementsSnapshot, () => INITIAL);
+  const snap = useSyncExternalStore(subscriber(c), getAnnouncementsSnapshot, () => INITIAL);
   const unseen =
     snap.status === "ready" && snap.items.length > 0 && snap.hash !== null && snap.hash !== snap.seenHash;
   // module-level functions → stable identities, memo()-safe without useCallback

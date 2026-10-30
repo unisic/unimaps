@@ -19,5 +19,6 @@ export async function register(): Promise<void> {
     }
     // alerts persisted before a restart resume firing without waiting for a request
     if (PUSH_ENABLED) (await import("./lib/push-alerts")).getPushAlerts();
+    if (PUSH_ENABLED) (await import("./lib/push-news")).getPushNews();
   }
 }

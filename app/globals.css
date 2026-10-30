@@ -32,6 +32,8 @@
   --color-kb: #dc2626;
   --color-mzk: #2563eb;
   --color-gzm: #a16207;
+  /* Metrorower stations (white text at 5.2:1) */
+  --color-bike: #0b7a6b;
 
   /* ---- status ---- */
   --color-good: #7ee2a8;
@@ -207,6 +209,8 @@ body {
   cursor: pointer;
 }
 .veh-pill.no-heading { padding-left: 7px; }
+/* a metro train placed by the timetable: a dashed ring instead of the solid one, no GPS behind it */
+.veh-sched .veh-pill { box-shadow: 0 2px 6px -1px rgba(0, 0, 0, 0.45); outline: 1.5px dashed #fff; }
 
 /* heading arrow: ONLY this element rotates (angle set inline by the animator);
    the glyph's own 45deg base turn lives inside the SVG, never in this transform */
@@ -293,6 +297,25 @@ body {
   z-index: 3;
 }
 .stop-mk-sign.stop-mk-station svg { width: 14px; height: 14px; }
+
+/* Metrorower station: bike glyph + available count; empty = hollow pill */
+.bike-mk-icon { background: none; border: 0; }
+.bike-mk {
+  display: inline-flex; align-items: center; gap: 3px;
+  height: 20px; padding: 0 7px 0 5px;
+  border-radius: 999px;
+  background: var(--color-bike);
+  color: #fff;
+  font-weight: 650; font-size: 11px; line-height: 1;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+  box-shadow: 0 0 0 1.5px #fff, 0 1px 4px rgba(0, 0, 0, 0.4);
+  cursor: pointer;
+  animation: pop 0.22s var(--ease-spring) backwards;
+  transition: transform 0.16s var(--ease-spring);
+}
+.bike-mk svg { width: 13px; height: 13px; display: block; fill: currentColor; }
+.bike-mk.is-empty { background: var(--color-surface); color: var(--color-text-faint); }
+.leaflet-marker-icon.bike-mk-icon:hover .bike-mk { transform: scale(1.1); }
 
 /* one wrapper per bearing, rotating about the icon centre (17px = half of 34) */
 .stop-dir {

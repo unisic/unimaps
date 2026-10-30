@@ -1,6 +1,5 @@
-import { badRequest, internalError, isGzmId, isValidId, notFound, upstreamError, warming } from "@/lib/api-helpers";
-import { GZM_ENABLED } from "@/lib/config";
-import { getGzm, startGzm } from "@/lib/gzm";
+import { badRequest, internalError, isValidId, notFound, upstreamError, warming, zbEnabled, zbIdCity } from "@/lib/api-helpers";
+import { getZb, startZb } from "@/lib/gzm";
 import { startPoller } from "@/lib/poller-singleton";
 import { allowRequest, clientIp, tooManyRequests } from "@/lib/rate-limit";
 import { stopBoard } from "@/lib/stop-board";
@@ -16,12 +15,13 @@ export async function GET(
   if (!allowRequest(clientIp(req))) return tooManyRequests();
   const { designator } = await ctx.params;
   if (!isValidId(designator)) return badRequest("Invalid stop designator");
-  if (isGzmId(designator)) {
-    if (!GZM_ENABLED) return notFound();
-    void startGzm();
+  const slug = zbIdCity(designator);
+  if (slug) {
+    if (!zbEnabled(slug)) return notFound();
+    void startZb(slug);
     try {
       // built from the local feed + the live join: no upstream leg, so never `warnings`
-      const board = getGzm().departures(designator);
+      const board = getZb(slug).departures(designator);
       if (board === null) return warming();
       if (board === "unknown") return notFound("Unknown stop");
       return Response.json(board, { headers: { "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0", Pragma: "no-cache" } });

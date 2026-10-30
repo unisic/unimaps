@@ -63,7 +63,12 @@ describe("city resolution", () => {
     assert.equal(resolveCity("", "gzm"), "gzm");
     assert.equal(resolveCity("?utm=x", "bb"), "bb");
     assert.equal(resolveCity("", null), null);
-    assert.equal(resolveCity("", "krakow"), null);
+    assert.equal(resolveCity("", "krk"), null);
+    assert.equal(resolveCity("", "krakow"), "krakow");
+    assert.equal(resolveCity("?city=warsaw", "bb"), "warsaw");
+    assert.equal(resolveCity("?stop=warsaw%3Aabc", null), "warsaw");
+    assert.equal(cityUrl("/api/stops", "krakow"), "/api/stops?city=krakow");
+    assert.equal(withCity("?stop=x", "krakow"), "?stop=x&city=krakow");
   });
 
   it("tells the city of an id", () => {

@@ -24,7 +24,7 @@ import {
 } from "@/components/icons";
 import { CHIP, chip, CHIP_OFF, CloseIcon, ErrorState, IconButton, LineBadge, Segmented, StarIcon } from "@/components/ui";
 import { geocode, getConnections, isWarming, type GeoHit } from "@/lib/client/api";
-import { CityContext, GZM_LOADING } from "@/lib/client/city";
+import { CITY, CityContext, GZM_LOADING } from "@/lib/client/city";
 import { useFavorites } from "@/lib/client/favorites";
 import {
   addMinutesToHHMM,
@@ -263,9 +263,10 @@ function ConnectionsDialog({
   const [assign, setAssign] = useState<PlaceSlot | null>(null);
   if (assign && !activeInput) setAssign(null);
 
-  /* GZM names every pole ("Katowice Dworzec 01" .. "10"): the search lists the stop once and the
-     router departs from any of its poles; each result names the pole it leaves from */
-  const stopLabel = useCallback((name: string) => (city === "gzm" ? gzmStopKey(name) : name), [city]);
+  /* GTFS cities name every pole ("Katowice Dworzec 01" .. "10", "Centrum 02"): the search lists the stop once
+     and the router (poles grouped by the same key in its index) departs from any of them; each result names
+     the pole it leaves from. Names without a pole suffix (Łódź "… 0298") stay as they are. */
+  const stopLabel = useCallback((name: string) => (city !== "bb" ? gzmStopKey(name) : name), [city]);
 
   // Pre-normalized stop lookup index
   const stopIndex = useMemo(
@@ -339,7 +340,7 @@ function ConnectionsDialog({
         }
       } catch (err) {
         if (!cancelled && !ac.signal.aborted) {
-          setConnErr(city === "gzm" && isWarming(err) ? "warming" : "error");
+          setConnErr(city !== "bb" && isWarming(err) ? "warming" : "error");
         }
       }
     })();
@@ -715,7 +716,7 @@ function ConnectionsDialog({
           <div className="min-w-0">
             <h2 className="text-[15px] font-semibold tracking-tight text-text">Wyszukaj połączenie</h2>
             <p className="text-[12px] text-text-faint">
-              {city === "gzm" ? "Rozkład jazdy ZTM Metropolii GZM" : "Rozkład jazdy KB i MZK Bielsko-Biała"}
+              {city === "gzm" ? "Rozkład jazdy ZTM Metropolii GZM" : city === "bb" ? "Rozkład jazdy KB i MZK Bielsko-Biała" : `Rozkład jazdy: ${CITY[city].name}`}
             </p>
           </div>
           <IconButton label="Zamknij" onClick={onClose}>
@@ -1522,7 +1523,9 @@ function ConnectionsDialog({
                 <p className="mx-auto mt-1 max-w-sm text-[13px] text-text-mute">
                   {city === "gzm"
                     ? "Wyszukiwarka znajdzie najszybsze połączenia w sieci ZTM Metropolii GZM."
-                    : "Wyszukiwarka znajdzie najszybsze połączenia autobusowe w sieciach KB i MZK Bielsko-Biała."}
+                    : city === "bb"
+                      ? "Wyszukiwarka znajdzie najszybsze połączenia autobusowe w sieciach KB i MZK Bielsko-Biała."
+                      : `Wyszukiwarka znajdzie najszybsze połączenia komunikacją miejską: ${CITY[city].name}.`}
                 </p>
               </div>
             </div>

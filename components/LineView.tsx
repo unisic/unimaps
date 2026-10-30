@@ -19,6 +19,8 @@ interface Props {
   /** a router stop id to the map's stop, null when the list has none */
   resolveStop: (id: string) => Stop | null;
   onSelectStop: (s: Stop) => void;
+  /** the pattern on screen, for the map layer (null while loading / on close) */
+  onVariant: (v: LineVariant | null) => void;
   onClose: () => void;
 }
 
@@ -58,7 +60,7 @@ function HourGrid({ mins, nowMin }: { mins: number[]; nowMin: number | null }) {
 }
 
 /** A line's stop patterns for today, each stop's departures one tap away. Mounted only while open. */
-function LineView({ desktop, line, city, filterActive, onToggleFilter, resolveStop, onSelectStop, onClose }: Props) {
+function LineView({ desktop, line, city, filterActive, onToggleFilter, resolveStop, onSelectStop, onVariant, onClose }: Props) {
   /* fixed at open: a sheet left open past midnight keeps the day it was showing */
   const [date] = useState(todayISO);
   const [data, setData] = useState<LineResponse | null>(null);
@@ -89,6 +91,8 @@ function LineView({ desktop, line, city, filterActive, onToggleFilter, resolveSt
   }, [line.name, line.operator, city, date, attempt]);
 
   const v = data?.variants[variant] ?? null;
+  useEffect(() => onVariant(v), [v, onVariant]);
+  useEffect(() => () => onVariant(null), [onVariant]);
   const nowMin = data && data.date === today ? clock : null;
   const column = useMemo(
     () => (v && open != null ? v.times.map((t) => t[open]).sort((a, b) => a - b) : []),

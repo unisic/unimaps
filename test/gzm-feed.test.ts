@@ -136,6 +136,36 @@ describe("parseGzmZip", () => {
     assert.equal(f.trips.get("gzm:t3")?.next, null);
   });
 
+  it("expands a frequencies.txt template into one trip per headway run, end_time exclusive", async () => {
+    const f = await parseGzmZip(
+      writeZip("freq.zip", {
+        ...FILES,
+        "trips.txt": `${FILES["trips.txt"]}\nT6,m1,f1,Metro,0,sh1,`,
+        "stop_times.txt": `${FILES["stop_times.txt"]}\nf1,05:00:00,05:00:00,a,1\nf1,05:04:00,05:05:00,b,2`,
+        "frequencies.txt": [
+          "trip_id,start_time,end_time,headway_secs,exact_times",
+          "f1,06:00:00,06:30:00,600,0",
+          "f1,06:30:00,06:45:00,900,1",
+          "f1,07:00:00,08:00:00,0,0",
+        ].join("\n"),
+      }),
+    );
+    assert.equal(f.trips.has("gzm:f1"), false);
+    const runs = [...f.trips.values()].filter((t) => t.headsign === "Metro");
+    assert.deepEqual(
+      runs.map((t) => t.tripId),
+      ["gzm:f1.21600", "gzm:f1.22200", "gzm:f1.22800", "gzm:f1.23400"],
+    );
+    assert.deepEqual(
+      runs[1].stops.map((s) => [s.arr, s.dep]),
+      [
+        [22200, 22200],
+        [22440, 22500],
+      ],
+    );
+    assert.equal(f.trips.get("gzm:t1")?.stops[0].dep, 8 * 3600);
+  });
+
   it("serves shapes with rev-stamped wire ids", async () => {
     const f = await feed();
     assert.equal(f.shapes.size, 1);

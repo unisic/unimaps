@@ -14,10 +14,18 @@
  *
  * Isolated from the BB pollers: its own singleton, started from instrumentation.ts, and its failure never
  * touches /api/health status. Ids are `gzm:` prefixed (vehicles `gzm:<op>_<fleet>`, trips `gzm:<trip_id>`).
+ *
+ * Every other zbiorkom city (lib/shared/cities.ts) is the same class with `slug` set: ids `<slug>:…`, vehicle keys
+ * `<type>_<vehicle id>` (no `<op>_<fleet>` there, and Warsaw reuses an id across bus and tram), the positions bbox
+ * from its feed, polled only while someone watched it in the last 2 min, no SDIP, no fleet history. getZb(slug)
+ * creates it on first use; an idle one is dropped with its feed (KB_ZB_IDLE_MIN) and at most KB_ZB_RESIDENT live
+ * beside GZM (a Warsaw feed is ~230 MB of heap).
  */
+import { createHash } from "node:crypto";
+
 import * as config from "./config";
 import { bearing, metersBetween } from "./geo";
-import { getGzmFeed, gzmFeedHealth, serviceDayBase, startGzmFeed, warsawClock, type GzmFeed, type GzmTrip } from "./gzm-feed";
+import { getGzmFeed, gzmFeedHealth, serviceDayBase, startGzmFeed, stopGzmFeed, warsawClock, type FeedArea, type GzmFeed, type GzmTrip } from "./gzm-feed";
 import { feedGzmFleet, type GzmFleetSource } from "./gzm-fleet";
 import { isRecord } from "./kb-api";
 import { stepArrivals } from "./kb-progress";
@@ -26,6 +34,7 @@ import { interruptibleSleep, vehicleToJson } from "./poller";
 import { estimateFixAt, kbAheadM, kbDistAlong, nextSpeed, vehicleExtras } from "./route-info";
 import { findConnections, offsetDate, stopEvents, type ConnectionItinerary, type RouteQuery } from "./router";
 import type { ShapePayload } from "./shape-store";
+import { pointAt, projectOnPolyline, tangentBearing } from "./shared/polyline";
 import { gzmRowKey, hhmm, preSortRows } from "./shared/departures";
 import type { VehiclePos, VehiclesResponse } from "./types";
 
@@ -46,6 +55,9 @@ export interface ZbRecord {
   /** GTFS route_type as sent: "0" tram, "11" trolleybus, "3" bus */
   type: string;
   model: string | null;
+  /** zbiorkom agency of another operator's vehicle mixed into a city (Warsaw: OTWOCK, MINSK, ...); null for the
+   *  city's own ("default") and for every GZM record. Its line names are its own and its trips are not in the feed. */
+  agency: string | null;
   line: string;
   brigade: string | null;
   lat: number;
@@ -62,6 +74,8 @@ export interface ZbRecord {
 
 // ponytail: fixed GZM bbox (stop extent +-0.05 deg, 2026-10-28); widen if the network grows
 const AREA = { latMin: 49.9728, latMax: 50.5791, lonMin: 18.4043, lonMax: 19.4763 };
+/** a zbiorkom city's bbox until its feed parsed: the slug alone scopes the answer (Kraków, Łódź, Warsaw: 2026-10-30) */
+const POLAND: FeedArea = { latMin: 49, latMax: 55, lonMin: 14, lonMax: 24.2 };
 const KEY_RE = /(?:%3A|:)(\d{1,4}_\d{1,6})$/i;
 // ponytail: a record older than 10 min is a vehicle zbiorkom forgot to drop, not a live one
 const RECORD_MAX_AGE_MS = 600_000;
@@ -69,23 +83,35 @@ const RECORD_MAX_AGE_MS = 600_000;
 const finite = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
 const str = (v: unknown): string => (typeof v === "string" ? v : typeof v === "number" ? String(v) : "");
 
-/** Validated records of one positions response, one per vehicle key (the newest wins). Throws on a foreign shape. */
-export function parseZbiorkom(body: unknown, nowMs: number): ZbRecord[] {
+/** `<type>_[<agency>_]<vehicle id>` (kept to the exec-id charset) for a city without `<op>_<fleet>` keys. zbiorkom
+ *  mixes other operators into a city (Warsaw: Otwock, Minsk Maz., ...) whose ids collide with the main one's, so
+ *  any agency but "default" is part of the key, as in zbiorkom's own vehicle url. */
+export function zbKey(veh: Record<string, unknown>): string | undefined {
+  const type = str(veh.type);
+  const agency = str(veh.agency);
+  const raw = agency && agency !== "default" ? `${agency}_${str(veh.id)}` : str(veh.id);
+  const id = raw.replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, 36);
+  return /^\d{1,4}$/.test(type) && str(veh.id) ? `${type}_${id}` : undefined;
+}
+
+/** Validated records of one positions response, one per vehicle key (the newest wins). Throws on a foreign shape.
+ *  GZM keys come from the record url, any other city's from zbKey. */
+export function parseZbiorkom(body: unknown, nowMs: number, area: FeedArea = AREA, generic = false): ZbRecord[] {
   const list = isRecord(body) ? body.positions : null;
   if (!Array.isArray(list)) throw new Error("zbiorkom: response has no positions array");
   const byKey = new Map<string, ZbRecord>();
   for (const r of list) {
     if (!isRecord(r)) continue;
-    const key = KEY_RE.exec(str(r.url))?.[1];
+    const veh = isRecord(r.vehicle) ? r.vehicle : {};
+    const key = generic ? zbKey(veh) : KEY_RE.exec(str(r.url))?.[1];
     const loc = Array.isArray(r.location) ? r.location : [];
     const lon = finite(loc[0]);
     const lat = finite(loc[1]);
     const ts = finite(r.timestamp);
     if (!key || lat === null || lon === null || ts === null || nowMs - ts > RECORD_MAX_AGE_MS) continue;
-    if (lat < AREA.latMin || lat > AREA.latMax || lon < AREA.lonMin || lon > AREA.lonMax) continue;
+    if (lat < area.latMin || lat > area.latMax || lon < area.lonMin || lon > area.lonMax) continue;
     const prev = byKey.get(key);
     if (prev && prev.ts >= ts) continue;
-    const veh = isRecord(r.vehicle) ? r.vehicle : {};
     const upcoming: ZbCall[] = [];
     for (const u of Array.isArray(r.upcomingStops) ? r.upcomingStops : []) {
       if (!isRecord(u)) continue;
@@ -95,11 +121,13 @@ export function parseZbiorkom(body: unknown, nowMs: number): ZbRecord[] {
     }
     upcoming.sort((a, b) => a.seq - b.seq);
     const b = finite(r.bearing);
+    const agency = generic ? str(veh.agency) : "";
     byKey.set(key, {
       key,
       label: str(veh.id) || key,
       type: str(veh.type),
       model: str(veh.model) || null,
+      agency: agency && agency !== "default" ? agency : null,
       line: str(r.routeName),
       brigade: str(r.brigade) || null,
       lat,
@@ -148,10 +176,13 @@ export interface GzmMatch {
   base: number;
 }
 
-function fits(trip: GzmTrip, base: number, calls: readonly ZbCall[]): boolean {
+/** zbiorkom's live calls may time a departure a few seconds off its own GTFS export (Tczew: +5 s on every call, 2026-10-30) */
+const MATCH_SLACK_SEC = 30;
+
+function fits(trip: GzmTrip, base: number, calls: readonly ZbCall[], slack = 0): boolean {
   for (const c of calls) {
     const st = trip.stops[c.seq];
-    if (!st || st.seq !== c.seq || base + st.dep !== c.dep) return false;
+    if (!st || st.seq !== c.seq || Math.abs(base + st.dep - c.dep) > slack) return false;
   }
   return true;
 }
@@ -161,15 +192,52 @@ export function matchTrip(feed: GzmFeed, rec: ZbRecord, days: readonly { date: s
   if (!rec.upcoming.length) return null;
   const cands = feed.tripsByLine.get(rec.line);
   if (!cands) return null;
-  let hits: GzmMatch[] = [];
-  for (const d of days) {
-    for (const trip of cands) if (trip.dates.has(d.date) && fits(trip, d.base, rec.upcoming)) hits.push({ trip, date: d.date, base: d.base });
+  // exact first: the slack pass would tie two trips seconds apart that exact times tell apart
+  for (const slack of [0, MATCH_SLACK_SEC]) {
+    let hits: GzmMatch[] = [];
+    for (const d of days) {
+      for (const trip of cands) if (trip.dates.has(d.date) && fits(trip, d.base, rec.upcoming, slack)) hits.push({ trip, date: d.date, base: d.base });
+    }
+    if (!hits.length) continue;
+    if (hits.length > 1 && rec.brigade) {
+      const same = hits.filter((h) => h.trip.brigade === rec.brigade);
+      if (same.length) hits = same;
+    }
+    return hits.length === 1 ? hits[0] : null;
   }
-  if (hits.length > 1 && rec.brigade) {
-    const same = hits.filter((h) => h.trip.brigade === rec.brigade);
-    if (same.length) hits = same;
-  }
-  return hits.length === 1 ? hits[0] : null;
+  return null;
+}
+
+/** zbiorkom names the first stop as next while the bus drives there from the depot: off the trip's shape = not begun */
+const OFF_ROUTE_M = 200;
+
+function offRoute(feed: GzmFeed, trip: GzmTrip, lat: number, lon: number): boolean {
+  const g = trip.shapeId ? feed.shapes.geometry(trip.shapeId) : null;
+  const p = g && projectOnPolyline(g.pl, lat, lon);
+  return !!p && p.d > OFF_ROUTE_M;
+}
+
+/* ---------------- scheduled metro ---------------- */
+
+/** GTFS route_type of the lines placed by the timetable: Warsaw's metro (zbiorkom sends no metro positions, 2026-10-30) */
+const SCHED_ROUTE_TYPE = "1";
+
+/** Where a trip is by its timetable at service-day `t`: the leg from stop `i` (fraction `f`) and the next call's index. */
+export interface SchedAt {
+  i: number;
+  f: number;
+  /** i while the train stands at stop i, i + 1 once it left */
+  next: number;
+}
+
+/** The timetable position of a trip at service-day secs `t`; null before its first departure or from its last arrival. */
+export function schedulePosition(stops: readonly GzmTrip["stops"][number][], t: number): SchedAt | null {
+  const last = stops.length - 1;
+  if (last < 1 || t < stops[0].dep || t >= stops[last].arr) return null;
+  let i = 0;
+  while (stops[i + 1].arr <= t) i++;
+  if (t < stops[i].dep) return { i, f: 0, next: i };
+  return { i, f: (t - stops[i].dep) / (stops[i + 1].arr - stops[i].dep), next: i + 1 };
 }
 
 /* ---------------- live state ---------------- */
@@ -190,6 +258,9 @@ interface Track {
   /** fix time of zbiorkom's position (pos may carry SDIP's newer one) */
   zbFixAt: number;
 }
+
+/** A train placed by the timetable has no zbiorkom record: this one stands in for it (label "" = no fleet number). */
+type SchedTrack = Track & { trip: GzmTrip };
 
 /** A position with its fix time, from either source. */
 interface Fix extends SdipPos {
@@ -225,10 +296,8 @@ const SDIP_TIMEOUT_MS = 4_000;
 const SDIP_MAX_BODY = 4 * 1024 * 1024;
 /** SDIP runs only while a vehicles request came in this recently */
 const WATCH_MS = 120_000;
-/** two SDIP polls further apart than this can't date a change */
+/** two SDIP polls further apart than this can't date a change; an SDIP sample older than this yields to zbiorkom */
 const SDIP_GAP_SEC = 15;
-/** an SDIP fix older than this yields to zbiorkom's */
-const SDIP_FRESH_SEC = 60;
 const SDIP_PAUSE_MS = 300_000;
 const CONN_MEMO = 256;
 const CONN_MEMO_MS = 60_000;
@@ -253,6 +322,8 @@ const pad = (n: number): string => String(n).padStart(2, "0");
 const clock = (secs: number): string => `${pad(Math.floor(secs / 3600) % 24)}:${pad(Math.floor((secs % 3600) / 60))}`;
 
 export interface GzmLiveOptions {
+  /** zbiorkom city slug; "gzm" (default) keeps GZM's fixed bbox, SDIP overlay and fleet history */
+  slug?: string;
   fetchImpl?: typeof fetch;
   feed?: () => GzmFeed | null;
   now?: () => number;
@@ -278,10 +349,14 @@ export class GzmLive {
   private readonly startedAt: number;
   private routeErrLoggedAt = 0;
   private abort: AbortController | null = null;
+  readonly slug: string;
+  /** `${slug}:` */
+  private readonly prefix: string;
   private readonly fetchImpl: typeof fetch;
   private readonly getFeed: () => GzmFeed | null;
   private readonly now: () => number;
-  private readonly url: string;
+  /** fixed positions URL; null = built from the feed's bbox once it loaded */
+  private readonly url: string | null;
   private readonly sdipUrl: string | null;
   private readonly fleet: ((sources: GzmFleetSource[]) => void) | null;
   private sdip = new Map<string, SdipSample>();
@@ -295,13 +370,18 @@ export class GzmLive {
   sdipMoved = 0;
   private lastWatch = 0;
   private readonly connMemo = new Map<string, { at: number; feed: GzmFeed; res: ConnectionItinerary[] }>();
+  /** the feed's metro trips (route_type 1), picked once per feed */
+  private sched: { feed: GzmFeed; trips: GzmTrip[] } | null = null;
 
   constructor(o: GzmLiveOptions = {}) {
+    this.slug = o.slug ?? "gzm";
+    this.prefix = `${this.slug}:`;
+    const gzm = this.slug === "gzm";
     this.fetchImpl = o.fetchImpl ?? ((input, init) => fetch(input, init));
-    this.getFeed = o.feed ?? getGzmFeed;
+    this.getFeed = o.feed ?? (() => getGzmFeed(this.slug));
     this.now = o.now ?? Date.now;
-    this.url = o.url ?? config.GZM_POSITIONS_URL;
-    this.sdipUrl = o.sdipUrl !== undefined ? o.sdipUrl : config.GZM_SDIP_ENABLED ? config.GZM_SDIP_URL : null;
+    this.url = o.url ?? (gzm ? config.GZM_POSITIONS_URL : null);
+    this.sdipUrl = o.sdipUrl !== undefined ? o.sdipUrl : gzm && config.GZM_SDIP_ENABLED ? config.GZM_SDIP_URL : null;
     this.fleet = o.fleet ?? null;
     this.startedAt = this.now();
   }
@@ -310,13 +390,33 @@ export class GzmLive {
     return this.abort !== null;
   }
 
+  /** Counts as "someone is watching": the SDIP overlay (GZM) and the positions loop of any other city run only then. */
+  touch(): void {
+    this.lastWatch = this.now();
+  }
+
+  private get watched(): boolean {
+    return this.now() - this.lastWatch <= WATCH_MS;
+  }
+
   start(): void {
     if (this.abort) return;
     const ac = (this.abort = new AbortController());
+    const gated = this.slug !== "gzm";
     void (async () => {
       while (!ac.signal.aborted) {
+        // ponytail: an unwatched city polls nothing and checks once a second; no wake-up signal from touch()
+        if (gated && !this.watched) {
+          await interruptibleSleep(1000, ac.signal);
+          continue;
+        }
+        const fed = !!this.getFeed();
         await this.pollOnce();
-        await interruptibleSleep(nextPollDelay(this.now()), ac.signal);
+        let wait = nextPollDelay(this.now());
+        // a poll made while the feed parsed shows bare positions: the next one joins the trips as soon as it lands,
+        // not a grid step (20 s) later
+        for (; !fed && wait > 0 && !this.getFeed(); wait -= 1000) await interruptibleSleep(Math.min(1000, wait), ac.signal);
+        if (fed) await interruptibleSleep(wait, ac.signal);
       }
     })();
     if (!this.sdipUrl) return;
@@ -334,20 +434,29 @@ export class GzmLive {
     this.abort = null;
   }
 
+  /** The positions URL: fixed (GZM), or the feed's bbox (all of Poland while that feed parses). */
+  private positionsUrl(): string {
+    if (this.url) return this.url;
+    const a = this.getFeed()?.area ?? POLAND;
+    return `${config.ZB_API_URL}/${encodeURIComponent(this.slug)}/positions/${a.lonMin},${a.latMin},${a.lonMax},${a.latMax}`;
+  }
+
   /** One request; never throws. True when it applied a response. */
   async pollOnce(): Promise<boolean> {
+    const url = this.positionsUrl();
     const t0 = this.now();
     this.scanCount += 1;
     this.lastScan = t0 / 1000;
     try {
-      const res = await this.fetchImpl(this.url, {
+      const res = await this.fetchImpl(url, {
         headers: { "User-Agent": config.USER_AGENT, Accept: "application/json" },
         signal: AbortSignal.timeout(TIMEOUT_MS),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const text = await cappedText(res, MAX_BODY);
       this.bytes += text.length;
-      this.apply(parseZbiorkom(JSON.parse(text), t0), t0);
+      const feed = this.getFeed();
+      this.apply(parseZbiorkom(JSON.parse(text), t0, this.url ? AREA : (feed?.area ?? POLAND), this.slug !== "gzm"), t0);
       if (this.fleet) {
         // an empty list would close every running course: skip it (feed still loading, or nothing matched)
         const sources = this.fleetSources();
@@ -437,21 +546,25 @@ export class GzmLive {
       if (!changed || fixAt === null) continue;
       moved += 1;
       const t = this.tracks.get(key);
-      const fix = t && this.fixFor(key, sample, t.zbFixAt, recv);
+      const fix = t && this.fixFor(key, sample, recv);
       if (!t || !fix || fix.fixAt === t.pos.fixAt) continue;
       const nt = this.track(t.rec, t, t.feed, days, recv, fix, t.zbFixAt);
       this.tracks.set(key, nt);
       if (nt.trip) this.byTrip.set(`${nt.trip.tripId}|${nt.date}`, nt);
     }
+    // a vehicle missing from one list keeps its sample: dropping it would hand the map to zbiorkom's older position
+    for (const [key, s] of this.sdip) if (!next.has(key) && recv - s.recv <= SDIP_GAP_SEC) next.set(key, s);
     this.sdip = next;
     this.sdipMoved = moved;
     this.rebuildBody(recv);
   }
 
-  /** The newer of zbiorkom's fix and a fresh, dated SDIP one (null: zbiorkom's). */
-  private fixFor(key: string, s: SdipSample | undefined, zbFixAt: number, nowS: number): Fix | null {
+  /** SDIP's dated fix while SDIP still reports the vehicle (null: zbiorkom's). zbiorkom serves the same positions
+   *  later (5 s median, 10 s p90, 60 s p99 behind SDIP; SDIP never behind it: 358 vehicles, 2026-10-30), so a
+   *  standing bus must not hand over to zbiorkom: its estimated fix time looks newer, its position is older. */
+  private fixFor(key: string, s: SdipSample | undefined, nowS: number): Fix | null {
     s ??= this.sdip.get(key);
-    if (!s || s.fixAt === null || s.fixAt <= zbFixAt || nowS - s.fixAt > SDIP_FRESH_SEC) return null;
+    if (!s || s.fixAt === null || nowS - s.recv > SDIP_GAP_SEC) return null;
     return { lat: s.lat, lon: s.lon, bearing: s.bearing, fixAt: s.fixAt };
   }
 
@@ -472,10 +585,19 @@ export class GzmLive {
       const tsS = rec.ts / 1000;
       // zbiorkom's timestamp is its 20 s snapshot, so the fix lies inside the window before it: its midpoint
       const zbFixAt = prev ? estimateFixAt({ fixAt: prev.zbFixAt, updatedAt: prev.rec.ts / 1000 }, tsS, rec.ts !== prev.rec.ts, 60) : tsS - POLL_MS / 2000;
-      const fix = this.fixFor(rec.key, undefined, zbFixAt, nowS) ?? { lat: rec.lat, lon: rec.lon, bearing: rec.bearing, fixAt: zbFixAt };
+      const fix = this.fixFor(rec.key, undefined, nowS) ?? { lat: rec.lat, lon: rec.lon, bearing: rec.bearing, fixAt: zbFixAt };
       const t = this.track(rec, prev, feed, days, nowS, fix, zbFixAt);
       tracks.set(rec.key, t);
       if (t.trip) byTrip.set(`${t.trip.tripId}|${t.date}`, t);
+    }
+    if (feed && this.slug !== "gzm") {
+      // a line some live record serves (a metro that does send positions) is never doubled by the timetable
+      const live = new Set<string>();
+      for (const r of recs) if (r.type === SCHED_ROUTE_TYPE && !r.agency) live.add(r.line);
+      for (const t of this.scheduledTracks(feed, days, nowS, live)) {
+        tracks.set(t.rec.key, t);
+        byTrip.set(`${t.trip.tripId}|${t.date}`, t);
+      }
     }
     this.tracks = tracks;
     this.byTrip = byTrip;
@@ -511,7 +633,7 @@ export class GzmLive {
         vehicleType: rec.type,
         line: pos.line,
         brigade: rec.brigade ?? (trip.brigade || null),
-        tripId: trip.tripId.slice("gzm:".length),
+        tripId: trip.tripId.slice(this.prefix.length),
         headsign: pos.headsign,
         stops: trip.stops.map((s, i) => ({ id: s.stopId, name: feed.stops.get(s.stopId)?.name ?? "", dep: s.dep, distM: geom?.stops[i] ?? null })),
         servedIdx: t.next > 0 ? t.next - 1 : null,
@@ -545,7 +667,7 @@ export class GzmLive {
     let match: GzmMatch | null = null;
     if (feed) {
       const cached = prev && prev.feed === feed ? prev.match : null;
-      if (cached && (!rec.upcoming.length || fits(cached.trip, cached.base, rec.upcoming))) match = cached;
+      if (cached && (!rec.upcoming.length || fits(cached.trip, cached.base, rec.upcoming, MATCH_SLACK_SEC))) match = cached;
       else match = matchTrip(feed, rec, days);
     }
     const tsS = rec.ts / 1000;
@@ -556,7 +678,8 @@ export class GzmLive {
     const lastMovedAt = p && !anchorMoved ? p.lastMovedAt : fix.fixAt;
     // ponytail: a bus held 10+ min mid-route by a blockade also reads as stuck (position only until it moves), and a
     // stuck trip comes back while the bus drives to the depot; a cold start needs 10 min to see either
-    const stuck = delayS !== null && delayS >= STUCK_SEC && fix.fixAt - lastMovedAt >= STUCK_SEC;
+    // nowS, not fix.fixAt: an SDIP fix of a standing bus keeps the time it stopped
+    const stuck = delayS !== null && delayS >= STUCK_SEC && nowS - lastMovedAt >= STUCK_SEC;
 
     let trip = match?.trip ?? null;
     let next = rec.upcoming[0]?.seq ?? 0;
@@ -581,7 +704,10 @@ export class GzmLive {
     const stopAt = (i: number) => (trip && feed ? feed.stops.get(trip.stops[i]?.stopId ?? "") : undefined);
     const nextStop = stopAt(next);
     const first = stopAt(0);
-    const notStarted = !!trip && next === 0 && (layover || (first !== undefined && metersBetween(lat, lon, first.lat, first.lon) <= NOT_STARTED_M));
+    const notStarted =
+      !!trip &&
+      next === 0 &&
+      (layover || (first !== undefined && metersBetween(lat, lon, first.lat, first.lon) <= NOT_STARTED_M) || (!!feed && offRoute(feed, trip, lat, lon)));
     const prevStop = next > 0 ? stopAt(next - 1) : undefined;
     const atStop =
       (nextStop !== undefined && metersBetween(lat, lon, nextStop.lat, nextStop.lon) <= AT_STOP_M) ||
@@ -596,7 +722,7 @@ export class GzmLive {
 
     const vt = Number(rec.type);
     const pos: VehiclePos = {
-      execId: `gzm:${rec.key}`,
+      execId: `${this.prefix}${rec.key}`,
       tripId: trip?.tripId ?? "",
       routeId: trip?.routeId ?? "",
       line: rec.line || trip?.line || "",
@@ -620,6 +746,7 @@ export class GzmLive {
       operator: "GZM",
       sideNumber: rec.label,
       ...(rec.model ? { model: rec.model } : {}),
+      ...(rec.agency ? { agency: rec.agency } : {}),
       ...(notStarted ? { notStarted: true } : {}),
       ...(trip ? { schedTripId: trip.tripId, nextStopSeq: next } : {}),
       fixAt: fix.fixAt,
@@ -632,6 +759,96 @@ export class GzmLive {
       pos.arrivals = stepArrivals(same, next - 1, nowS, fix.fixAt);
     }
     return { rec, pos, feed, match, trip, date, base: match?.base ?? 0, next, notStarted, zbFixAt };
+  }
+
+  /**
+   * Metro trains placed by the timetable: no live source sends them. One track per running trip and service day,
+   * its key stable for that pair so the marker glides between polls. ~60 trains on Warsaw's 4000 metro trips.
+   */
+  // ponytail: timetable only (a held train still drives on the map); join a live source per line once one exists
+  private scheduledTracks(feed: GzmFeed, days: readonly { date: string; base: number }[], nowS: number, live: ReadonlySet<string>): SchedTrack[] {
+    if (this.sched?.feed !== feed) {
+      const ids = new Set(feed.lines.filter((l) => l.type === SCHED_ROUTE_TYPE).map((l) => l.id));
+      this.sched = { feed, trips: ids.size ? [...feed.trips.values()].filter((t) => ids.has(t.routeId)) : [] };
+    }
+    const out: SchedTrack[] = [];
+    for (const trip of this.sched.trips) {
+      if (live.has(trip.line)) continue;
+      for (const { date, base } of days) {
+        const at = trip.dates.has(date) ? schedulePosition(trip.stops, nowS - base) : null;
+        const t = at && this.scheduledTrack(feed, trip, date, base, at, nowS);
+        if (t) out.push(t);
+      }
+    }
+    return out;
+  }
+
+  private scheduledTrack(feed: GzmFeed, trip: GzmTrip, date: string, base: number, at: SchedAt, nowS: number): SchedTrack | null {
+    const { i, f, next } = at;
+    const s = trip.stops;
+    const a = feed.stops.get(s[i].stopId);
+    const b = feed.stops.get(s[i + 1].stopId);
+    const geom = trip.shapeId ? feed.shapes.geometry(trip.shapeId) : null;
+    const g = geom && geom.stops.length === s.length ? geom : null;
+    const c0 = g?.stops[i];
+    const c1 = g?.stops[i + 1];
+    const legS = s[i + 1].arr - s[i].dep;
+    let lat: number;
+    let lon: number;
+    let heading: number | null;
+    let distM: number | null = null;
+    let legM: number;
+    if (g && c0 != null && c1 != null) {
+      distM = c0 + (c1 - c0) * f;
+      ({ lat, lon } = pointAt(g.pl, distM));
+      heading = tangentBearing(g.pl, distM);
+      legM = c1 - c0;
+    } else if (a && b) {
+      lat = a.lat + (b.lat - a.lat) * f;
+      lon = a.lon + (b.lon - a.lon) * f;
+      heading = bearing(a.lat, a.lon, b.lat, b.lon);
+      legM = metersBetween(a.lat, a.lon, b.lat, b.lon);
+    } else return null;
+    const key = `${SCHED_ROUTE_TYPE}_S${createHash("sha1").update(`${trip.tripId}|${date}`).digest("base64url").slice(0, 10)}`;
+    const nextStop = feed.stops.get(s[next].stopId);
+    const headsign = trip.stopHeadsigns?.[next] ?? trip.headsign;
+    const pos: VehiclePos = {
+      execId: `${this.prefix}${key}`,
+      tripId: trip.tripId,
+      routeId: trip.routeId,
+      line: trip.line,
+      headsign,
+      lat,
+      lon,
+      vehicleType: Number(SCHED_ROUTE_TYPE),
+      currentStopSequence: next > 0 ? next - 1 : 0,
+      atStop: next === i,
+      delay: null,
+      timestamp: Math.floor(nowS),
+      updatedAt: nowS,
+      bearing: heading,
+      nextStopName: nextStop?.name ?? null,
+      nextStopLat: nextStop?.lat ?? null,
+      nextStopLon: nextStop?.lon ?? null,
+      lastMovedAt: nowS,
+      anchorLat: lat,
+      anchorLon: lon,
+      finished: false,
+      operator: "GZM",
+      scheduled: true,
+      schedTripId: trip.tripId,
+      nextStopSeq: next,
+      fixAt: nowS,
+      // the timetable speed of the leg, so the client glides between 20 s polls; 0 while it stands at a stop
+      speed: next === i || legS <= 0 ? 0 : legM / legS,
+      speedAt: nowS,
+      ...(g && distM !== null ? { shapeKey: trip.shapeId, distM, distRev: g.rev } : {}),
+    };
+    const rec: ZbRecord = {
+      key, label: "", type: SCHED_ROUTE_TYPE, model: null, agency: null, line: trip.line, brigade: trip.brigade || null,
+      lat, lon, ts: nowS * 1000, bearing: heading, delayMs: null, headsign, upcoming: [],
+    };
+    return { rec, pos, feed, match: { trip, date, base }, trip, date, base, next, notStarted: false, zbFixAt: nowS };
   }
 
   /** Shape key, along-route distance and cruise speed (the MzkPoller pattern). Isolated per vehicle. */
@@ -739,7 +956,7 @@ export class GzmLive {
         at_stop: false,
         canceled: false,
         trip_index: e.pos,
-        row_key: gzmRowKey(trip.tripId.slice(4), trip.stops[e.pos].seq),
+        row_key: gzmRowKey(trip.tripId.slice(this.prefix.length), trip.stops[e.pos].seq),
       });
     }
     return { rows: preSortRows(rows, nowS).slice(0, BOARD_ROWS), server_ts: nowS };
@@ -815,10 +1032,10 @@ export class GzmLive {
     return res;
   }
 
-  /** Live trip of a vehicle (`gzm:<op>_<fleet>`); null when it is not on a known trip or the feed is stale. */
+  /** Live trip of a vehicle (`<slug>:<key>`); null when it is not on a known trip or the feed is stale. */
   tripExecution(execId: string): Record<string, unknown> | null {
-    if (!execId.startsWith("gzm:") || !this.fresh(this.now() / 1000)) return null;
-    const tr = this.tracks.get(execId.slice(4));
+    if (!execId.startsWith(this.prefix) || !this.fresh(this.now() / 1000)) return null;
+    const tr = this.tracks.get(execId.slice(this.prefix.length));
     if (!tr?.trip || !tr.feed) return null;
     const delay = tr.notStarted ? null : tr.pos.delay;
     return {
@@ -834,7 +1051,9 @@ export class GzmLive {
     let matched = 0;
     let notStarted = 0;
     let sdipUsed = 0;
+    let scheduled = 0;
     for (const t of this.tracks.values()) {
+      if (t.pos.scheduled) scheduled += 1;
       if (t.trip) matched += 1;
       if (t.notStarted) notStarted += 1;
       if (t.pos.fixAt !== t.zbFixAt) sdipUsed += 1;
@@ -842,11 +1061,14 @@ export class GzmLive {
     const now = this.now();
     const hours = Math.max(1 / 60, (now - this.startedAt) / 3_600_000);
     return {
+      slug: this.slug,
       started: this.running,
+      watching: this.watched,
       vehicles: this.fresh(now / 1000) ? this.tracks.size : 0,
       matched,
       unmatched: this.tracks.size - matched,
       not_started: notStarted,
+      scheduled,
       scan_count: this.scanCount,
       last_scan: this.lastScan,
       last_good: this.lastGood,
@@ -857,7 +1079,7 @@ export class GzmLive {
       bytes_per_hour: Math.round(this.bytes / hours),
       sdip: {
         enabled: this.sdipUrl !== null,
-        watching: now - this.lastWatch <= WATCH_MS,
+        watching: this.watched,
         last_good: this.sdipLastGood,
         last_error: this.sdipError,
         paused_until: this.sdipPausedUntil > now ? this.sdipPausedUntil / 1000 : null,
@@ -866,7 +1088,7 @@ export class GzmLive {
         bytes_per_hour: Math.round(this.sdipBytes / hours),
       },
       heap_used_mb: Math.round(process.memoryUsage().heapUsed / 1e5) / 10,
-      feed: gzmFeedHealth(),
+      feed: gzmFeedHealth(this.slug),
     };
   }
 }
@@ -926,4 +1148,90 @@ export function safeGzmHealth(): Record<string, unknown> {
   } catch (err) {
     return { enabled: true, error: String(err) };
   }
+}
+
+/* ---------------- the other zbiorkom cities: created on first use, dropped when idle ---------------- */
+
+const ZB_KEY = Symbol.for("kb-gtfs.zb");
+interface ZbEntry {
+  live: GzmLive;
+  lastUsed: number;
+}
+interface ZbGlobal {
+  cities: Map<string, ZbEntry>;
+  timer: ReturnType<typeof setInterval> | null;
+}
+type ZbG = typeof globalThis & { [ZB_KEY]?: ZbGlobal };
+
+function zbState(): ZbGlobal {
+  return ((globalThis as ZbG)[ZB_KEY] ??= { cities: new Map(), timer: null });
+}
+
+/** The live layer of a zbiorkom city (a registry slug): GZM's resident one, or a per-slug one created now.
+ *  Each call marks the city watched; past KB_ZB_RESIDENT cities the least recently used one is dropped. */
+export function getZb(slug: string): GzmLive {
+  if (slug === "gzm") return getGzm();
+  const s = zbState();
+  const now = Date.now();
+  let e = s.cities.get(slug);
+  if (!e) {
+    // ponytail: eviction = whoever was quiet longest; a user still on that city gets a 503 until its zip reparses (~5 s)
+    while (s.cities.size >= config.ZB_RESIDENT) {
+      let lru: string | null = null;
+      for (const [k, v] of s.cities) if (lru === null || v.lastUsed < s.cities.get(lru)!.lastUsed) lru = k;
+      dropZb(lru!, "resident cap");
+    }
+    e = { live: new GzmLive({ slug }), lastUsed: now };
+    s.cities.set(slug, e);
+    if (!s.timer) {
+      s.timer = setInterval(sweepZb, 60_000);
+      s.timer.unref();
+    }
+  }
+  e.lastUsed = now;
+  e.live.touch();
+  return e.live;
+}
+
+function dropZb(slug: string, why: string): void {
+  const s = zbState();
+  const e = s.cities.get(slug);
+  if (!e) return;
+  e.live.stop();
+  s.cities.delete(slug);
+  stopGzmFeed(slug);
+  log.info("gzm", `${slug}: dropped (${why})`);
+}
+
+function sweepZb(): void {
+  const s = zbState();
+  const cut = Date.now() - config.ZB_IDLE_MIN * 60_000;
+  for (const [slug, e] of [...s.cities]) if (e.lastUsed < cut) dropZb(slug, "idle");
+  if (!s.cities.size && s.timer) {
+    clearInterval(s.timer);
+    s.timer = null;
+  }
+}
+
+/** Starts a city's feed refresh and positions loop once (GZM: startGzm). Never rejects; a no-op while disabled. */
+export async function startZb(slug: string): Promise<void> {
+  if (slug === "gzm") return startGzm();
+  if (!config.ZB_ENABLED) return;
+  const live = getZb(slug);
+  if (live.running) return;
+  void startGzmFeed(slug).catch((err: unknown) => log.error("gzm", `${slug}: feed start failed: ${err}`));
+  live.start();
+}
+
+/** Health of the resident non-GZM cities for /api/health (informational, never flips status); never throws. */
+export function safeZbHealth(): Record<string, unknown> {
+  const out: Record<string, unknown> = { enabled: config.ZB_ENABLED, resident_max: config.ZB_RESIDENT, idle_min: config.ZB_IDLE_MIN };
+  for (const [slug, e] of zbState().cities) {
+    try {
+      out[slug] = e.live.health();
+    } catch (err) {
+      out[slug] = { error: String(err) };
+    }
+  }
+  return out;
 }

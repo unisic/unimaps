@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Toast from "@/components/Toast";
+// attaches the beforeinstallprompt listener with the root bundle, before the map chunk mounts
+import "@/lib/client/install";
 
 const UPDATE_CHECK_MS = 60 * 60_000;
 

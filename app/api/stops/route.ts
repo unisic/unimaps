@@ -1,5 +1,5 @@
 import { etagMatches, parseCity, upstreamError, warming } from "@/lib/api-helpers";
-import { getGzm, startGzm } from "@/lib/gzm";
+import { getZb, startZb } from "@/lib/gzm";
 import { getMergedStopsView, startPoller } from "@/lib/poller-singleton";
 
 export const dynamic = "force-dynamic";
@@ -9,9 +9,9 @@ export const runtime = "nodejs";
 export async function GET(req: Request): Promise<Response> {
   const city = parseCity(req);
   if (city instanceof Response) return city;
-  if (city === "gzm") {
-    void startGzm();
-    const feed = getGzm().currentFeed();
+  if (city !== "bb") {
+    void startZb(city);
+    const feed = getZb(city).currentFeed();
     if (!feed) return warming();
     // the feed swaps once a day; the client revalidates like the BB list (focus, every 15 min)
     const headers = { "Content-Type": "application/json", ETag: feed.stopsEtag, "Cache-Control": "public, max-age=60" };

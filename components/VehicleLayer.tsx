@@ -58,6 +58,7 @@ function buildVehicleTooltip(v: Vehicle | undefined): HTMLElement {
   const meta: HTMLElement[] = [];
   if (v.not_started) meta.push(span("shrink-0 font-medium text-late", "czeka na odjazd"));
   else if (v.delay != null) meta.push(span(`shrink-0 font-semibold tabular-nums ${delayClass(v.delay)}`, delayTxt(v.delay)));
+  if (v.scheduled) meta.push(span("shrink-0", "pozycja z rozkładu"));
   if (v.side_number) meta.push(span("shrink-0 tabular-nums", `#${v.side_number}`));
   if (v.model) meta.push(span("truncate", v.model));
   if (meta.length) {
@@ -152,7 +153,7 @@ function VehicleLayer({
     let shown = vehicles;
     if (operatorFilter === "kb") shown = shown.filter((v) => v.operator !== "MZK");
     else if (operatorFilter === "mzk") shown = shown.filter((v) => v.operator === "MZK");
-    if (lineFilter) shown = shown.filter((v) => lineFilter.has(v.line));
+    if (lineFilter) shown = shown.filter((v) => !v.agency && lineFilter.has(v.line));
     const b = map.getBounds().pad(BOUNDS_PAD);
     const { dots, list } = fleetMarkers(shown, map.getZoom(), {
       s: b.getSouth(),
@@ -174,7 +175,7 @@ function VehicleLayer({
       // heading is applied by the animator, never part of the icon key —
       // rebuilding the DivIcon replays its pop animation and kills the glide
       const hasHeading = anim.headingKnown(v.id) || v.bearing != null;
-      const key = dots ? color : `${v.line}|${color}|${v.operator ?? ""}|${hasHeading ? 1 : 0}`;
+      const key = dots ? color : `${v.line}|${color}|${v.operator ?? ""}|${hasHeading ? 1 : 0}|${v.scheduled ? 1 : 0}`;
       const existing = views.get(v.id);
       if (!existing) {
         const d = anim.displayed(v.id);
@@ -191,7 +192,7 @@ function VehicleLayer({
               bubblingMouseEvents: false, // like a marker: a tap on a dot is not a map click
             })
           : L.marker(at, {
-              icon: makeVehicleIcon(v.line, color, heading, v.operator),
+              icon: makeVehicleIcon(v.line, color, heading, v.operator, v.scheduled),
               zIndexOffset: 100,
               keyboard: false,
             });
@@ -214,7 +215,7 @@ function VehicleLayer({
       if (existing.iconKey !== key) {
         if (existing.marker instanceof L.Marker) {
           const d = anim.displayed(v.id);
-          existing.marker.setIcon(makeVehicleIcon(v.line, color, hasHeading ? (d?.heading ?? v.bearing ?? 0) : null, v.operator));
+          existing.marker.setIcon(makeVehicleIcon(v.line, color, hasHeading ? (d?.heading ?? v.bearing ?? 0) : null, v.operator, v.scheduled));
           anim.refreshViewDom(v.id);
         } else existing.marker.setStyle({ fillColor: color });
         existing.iconKey = key;

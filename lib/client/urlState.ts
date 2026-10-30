@@ -10,7 +10,7 @@
  * spaces (see CLAUDE.md) and heuristics telling them apart would be fragile.
  * The city marker (&city=gzm) is not part of this codec: callers add it with withCity().
  */
-import type { City } from "@/lib/client/city";
+import { cityKey, type City } from "@/lib/client/city";
 
 export interface UrlState {
   stop: string | null;
@@ -94,7 +94,7 @@ export function buildSearch(s: UrlState): string {
    then becomes the remembered filter; storage that throws (private mode) just forgets it.
    GZM line names overlap BB ones ("1", "N1"), so it keeps its own key; BB keeps the original one. */
 export function savedLinesKey(city: City = "bb"): string {
-  return city === "gzm" ? "kb:lineFilter:gzm" : "kb:lineFilter";
+  return cityKey("kb:lineFilter", city);
 }
 
 export function loadSavedLines(city: City = "bb"): string[] | null {

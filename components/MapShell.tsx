@@ -1,8 +1,12 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useEffect, useSyncExternalStore } from "react";
-import { CITY, CityContext, loadCity, resolveCity, saveCity, type City } from "@/lib/client/city";
+import { useEffect, useState, useSyncExternalStore } from "react";
+import { preload } from "swr";
+
+import { CityCard, OtherCities, OthersCard } from "@/components/CityChooser";
+import { vehiclesFetcher } from "@/lib/client/api";
+import { CITY, CityContext, cityUrl, loadCity, resolveCity, saveCity, setPageCity, type City } from "@/lib/client/city";
 
 /** The boot splash: the app logo, identical on the server, during the picker and while MapApp loads. */
 function Splash() {
@@ -33,8 +37,20 @@ const MapApp = dynamic(() => import("@/components/MapApp"), {
 });
 const subs = new Set<() => void>();
 
+/** The first vehicles request leaves with the city choice, alongside MapApp's chunk (Leaflet + MapLibre), not after
+ *  it; useVehicles takes the promise over. A failure is SWR's to report then. */
+function warm(city: City): void {
+  preload(cityUrl("/api/vehicles", city), vehiclesFetcher).catch(() => {});
+}
+
 function getChoice(): City | "pick" {
-  if (chosen === undefined) chosen = resolveCity(window.location.search, loadCity()) ?? "pick";
+  if (chosen === undefined) {
+    chosen = resolveCity(window.location.search, loadCity()) ?? "pick";
+    if (chosen !== "pick") {
+      setPageCity(chosen);
+      warm(chosen);
+    }
+  }
   return chosen;
 }
 
@@ -45,11 +61,14 @@ function subscribe(fn: () => void): () => void {
 
 function choose(city: City): void {
   saveCity(city);
+  setPageCity(city);
+  warm(city);
   chosen = city;
   subs.forEach((f) => f());
 }
 
 function CityPicker() {
+  const [others, setOthers] = useState(false);
   return (
     <main className="flex min-h-dvh w-full items-center justify-center bg-bg px-4 py-8">
       <div className="flex w-full max-w-md flex-col gap-6 animate-fade">
@@ -60,30 +79,19 @@ function CityPicker() {
           <p className="mt-1 text-sm text-text-mute">Mapa pojazdów na żywo. Miasto zmienisz później w menu.</p>
         </div>
         <div className="flex flex-col gap-3">
-          <button
-            type="button"
-            onClick={() => choose("bb")}
-            className="flex items-center gap-4 rounded-2xl border border-hairline bg-surface p-4 text-left transition-colors hover:bg-surface-2"
-          >
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={CITY.bb.logo} alt="" className="h-12 w-12 shrink-0 object-contain" draggable={false} />
-            <span className="flex flex-col">
-              <span className="text-base font-semibold text-text">{CITY.bb.name}</span>
-              <span className="text-sm text-text-mute">Komunikacja Beskidzka i MZK Bielsko-Biała</span>
-            </span>
-          </button>
-          <button
-            type="button"
-            onClick={() => choose("gzm")}
-            className="flex items-center gap-4 rounded-2xl border border-hairline bg-surface p-4 text-left transition-colors hover:bg-surface-2"
-          >
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={CITY.gzm.logo} alt="" className="h-12 w-12 shrink-0 object-contain" draggable={false} />
-            <span className="flex flex-col">
-              <span className="text-base font-semibold text-text">{CITY.gzm.name}</span>
-              <span className="text-sm text-text-mute">Autobusy, tramwaje i trolejbusy ZTM</span>
-            </span>
-          </button>
+          <CityCard id="bb" big onClick={() => choose("bb")} />
+          <CityCard id="gzm" big onClick={() => choose("gzm")} />
+          {others ? (
+            <div className="flex flex-col rounded-2xl border border-hairline bg-surface p-3 animate-fade">
+              <OtherCities
+                onPick={choose}
+                autoFocus
+                listClassName="kb-scroll max-h-[min(22rem,50dvh)] overflow-y-auto"
+              />
+            </div>
+          ) : (
+            <OthersCard big onClick={() => setOthers(true)} />
+          )}
         </div>
       </div>
     </main>
@@ -99,11 +107,24 @@ export default function MapShell() {
     if (city && loadCity() == null) saveCity(city);
   }, [city]);
 
-  if (choice === null) return <Splash />;
-  if (choice === "pick") return <CityPicker />;
+  // React 19 hoists <title> into <head>; rendering it here (not document.title in an effect) survives
+  // Next's late metadata commit, which otherwise resets an effect-set title once after hydration
+  const title =
+    city && city !== "bb"
+      ? `${CITY[city].name}: mapa pojazdów na żywo`
+      : "Unimaps: komunikacja miejska na żywo";
   return (
-    <CityContext.Provider value={choice}>
-      <MapApp />
-    </CityContext.Provider>
+    <>
+      <title>{title}</title>
+      {choice === null ? (
+        <Splash />
+      ) : choice === "pick" ? (
+        <CityPicker />
+      ) : (
+        <CityContext.Provider value={choice}>
+          <MapApp />
+        </CityContext.Provider>
+      )}
+    </>
   );
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useId, useState } from "react";
 import {
   ArrowsClockwiseIcon,
   BusIcon,
@@ -219,5 +219,60 @@ export function ErrorState({ onRetry, message }: { onRetry: () => void; message?
         Spróbuj ponownie
       </button>
     </div>
+  );
+}
+
+/** One settings toggle row (role="switch"), optionally with a hint line. */
+export function SwitchRow({
+  checked,
+  onToggle,
+  label,
+  hint,
+  badge,
+}: {
+  checked: boolean;
+  onToggle: () => void;
+  label: string;
+  hint?: string;
+  badge?: string;
+}) {
+  const hintId = useId();
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      role="switch"
+      aria-checked={checked}
+      aria-describedby={hint ? hintId : undefined}
+      className="flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2.5 text-left transition-colors hover:bg-tint/5"
+    >
+      <span className="flex flex-col gap-0.5">
+        <span className="flex items-center gap-2 text-text">
+          {label}
+          {badge && (
+            <span className="shrink-0 rounded-full bg-tint/6 px-1.5 py-px text-[10.5px] font-medium text-text-mute">
+              {badge}
+            </span>
+          )}
+        </span>
+        {hint && (
+          <span id={hintId} className="text-[12px] leading-snug text-text-faint">
+            {hint}
+          </span>
+        )}
+      </span>
+      <span
+        className={`relative inline-flex h-[22px] w-[38px] shrink-0 items-center rounded-full px-[3px] transition-colors duration-200 ${
+          checked ? "bg-primary" : "bg-tint/12"
+        }`}
+        aria-hidden
+      >
+        <span
+          className={`h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-200 ease-spring ${
+            checked ? "translate-x-4" : "translate-x-0"
+          }`}
+        />
+      </span>
+    </button>
   );
 }

@@ -1,6 +1,5 @@
-import { badRequest, internalError, isGzmId, isValidId, notFound, upstreamError, warming } from "@/lib/api-helpers";
-import { GZM_ENABLED } from "@/lib/config";
-import { getGzm, startGzm } from "@/lib/gzm";
+import { badRequest, internalError, isValidId, notFound, upstreamError, warming, zbEnabled, zbIdCity } from "@/lib/api-helpers";
+import { getZb, startZb } from "@/lib/gzm";
 import { parseIntStrict, pyTruthy } from "@/lib/kb-api";
 import { getApi, kbShapeRef, startPoller } from "@/lib/poller-singleton";
 import { allowRequest, clientIp, tooManyRequests } from "@/lib/rate-limit";
@@ -19,11 +18,12 @@ export async function GET(
   const rawIndex = new URL(req.url).searchParams.get("index");
   const index = rawIndex === null ? 0 : parseIntStrict(rawIndex);
   if (index === null) return badRequest("index must be an integer");
-  if (isGzmId(tripId)) {
-    if (!GZM_ENABLED) return notFound();
-    void startGzm();
+  const slug = zbIdCity(tripId);
+  if (slug) {
+    if (!zbEnabled(slug)) return notFound();
+    void startZb(slug);
     try {
-      const trip = getGzm().trip(tripId);
+      const trip = getZb(slug).trip(tripId);
       if (trip === null) return warming();
       // a static trip of the day's feed: unknown = not in it (a stale id from yesterday's feed)
       return Response.json(trip === "unknown" ? {} : trip, { headers: { "Cache-Control": "public, max-age=300" } });

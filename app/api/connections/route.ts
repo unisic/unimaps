@@ -1,5 +1,5 @@
 import { badRequest, internalError, isValidDate, parseCity, warming } from "@/lib/api-helpers";
-import { getGzm, startGzm } from "@/lib/gzm";
+import { getZb, startZb } from "@/lib/gzm";
 import { getMergedStopsView, getShapes, startPoller } from "@/lib/poller-singleton";
 import { allowRequest, clientIp, tooManyRequests } from "@/lib/rate-limit";
 import { findConnections, type ConnectionItinerary } from "@/lib/router";
@@ -70,7 +70,7 @@ function attachLegShapes(connections: ConnectionItinerary[]): void {
 export async function GET(req: Request): Promise<Response> {
   // the search is synchronous CPU work on the event loop the pollers share
   const city = parseCity(req);
-  if (!allowRequest(clientIp(req), city === "gzm" ? GZM_COST : 1)) return tooManyRequests();
+  if (!allowRequest(clientIp(req), city !== "bb" ? GZM_COST : 1)) return tooManyRequests();
   if (city instanceof Response) return city;
   let url: URL;
   try {
@@ -125,10 +125,10 @@ export async function GET(req: Request): Promise<Response> {
     : undefined;
   const limit = limitParam ? Number.parseInt(limitParam, 10) : undefined;
 
-  if (city === "gzm") {
-    void startGzm();
+  if (city !== "bb") {
+    void startZb(city);
     try {
-      const connections = getGzm().connections({ from, fromPoint, to, toPoint, afterSecs, arriveBy, limit, directOnly, minTransferSecs, date: date || undefined, dayLabel, sortBy });
+      const connections = getZb(city).connections({ from, fromPoint, to, toPoint, afterSecs, arriveBy, limit, directOnly, minTransferSecs, date: date || undefined, dayLabel, sortBy });
       if (!connections) return warming();
       return Response.json({ count: connections.length, connections }, { headers: { "Cache-Control": "public, max-age=60" } });
     } catch (err) {

@@ -11,6 +11,7 @@ import {
   PathIcon,
   RssSimpleIcon,
   WarningCircleIcon,
+  WheelchairIcon,
 } from "@/components/icons";
 import { removeAlert, useAlerts } from "@/lib/client/alerts";
 import {
@@ -26,7 +27,7 @@ import {
   StarIcon,
 } from "@/components/ui";
 import { fetchJSON, isWarming } from "@/lib/client/api";
-import { GZM_LOADING } from "@/lib/client/city";
+import { CITY, cityOfId, GZM_LOADING } from "@/lib/client/city";
 import { useFavorites } from "@/lib/client/favorites";
 import { formatDistance, formatWalk } from "@/lib/client/geo";
 import { createLivePoll, LIVE_STALE_MS, type LivePoll } from "@/lib/client/live-poll";
@@ -285,6 +286,7 @@ function ScheduleRow({
     .filter(Boolean)
     .join(" · ");
   const dest = row.direction || veh?.headsign;
+  const lowFloor = !!veh?.features?.lowFloor;
   /* a countdown to a departure already behind us means nothing: past rows print the clock time */
   const timeText = veh && !past ? etaLabel(timing, nowTs) : etaClock(timing);
   return (
@@ -298,12 +300,22 @@ function ScheduleRow({
       <LineBadge line={line} operator={row.operator} />
       <div className="min-w-0 flex-1">
         <p className="truncate text-[13.5px] font-medium text-text">{dest ? displayStopName(dest) : `Linia ${line}`}</p>
-        {sub && <p className="mt-0.5 truncate text-[12px] tabular-nums text-text-faint">{sub}</p>}
+        {(sub || lowFloor) && (
+          <p className="mt-0.5 flex items-center gap-1 truncate text-[12px] tabular-nums text-text-faint">
+            {lowFloor && <LowFloorMark />}
+            {sub}
+          </p>
+        )}
       </div>
       <TimeCell timing={timing} big={timeText} note={veh && !past ? "w trasie" : null} />
       <Chevron />
     </button>
   );
+}
+
+/** The bus is low-floor (MZK fleet data; KB and GZM boards carry no vehicle features). */
+function LowFloorMark() {
+  return <WheelchairIcon className="shrink-0 text-[13px]" aria-label="Niska podłoga" role="img" />;
 }
 
 /** An upstream source failed: the list is incomplete, not empty (a failed MZK fetch used to look like "no MZK buses"). */
@@ -374,7 +386,7 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
       },
       // the error sheet only when there is nothing to show; with a list on screen the next poll retries
       onFail: (err) => {
-        if (liveRowsRef.current === null) setLiveErr(stop.designator.startsWith("gzm:") && isWarming(err) ? "warming" : "error");
+        if (liveRowsRef.current === null) setLiveErr(cityOfId(stop.designator) !== "bb" && isWarming(err) ? "warming" : "error");
       },
       isVisible: () => !document.hidden,
     });
@@ -657,7 +669,7 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
             ) : stop.operator === "MZK" ? (
               <OperatorTag op="mzk" label="MZK Bielsko-Biała" />
             ) : stop.operator === "GZM" ? (
-              <OperatorTag op="gzm" label="Metropolia GZM" />
+              <OperatorTag op="gzm" label={CITY[cityOfId(stop.designator)].name} />
             ) : (
               <OperatorTag op="kb" label="Komunikacja Beskidzka" />
             )}
@@ -881,6 +893,7 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
                 const vehModel = row.model || veh?.model;
                 const vehDetails = sideNum ? `#${sideNum}${vehModel ? ` · ${vehModel}` : ""}` : null;
                 const sub = [plat, vehDetails].filter(Boolean).join(" · ");
+                const lowFloor = !!(row.features ?? veh?.features)?.lowFloor;
                 /* KB boards carry only direction_id; the server resolves it through the board's
                    `directions` map, the live vehicle's headsign is the fallback */
                 const dest = row.direction || veh?.headsign;
@@ -899,8 +912,11 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
                       <LineBadge line={line} operator={row.operator} />
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-[13.5px] font-medium text-text">{destText}</p>
-                        {sub && (
-                          <p className="mt-0.5 truncate text-[12px] tabular-nums text-text-faint">{sub}</p>
+                        {(sub || lowFloor) && (
+                          <p className="mt-0.5 flex items-center gap-1 truncate text-[12px] tabular-nums text-text-faint">
+                            {lowFloor && <LowFloorMark />}
+                            {sub}
+                          </p>
                         )}
                       </div>
                       <TimeCell timing={timing} big={etaLabel(timing, nowTs, row.time ?? "")} />

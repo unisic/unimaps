@@ -151,6 +151,30 @@ export function kbShapeRef(
   }
 }
 
+/**
+ * `shape_id` for a line-view pattern: KB from its GTFS stop ids (= internal ids; an
+ * unseen pattern is queued for routing), MZK from the variant in the router trip id.
+ * Null = the client draws straight stop-to-stop lines. Never throws.
+ */
+export function lineShapeRef(tripId: string, stopIds: readonly string[], line: string, headsign: string): string | null {
+  try {
+    const st = state();
+    const mzk = /^mzk:\d+:(\d+)$/.exec(tripId);
+    if (mzk) {
+      const variantId = Number(mzk[1]);
+      st.shapes.touchMzk(variantId, "background");
+      return st.shapes.wireId(`mzk:${variantId}`);
+    }
+    const p = st.poller.kbPatternFor(stopIds.map((id) => ({ designator: Number(id) })), line, headsign);
+    if (!p) return null;
+    st.shapes.touchKb(p, "background");
+    return st.shapes.wireId(p.key);
+  } catch (err) {
+    log.error("shapes", `lineShapeRef failed: ${err}`);
+    return null;
+  }
+}
+
 /** The KB upstream API client for the passthrough routes (not the poller's). */
 export function getApi(): KbApi {
   return state().api;

@@ -1,4 +1,4 @@
-import { jsonWithEtag, parseCity, upstreamError } from "@/lib/api-helpers";
+import { jsonWithEtag, notFound, parseCity, upstreamError } from "@/lib/api-helpers";
 import { getFleetTracker } from "@/lib/fleet-tracker";
 import { getGzmFleetTracker } from "@/lib/gzm-fleet";
 import { startGzm } from "@/lib/gzm";
@@ -18,6 +18,7 @@ export const runtime = "nodejs";
 export async function GET(req: Request): Promise<Response> {
   const city = parseCity(req);
   if (city instanceof Response) return city;
+  if (city !== "bb" && city !== "gzm") return notFound();
   try {
     if (city === "gzm") {
       void startGzm();

@@ -6,19 +6,21 @@
 import { useEffect, useRef } from "react";
 import useSWR from "swr";
 import { fetchJSON, HttpError } from "./api";
-import { cityUrl, loadCity, type City } from "./city";
+import { cityUrl, loadCity } from "./city";
 import type { FleetStats, FleetSummaryItem, FleetTimelinePoint, FleetVehicleDetail } from "../shared/fleet";
 
 export type * from "../shared/fleet";
 
-export type FleetCity = City;
+/** the fleet tracker exists for BB (MZK) and GZM only */
+export type FleetCity = "bb" | "gzm";
 
 /**
  * The city /brygady shows: `?city=gzm` first, then the map's stored choice (`kb:city`), else BB.
  * Read once per page load (switching city is a navigation); client only.
  */
 export function readBrygadyCity(search: string): FleetCity {
-  return new URLSearchParams(search).get("city") === "gzm" ? "gzm" : (loadCity() ?? "bb");
+  if (new URLSearchParams(search).get("city") === "gzm") return "gzm";
+  return loadCity() === "gzm" ? "gzm" : "bb";
 }
 
 /** The city of a side number: GZM keys are "<company code>_<fleet number>", MZK ones digits only. */
