@@ -13,6 +13,12 @@ updates:
       # @types/node follows the runtime major (node:24 in the Dockerfile, CI and engines)
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
+      # typescript-eslint 8 rejects TS 7; drop once it supports it
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+      # eslint-config-next 16 pulls import/jsx-a11y/react plugins that peer on eslint <= 9
+      - dependency-name: "eslint"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
