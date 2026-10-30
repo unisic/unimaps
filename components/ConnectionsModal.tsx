@@ -22,7 +22,7 @@ import {
   PersonSimpleWalkIcon,
   ShieldCheckIcon,
 } from "@/components/icons";
-import { CHIP, chip, CHIP_OFF, CloseIcon, ErrorState, IconButton, LineBadge, StarIcon } from "@/components/ui";
+import { CHIP, chip, CHIP_OFF, CloseIcon, ErrorState, IconButton, LineBadge, Segmented, StarIcon } from "@/components/ui";
 import { geocode, getConnections, isWarming, type GeoHit } from "@/lib/client/api";
 import { CityContext, GZM_LOADING } from "@/lib/client/city";
 import { useFavorites } from "@/lib/client/favorites";
@@ -189,10 +189,17 @@ function TimeInput24H({
         placeholder="00"
         aria-label="Minuty w formacie 24-godzinnym (00-59)"
       />
-      <span className="ml-1.5 select-none text-[11px] text-text-faint">24h</span>
     </div>
   );
 }
+
+/** Leave now, leave at a time, or arrive by a time: one choice, so the row never shows two picks at once. */
+type When = "now" | "depart" | "arrive";
+const WHEN_LATER: { id: When; label: string; title?: string }[] = [
+  { id: "depart", label: "Odjazd o" },
+  { id: "arrive", label: "Przyjazd do", title: "Połączenia z przyjazdem najpóźniej o wybranej godzinie" },
+];
+const WHEN_TODAY: { id: When; label: string; title?: string }[] = [{ id: "now", label: "Teraz" }, ...WHEN_LATER];
 
 function ConnectionsDialog({
   onClose,
@@ -592,21 +599,23 @@ function ConnectionsDialog({
     [timeMode, hour, minute],
   );
 
-  const handleArriveBy = useCallback(
-    (on: boolean) => {
+  const when: When = arriveBy ? "arrive" : timeMode === "now" && dateMode === "today" ? "now" : "depart";
+  const pickWhen = useCallback(
+    (next: When) => {
       // an unchanged search would never refetch, the list must not drop to a skeleton
-      if (on === arriveBy) return;
-      setArriveBy(on);
-      // arriving "now" means nothing: an hour ahead to start from
-      if (on && timeMode === "now") {
-        const [h, m] = addMinutesToHHMM(nowHHMM(), 60).split(":");
+      if (next === when) return;
+      setArriveBy(next === "arrive");
+      if (next === "now") return handleSetNow();
+      // leaving starts from the current minute; arriving "now" means nothing, so an hour ahead
+      if (timeMode === "now") {
+        const [h, m] = addMinutesToHHMM(nowHHMM(), next === "arrive" ? 60 : 0).split(":");
         setHour(h);
         setMinute(m);
         setTimeMode("custom");
       }
       setConnections(null);
     },
-    [timeMode, arriveBy],
+    [when, timeMode, handleSetNow],
   );
 
   const handleTimeBlur = useCallback(() => {
@@ -890,79 +899,64 @@ function ConnectionsDialog({
             </label>
           </div>
 
-          {/* 24-Hour Time selection row */}
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex flex-wrap items-center gap-1.5">
+          {/* When: now, leave at or arrive by; the time and its nudges only for a set time */}
+          <div className="space-y-2">
+            <div className="flex items-center gap-1.5">
               <span className="w-[52px] shrink-0 text-[12px] text-text-faint">Czas:</span>
-              <button type="button" onClick={() => handleArriveBy(false)} className={chip(!arriveBy)} aria-pressed={!arriveBy}>
-                Odjazd
-              </button>
-              <button
-                type="button"
-                onClick={() => handleArriveBy(true)}
-                className={chip(arriveBy)}
-                aria-pressed={arriveBy}
-                title="Połączenia z przyjazdem najpóźniej o wybranej godzinie"
-              >
-                Przyjazd
-              </button>
-
-              {dateMode === "today" && !arriveBy && (
-                <button type="button" onClick={handleSetNow} className={chip(timeMode === "now")}>
-                  Teraz
-                </button>
-              )}
-
-              {/* Explicit 24h Time Stepper */}
-              <TimeInput24H
-                hour={hour}
-                minute={minute}
-                onChange={(h, m) => {
-                  setHour(h);
-                  setMinute(m);
-                  setTimeMode("custom");
-                  setConnections(null);
-                }}
-                onBlur={handleTimeBlur}
-              />
-
-              {/* Quick time adjustment presets */}
-              <button
-                type="button"
-                onClick={() => handleAddMinutes(15)}
-                className={`${CHIP} ${CHIP_OFF} px-2.5 tabular-nums`}
-                title="Dodaj 15 minut"
-              >
-                +15m
-              </button>
-              <button
-                type="button"
-                onClick={() => handleAddMinutes(30)}
-                className={`${CHIP} ${CHIP_OFF} px-2.5 tabular-nums`}
-                title="Dodaj 30 minut"
-              >
-                +30m
-              </button>
-              <button
-                type="button"
-                onClick={() => handleAddMinutes(60)}
-                className={`${CHIP} ${CHIP_OFF} px-2.5 tabular-nums`}
-                title="Dodaj 1 godzinę"
-              >
-                +1h
-              </button>
+              <div className="min-w-0 flex-1 md:max-w-sm">
+                <Segmented
+                  label="Czas podróży"
+                  value={when}
+                  options={dateMode === "today" ? WHEN_TODAY : WHEN_LATER}
+                  onChange={pickWhen}
+                />
+              </div>
             </div>
-
-            {fromParam && toParam && (
-              <button
-                type="button"
-                onClick={handleRefresh}
-                disabled={loading}
-                className={`${CHIP} bg-tint/8 px-3 text-text hover:bg-tint/12 disabled:opacity-50`}
-              >
-                <ArrowsClockwiseIcon className="text-[14px]" />
-                {loading ? "Szukanie…" : "Odśwież"}
-              </button>
+            {(when !== "now" || (fromParam && toParam)) && (
+              <div className="flex flex-wrap items-center gap-1.5 pl-[58px]">
+                {when !== "now" && (
+                  <>
+                    <TimeInput24H
+                      hour={hour}
+                      minute={minute}
+                      onChange={(h, m) => {
+                        setHour(h);
+                        setMinute(m);
+                        setTimeMode("custom");
+                        setConnections(null);
+                      }}
+                      onBlur={handleTimeBlur}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => handleAddMinutes(-15)}
+                      className={`${CHIP} ${CHIP_OFF} px-2.5 tabular-nums`}
+                      aria-label="15 minut wcześniej"
+                    >
+                      −15 min
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleAddMinutes(15)}
+                      className={`${CHIP} ${CHIP_OFF} px-2.5 tabular-nums`}
+                      aria-label="15 minut później"
+                    >
+                      +15 min
+                    </button>
+                  </>
+                )}
+                {fromParam && toParam && (
+                  <button
+                    type="button"
+                    onClick={handleRefresh}
+                    disabled={loading}
+                    className={`${CHIP} ml-auto bg-tint/8 px-3 text-text hover:bg-tint/12 disabled:opacity-50`}
+                  >
+                    <ArrowsClockwiseIcon className="text-[14px]" />
+                    {loading ? "Szukanie…" : "Odśwież"}
+                  </button>
+                )}
+              </div>
             )}
           </div>
 
