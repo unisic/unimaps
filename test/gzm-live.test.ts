@@ -232,8 +232,11 @@ describe("GzmLive", () => {
     assert.deepEqual(t.trip.times.map((x) => x.departure_time), ["08:00", "08:05", "08:10"]);
     assert.equal(t.trip.times[0].place_id, "gzm:a");
     assert.equal(t.shape_status, "road");
-    const s = live.trip("gzm:tA") as { trip: { times: Array<{ estimate?: unknown }> } };
-    assert.ok(s.trip.times.every((x) => x.estimate === undefined));
+    // flat like the client's Trip: times beside the shape ref, never the trip_execution envelope
+    const s = live.trip("gzm:tA") as { times: Array<{ estimate?: unknown }>; shape_status: string; trip?: unknown };
+    assert.ok(s.times.every((x) => x.estimate === undefined));
+    assert.equal(s.shape_status, "road");
+    assert.equal(s.trip, undefined);
     assert.equal(live.trip("gzm:nope"), "unknown");
   });
 

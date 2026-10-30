@@ -766,12 +766,18 @@ export class GzmLive {
     };
   }
 
-  /** Static trip (no live estimates: /api/trip and /api/trips responses are cached); null while the feed loads. */
+  /**
+   * Static trip (no live estimates: /api/trip and /api/trips responses are cached); null while the feed loads.
+   * Flat like the MZK branch of /api/trip: the trip body with the shape ref beside `times`, not the
+   * trip_execution envelope.
+   */
   trip(tripId: string): Record<string, unknown> | null | "unknown" {
     const feed = this.getFeed();
     if (!feed) return null;
     const trip = feed.trips.get(tripId);
-    return trip ? tripJson(feed, trip, null) : "unknown";
+    if (!trip) return "unknown";
+    const { trip: body, shape, shape_id, shape_status } = tripJson(feed, trip, null);
+    return { ...(body as Record<string, unknown>), shape, shape_id, shape_status };
   }
 
   /** The feed in use (null while it loads). */

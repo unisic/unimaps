@@ -121,14 +121,15 @@ describe("GZM route branches", () => {
 
   it("trip and trips: static trips from the feed, an unknown id is empty, no KB fetch", async () => {
     const t = (await (await tripRoute.GET(get("/api/trip/gzm:tA"), params({ tripId: "gzm:tA" }))).json()) as {
-      trip: { times: unknown[] };
+      times: unknown[];
       shape_id: string;
     };
-    assert.equal(t.trip.times.length, 3);
+    assert.equal(t.times.length, 3);
     assert.match(t.shape_id, /^gzm:shA\.[0-9a-f]{6}$/);
     assert.deepEqual(await (await tripRoute.GET(get("/api/trip/gzm:nope"), params({ tripId: "gzm:nope" }))).json(), {});
-    const b = (await (await tripsRoute.GET(get("/api/trips?ids=gzm:tA,gzm:nope"))).json()) as { count: number; trips: Record<string, unknown> };
+    const b = (await (await tripsRoute.GET(get("/api/trips?ids=gzm:tA,gzm:nope"))).json()) as { count: number; trips: Record<string, { times: unknown[] }> };
     assert.deepEqual(Object.keys(b.trips), ["gzm:tA"]);
+    assert.equal(b.trips["gzm:tA"].times.length, 3);
   });
 
   it("trip_execution: the vehicle's live trip; a malformed gzm id is a 400", async () => {
