@@ -21,7 +21,7 @@ const GRID = "rgba(255,255,255,0.07)";
 const AXIS = "rgba(255,255,255,0.18)";
 const TICK_TEXT = "#838d96";
 const WAITING_HATCH = "#838d96";
-const CANCELLED_HATCH = "#ff8a80";
+const CANCELLED_HATCH = "#f5cc5c";
 
 function niceCeil(v: number): { max: number; step: number } {
   for (const step of [1, 2, 5, 10, 20, 25, 50, 100, 200]) {
@@ -529,7 +529,7 @@ export const CourseGantt = memo(function CourseGantt({
       {geo ? (
         <svg width={width} height={GT_H} aria-hidden className="block overflow-visible">
           <defs>
-            <HatchPattern id={`${uid}-x`} color={CANCELLED_HATCH} bg="rgba(255,138,128,0.12)" />
+            <HatchPattern id={`${uid}-x`} color={CANCELLED_HATCH} bg="rgba(245,204,92,0.12)" />
             <HatchPattern id={`${uid}-w`} color={WAITING_HATCH} bg="rgba(131,141,150,0.12)" />
           </defs>
           <line x1={4} x2={width - 4} y1={GT_BAR_Y + GT_BAR_H / 2} y2={GT_BAR_Y + GT_BAR_H / 2} stroke={GRID} strokeWidth={2} />
@@ -574,7 +574,7 @@ export const CourseGantt = memo(function CourseGantt({
               x2={geo.sx(geo.nowT)}
               y1={GT_BAR_Y - 6}
               y2={GT_BAR_Y + GT_BAR_H + 6}
-              stroke="#ee7583"
+              stroke="#5ccbe3"
               strokeWidth={2}
               strokeLinecap="round"
             />

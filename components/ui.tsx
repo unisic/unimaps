@@ -9,10 +9,11 @@ import {
   RssSimpleIcon,
   ShareNetworkIcon,
   StarIcon as PhStarIcon,
+  TramIcon,
   WarningCircleIcon,
   XIcon,
 } from "@/components/icons";
-import { operatorColor } from "@/lib/client/format";
+import { operatorColor, type TransitMode } from "@/lib/client/format";
 
 /* Shared with /brygady, which has no IconContext: weight and aria-hidden are
    explicit here instead of inherited. Icons size to the button's font-size. */
@@ -189,6 +190,20 @@ export function SkeletonRows() {
         </div>
       ))}
     </div>
+  );
+}
+
+/** Bus, tram or trolleybus glyph at the font size (Phosphor has no trolleybus: its bus under two poles, as on the map pill). */
+export function ModeIcon({ mode, weight = "fill" }: { mode: TransitMode; weight?: "fill" | "bold" }) {
+  if (mode === "tram") return <TramIcon size="1em" weight={weight} aria-hidden />;
+  if (mode === "bus") return <BusIcon size="1em" weight={weight} aria-hidden />;
+  return (
+    <svg width="1em" height="1em" viewBox="0 0 256 256" fill="currentColor" aria-hidden>
+      <g transform="translate(32 56) scale(0.75)">
+        <BusIcon size={256} weight={weight} />
+      </g>
+      <path d="M108 80 76 16M148 80 116 16" fill="none" stroke="currentColor" strokeWidth={16} strokeLinecap="round" />
+    </svg>
   );
 }
 

@@ -54,6 +54,7 @@ export { SnowflakeIcon } from "@phosphor-icons/react/dist/csr/Snowflake";
 export { StarIcon } from "@phosphor-icons/react/dist/csr/Star";
 export { SunIcon } from "@phosphor-icons/react/dist/csr/Sun";
 export { TicketIcon } from "@phosphor-icons/react/dist/csr/Ticket";
+export { TramIcon } from "@phosphor-icons/react/dist/csr/Tram";
 export { WarningCircleIcon } from "@phosphor-icons/react/dist/csr/WarningCircle";
 export { WheelchairIcon } from "@phosphor-icons/react/dist/csr/Wheelchair";
 export { XCircleIcon } from "@phosphor-icons/react/dist/csr/XCircle";

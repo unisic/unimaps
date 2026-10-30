@@ -6,6 +6,7 @@
  */
 import L from "leaflet";
 import { CITY, getPageCity } from "@/lib/client/city";
+import type { TransitMode } from "./format";
 
 function escapeHtml(s: string): string {
   return s
@@ -26,6 +27,8 @@ const PH_BUS_FILL =
 /** navigation-arrow-fill: drawn pointing north-west, turned 45deg inside the SVG so 0deg = north */
 const PH_NAV_ARROW_FILL =
   "M248,121.58a15.76,15.76,0,0,1-11.29,15l-.2.06-78,21.84-21.84,78-.06.2a15.77,15.77,0,0,1-15,11.29h-.3a15.77,15.77,0,0,1-15.07-10.67L41,61.41a1,1,0,0,1-.05-.16A16,16,0,0,1,61.25,40.9l.16.05,175.92,65.26A15.78,15.78,0,0,1,248,121.58Z";
+const PH_TRAM_FILL =
+  "M184,48H136V24h32a8,8,0,0,0,0-16H88a8,8,0,0,0,0,16h32V48H72A32,32,0,0,0,40,80V184a32,32,0,0,0,32,32h8L65.6,235.2a8,8,0,1,0,12.8,9.6L100,216h56l21.6,28.8a8,8,0,1,0,12.8-9.6L176,216h8a32,32,0,0,0,32-32V80A32,32,0,0,0,184,48Zm0,152H72a16,16,0,0,1-16-16V128H200v56A16,16,0,0,1,184,200ZM96,172a12,12,0,1,1-12-12A12,12,0,0,1,96,172Zm88,0a12,12,0,1,1-12-12A12,12,0,0,1,184,172Z";
 const PH_CARET_UP_FILL =
   "M215.39,163.06A8,8,0,0,1,208,168H48a8,8,0,0,1-5.66-13.66l80-80a8,8,0,0,1,11.32,0l80,80A8,8,0,0,1,215.39,163.06Z";
 const PH_PERSON_WALK_BOLD =
@@ -38,10 +41,18 @@ const PH_BICYCLE_FILL =
 
 const BUS_SVG = `<svg viewBox="0 0 256 256" aria-hidden="true"><path d="${PH_BUS_FILL}"/></svg>`;
 const BIKE_SVG = `<svg viewBox="0 0 256 256" aria-hidden="true"><path d="${PH_BICYCLE_FILL}"/></svg>`;
+/* Phosphor has no trolleybus: its bus, scaled down, under two trolley poles */
+const MODE_SVG: Record<Exclude<TransitMode, "bus">, string> = {
+  tram: `<svg class="veh-mode" viewBox="0 0 256 256" aria-hidden="true"><path d="${PH_TRAM_FILL}"/></svg>`,
+  trolleybus:
+    `<svg class="veh-mode" viewBox="0 0 256 256" aria-hidden="true"><path transform="translate(32 56) scale(0.75)" d="${PH_BUS_FILL}"/>` +
+    `<path class="veh-poles" d="M108 80 76 16M148 80 116 16"/></svg>`,
+};
 const ARROW_SVG = `<svg viewBox="0 0 256 256" aria-hidden="true"><path transform="rotate(45 128 128)" d="${PH_NAV_ARROW_FILL}"/></svg>`;
 
 /**
- * Vehicle pill icon. `bearing` only seeds the arrow's initial angle — after
+ * Vehicle pill icon: the operator logo, or a tram / trolleybus glyph for those modes.
+ * `bearing` only seeds the arrow's initial angle; after
  * that the VehicleAnimator rotates the arrow element in place. Never key an
  * icon memo on the heading: setIcon rewrites the DOM (replaying the pop
  * animation) on every turn.
@@ -51,6 +62,7 @@ export function makeVehicleIcon(
   color: string,
   bearing: number | null,
   operator?: "KB" | "MZK" | "GZM",
+  mode: TransitMode = "bus",
   scheduled = false,
 ): L.DivIcon {
   const hasHeading = bearing != null;
@@ -59,7 +71,8 @@ export function makeVehicleIcon(
     : "";
   // the pill draws the mark as a 13 px white silhouette: only marks made for that (app, MZK, GZM); a city logo would be a blob
   const logo = operator === "MZK" ? "/mzk-logo.svg" : operator === "GZM" && getPageCity() === "gzm" ? "/gzm-logo.svg" : "/brand.svg";
-  const brandIcon = `<img class="veh-bus" src="${logo}" alt="" aria-hidden="true" draggable="false"/>`;
+  const brandIcon =
+    mode === "bus" ? `<img class="veh-bus" src="${logo}" alt="" aria-hidden="true" draggable="false"/>` : MODE_SVG[mode];
   const opClass = operator === "GZM" ? " veh-gzm" : operator === "MZK" ? " veh-mzk" : "";
 
   return L.divIcon({

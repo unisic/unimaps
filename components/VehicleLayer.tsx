@@ -5,7 +5,7 @@ import { useMap } from "react-leaflet";
 import L from "leaflet";
 import { vehiclesClock } from "@/lib/client/api";
 import { fleetMarkers } from "@/lib/client/fleetMarkers";
-import { delayClass, delayTxt, displayStopName, vehColor } from "@/lib/client/format";
+import { delayClass, delayTxt, displayStopName, transitMode, vehColor } from "@/lib/client/format";
 import { makeVehicleIcon } from "@/lib/client/leafletIcons";
 import type { Vehicle } from "@/lib/client/types";
 import { acquireVehicleAnimator, releaseVehicleAnimator, type VehicleAnimator } from "@/lib/client/vehicleAnimator";
@@ -175,7 +175,8 @@ function VehicleLayer({
       // heading is applied by the animator, never part of the icon key —
       // rebuilding the DivIcon replays its pop animation and kills the glide
       const hasHeading = anim.headingKnown(v.id) || v.bearing != null;
-      const key = dots ? color : `${v.line}|${color}|${v.operator ?? ""}|${hasHeading ? 1 : 0}|${v.scheduled ? 1 : 0}`;
+      const mode = transitMode(v.operator, v.vehicle_type);
+      const key = dots ? color : `${v.line}|${color}|${v.operator ?? ""}|${mode}|${hasHeading ? 1 : 0}|${v.scheduled ? 1 : 0}`;
       const existing = views.get(v.id);
       if (!existing) {
         const d = anim.displayed(v.id);
@@ -192,7 +193,7 @@ function VehicleLayer({
               bubblingMouseEvents: false, // like a marker: a tap on a dot is not a map click
             })
           : L.marker(at, {
-              icon: makeVehicleIcon(v.line, color, heading, v.operator, v.scheduled),
+              icon: makeVehicleIcon(v.line, color, heading, v.operator, mode, v.scheduled),
               zIndexOffset: 100,
               keyboard: false,
             });
@@ -215,7 +216,7 @@ function VehicleLayer({
       if (existing.iconKey !== key) {
         if (existing.marker instanceof L.Marker) {
           const d = anim.displayed(v.id);
-          existing.marker.setIcon(makeVehicleIcon(v.line, color, hasHeading ? (d?.heading ?? v.bearing ?? 0) : null, v.operator, v.scheduled));
+          existing.marker.setIcon(makeVehicleIcon(v.line, color, hasHeading ? (d?.heading ?? v.bearing ?? 0) : null, v.operator, mode, v.scheduled));
           anim.refreshViewDom(v.id);
         } else existing.marker.setStyle({ fillColor: color });
         existing.iconKey = key;

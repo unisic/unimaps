@@ -48,7 +48,6 @@ export function tripTimeMatchesStop(
 /** Komunikacja Beskidzka constant brand red. */
 export const BRAND = "#dc2626";
 export const BRAND_KB = "#dc2626";
-export const ACCENT = "#ee7583";
 export const COLOR_AT_STOP = "#34a370";
 export const COLOR_LATE = "#e58f2a";
 export const COLOR_EARLY = "#a86fdd";
@@ -85,6 +84,14 @@ export function hslColor(s: string | null | undefined): string {
   let h = 0;
   for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) % 360;
   return `hsl(${h},58%,46%)`;
+}
+
+export type TransitMode = "bus" | "tram" | "trolleybus";
+
+/** GZM sends the GTFS route_type (0 tram, 11 trolleybus, 3 bus); KB sends 0 for its buses, so only GZM is read. */
+export function transitMode(operator: string | null | undefined, vehicleType: number | null | undefined): TransitMode {
+  if (operator !== "GZM") return "bus";
+  return vehicleType === 0 ? "tram" : vehicleType === 11 ? "trolleybus" : "bus";
 }
 
 /** Vehicle marker color: constant operator color (KB red, MZK characteristic blue). */
