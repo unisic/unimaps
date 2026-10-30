@@ -18,13 +18,14 @@
   /* WCAG AA on bg/surface/surface-2 (5.65 / 5.22 / 4.62:1) */
   --color-text-faint: #838d96;
 
-  /* ---- brand (Komunikacja Beskidzka) ---- */
-  --color-brand: #a6192e;
-  --color-brand-hi: #c22239;
+  /* ---- brand: teal-cyan, never red (red stays the KB operator's data colour) ----
+     brand / brand-hi carry white text: 5.36 / 7.01:1 */
+  --color-brand: #0e7490;
+  --color-brand-hi: #0b6178;
   --color-on-brand: #ffffff;
-  /* lightened brand tone — accessible as text/icons on dark surfaces */
-  --color-primary: #ee7583;
-  --color-primary-dim: rgba(238, 117, 131, 0.14);
+  /* lightened brand tone, accessible as text/icons on dark surfaces (8.26:1 on surface-2) */
+  --color-primary: #5ccbe3;
+  --color-primary-dim: rgba(92, 203, 227, 0.14);
 
   /* ---- operators: data colour only (markers, line badges), never chrome.
      Same hex as BRAND_KB / BRAND_MZK / BRAND_GZM in lib/client/format.ts; Tailwind's
@@ -37,7 +38,8 @@
   --color-good: #7ee2a8;
   --color-late: #ffb865;
   --color-early: #cf9bff;
-  --color-danger: #ff8a80;
+  /* errors and interrupted courses: amber, not red (10.17:1 on surface-2) */
+  --color-danger: #f5cc5c;
 
   /* soft neutral elevation — no colored glow */
   --shadow-float: 0 1px 2px rgba(0, 0, 0, 0.35), 0 8px 28px -6px rgba(0, 0, 0, 0.55);
@@ -106,12 +108,12 @@
   --color-text: #1b1e22;
   --color-text-mute: #596069;
   --color-text-faint: #666e77;
-  --color-primary: #b01f35;
-  --color-primary-dim: rgba(176, 31, 53, 0.1);
+  --color-primary: #0b6b85;
+  --color-primary-dim: rgba(11, 107, 133, 0.1);
   --color-good: #16794a;
   --color-late: #9c5200;
   --color-early: #7a3fc8;
-  --color-danger: #c2261b;
+  --color-danger: #7f5d00;
   --shadow-float: 0 1px 2px rgba(0, 0, 0, 0.1), 0 8px 28px -6px rgba(0, 0, 0, 0.18);
   --shadow-sheet: 0 -4px 32px rgba(0, 0, 0, 0.14);
 }
@@ -130,7 +132,7 @@ body {
   -webkit-tap-highlight-color: transparent;
 }
 
-::selection { background: rgba(238, 117, 131, 0.3); }
+::selection { background: rgba(92, 203, 227, 0.3); }
 
 /* tactile press for controls: named properties only. Uses the individual
    `scale` property so it composes with Tailwind's `translate` utilities. */
@@ -224,6 +226,14 @@ body {
   filter: brightness(0) invert(1);
   pointer-events: none;
 }
+
+/* tram / trolleybus glyph in place of the logo (GZM), drawn in the pill's white */
+.veh-mode {
+  display: block; width: 13px; height: 13px; flex: none;
+  fill: currentColor;
+  pointer-events: none;
+}
+.veh-mode .veh-poles { fill: none; stroke: currentColor; stroke-width: 16; stroke-linecap: round; }
 
 .veh-line { display: block; }
 
@@ -413,6 +423,7 @@ body {
   .veh-pill.no-heading { padding-left: 8px; }
   .veh-arrow { width: 12px; height: 12px; }
   .veh-bus { height: 14px; }
+  .veh-mode { width: 14px; height: 14px; }
 }
 
 .leaflet-control-attribution {

@@ -8,7 +8,6 @@ import {
   ArrowsClockwiseIcon,
   ArrowsHorizontalIcon,
   BellIcon,
-  BusIcon,
   CardsIcon,
   CrosshairIcon,
   DotsThreeVerticalIcon,
@@ -19,7 +18,7 @@ import {
   TicketIcon,
   WheelchairIcon,
 } from "@/components/icons";
-import { BackIcon, CloseIcon, ErrorState, IconButton, LineBadge, ShareButton } from "@/components/ui";
+import { BackIcon, CloseIcon, ErrorState, IconButton, LineBadge, ModeIcon, ShareButton } from "@/components/ui";
 import {
   ALERT_LEADS,
   MAX_ALERTS,
@@ -45,6 +44,7 @@ import {
   notStartedEta,
   operatorColor,
   secsFromHHMM,
+  transitMode,
   tripTimeMatchesStop,
 } from "@/lib/client/format";
 import { cityOfId } from "@/lib/client/city";
@@ -185,6 +185,7 @@ function TripView({
     ? (vehId?.startsWith("gzm:") ? vehId.slice(4) : null)
     : isMzkTrip ? (currentVeh?.side_number ?? null) : null;
   const lineColor = operatorColor(tripOp, trip.line === "…" ? null : trip.line);
+  const mode = transitMode(tripOp, currentVeh?.vehicle_type);
   const loading = trip.status === "loading";
   const failed = trip.status === "error";
 
@@ -627,7 +628,7 @@ function TripView({
                             boxShadow: "0 0 0 3px var(--color-surface)",
                           }}
                         >
-                          <BusIcon weight="fill" />
+                          <ModeIcon mode={mode} />
                         </span>
                       )}
                     </span>
