@@ -11,6 +11,7 @@ import {
   PathIcon,
   RssSimpleIcon,
   WarningCircleIcon,
+  WheelchairIcon,
 } from "@/components/icons";
 import { removeAlert, useAlerts } from "@/lib/client/alerts";
 import {
@@ -21,12 +22,13 @@ import {
   IconButton,
   LineBadge,
   LiveMark,
+  RequestStopTag,
   ShareButton,
   SkeletonRows,
   StarIcon,
 } from "@/components/ui";
 import { fetchJSON, isWarming } from "@/lib/client/api";
-import { GZM_LOADING } from "@/lib/client/city";
+import { CITY, cityOfId, GZM_LOADING } from "@/lib/client/city";
 import { useFavorites } from "@/lib/client/favorites";
 import { formatDistance, formatWalk } from "@/lib/client/geo";
 import { createLivePoll, LIVE_STALE_MS, type LivePoll } from "@/lib/client/live-poll";
@@ -41,6 +43,7 @@ import {
   isBusStation,
   offsetDateISO,
   operatorColor,
+  withoutRequestTail,
 } from "@/lib/client/format";
 import type {
   DepartureRow,
@@ -123,6 +126,8 @@ const REVEAL_STEP = 10;
 
 /* per rows array (one array = one stop-day), so the Intl work runs once per loaded day */
 const schedCache = new WeakMap<readonly TtRow[], SchedItem[]>();
+/** the whole-stop board has no timetable around it: the timetable is this pole's */
+const NO_SCHED: readonly SchedItem[] = [];
 
 function schedOfDay(date: string, rows: readonly TtRow[]): SchedItem[] {
   const hit = schedCache.get(rows);
@@ -285,6 +290,7 @@ function ScheduleRow({
     .filter(Boolean)
     .join(" · ");
   const dest = row.direction || veh?.headsign;
+  const lowFloor = !!veh?.features?.lowFloor;
   /* a countdown to a departure already behind us means nothing: past rows print the clock time */
   const timeText = veh && !past ? etaLabel(timing, nowTs) : etaClock(timing);
   return (
@@ -298,12 +304,22 @@ function ScheduleRow({
       <LineBadge line={line} operator={row.operator} />
       <div className="min-w-0 flex-1">
         <p className="truncate text-[13.5px] font-medium text-text">{dest ? displayStopName(dest) : `Linia ${line}`}</p>
-        {sub && <p className="mt-0.5 truncate text-[12px] tabular-nums text-text-faint">{sub}</p>}
+        {(sub || lowFloor) && (
+          <p className="mt-0.5 flex items-center gap-1 truncate text-[12px] tabular-nums text-text-faint">
+            {lowFloor && <LowFloorMark />}
+            {sub}
+          </p>
+        )}
       </div>
       <TimeCell timing={timing} big={timeText} note={veh && !past ? "w trasie" : null} />
       <Chevron />
     </button>
   );
+}
+
+/** The bus is low-floor (MZK fleet data; KB and GZM boards carry no vehicle features). */
+function LowFloorMark() {
+  return <WheelchairIcon className="shrink-0 text-[13px]" aria-label="Niska podłoga" role="img" />;
 }
 
 /** An upstream source failed: the list is incomplete, not empty (a failed MZK fetch used to look like "no MZK buses"). */
@@ -333,6 +349,9 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
   /* "warming": the server is still loading the GZM data (503); the poll keeps retrying */
   const [liveErr, setLiveErr] = useState<false | "error" | "warming">(false);
   const [liveWarn, setLiveWarn] = useState<Warnings>(NO_WARNINGS);
+  /* "Cały przystanek": the board of every same-name pole nearby (the server says how many there are) */
+  const [wholeStop, setWholeStop] = useState(false);
+  const [poles, setPoles] = useState(0);
   /* "now" on the SERVER's clock (epoch s): every row time is an absolute instant, so there is no
      seconds-of-day / midnight arithmetic left, and a wrong device clock cannot shift the countdowns.
      skewRef = server_ts - device clock, refreshed by every successful fetch. */
@@ -358,7 +377,7 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
   const pollRef = useRef<LivePoll | null>(null);
   useEffect(() => {
     if (tab !== "live") return;
-    const url = `/api/stop/${encodeURIComponent(stop.designator)}/departures`;
+    const url = `/api/stop/${encodeURIComponent(stop.designator)}/departures${wholeStop ? "?all=1" : ""}`;
     const poll = createLivePoll<DeparturesResponse>({
       load: (signal) => fetchJSON<DeparturesResponse>(url, { cache: "no-store", signal }),
       onOk: (d) => {
@@ -370,11 +389,12 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
         setLastOkMs(Date.now());
         setLiveRows(liveRowsRef.current);
         setLiveWarn(d.warnings ?? []);
+        setPoles(d.poles ?? 0);
         setLiveErr(false);
       },
       // the error sheet only when there is nothing to show; with a list on screen the next poll retries
       onFail: (err) => {
-        if (liveRowsRef.current === null) setLiveErr(stop.designator.startsWith("gzm:") && isWarming(err) ? "warming" : "error");
+        if (liveRowsRef.current === null) setLiveErr(cityOfId(stop.designator) !== "bb" && isWarming(err) ? "warming" : "error");
       },
       isVisible: () => !document.hidden,
     });
@@ -400,7 +420,15 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
       window.removeEventListener("focus", kick);
       window.removeEventListener("online", kick);
     };
-  }, [stop.designator, tab]);
+  }, [stop.designator, tab, wholeStop]);
+
+  /* the other board is not this one: show the skeleton until it loads */
+  const toggleWhole = useCallback(() => {
+    liveRowsRef.current = null;
+    setLiveRows(null);
+    setLiveErr(false);
+    setWholeStop((w) => !w);
+  }, []);
 
   const hasRows = liveRows !== null;
   useEffect(() => {
@@ -515,7 +543,7 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
     return [...m].sort(([ka, a], [kb, b]) => compareLines(a.line, b.line) || (ka < kb ? -1 : ka > kb ? 1 : 0));
   }, [liveRows, days, day0, ttDay]);
 
-  const sched = useMemo(() => schedOf(days, [day0, day1]), [days, day0, day1]);
+  const sched = useMemo(() => (wholeStop ? NO_SCHED : schedOf(days, [day0, day1])), [wholeStop, days, day0, day1]);
   const ext = useMemo(
     () => filterExt(boardExtension(sched, liveRows ?? [], nowTs), lineSel),
     [sched, liveRows, nowTs, lineSel],
@@ -645,7 +673,7 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
           <h2 className="text-[17px] font-semibold leading-tight tracking-tight text-balance text-text">
-            {displayStopName(stop.name)}
+            {displayStopName(stop.onRequest ? withoutRequestTail(stop.name) : stop.name)}
             {stop.symbol && <span className="ml-1.5 font-normal text-text-faint">{stop.symbol}</span>}
           </h2>
           <div className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[12px] text-text-mute">
@@ -657,14 +685,14 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
             ) : stop.operator === "MZK" ? (
               <OperatorTag op="mzk" label="MZK Bielsko-Biała" />
             ) : stop.operator === "GZM" ? (
-              <OperatorTag op="gzm" label="Metropolia GZM" />
+              <OperatorTag op="gzm" label={CITY[cityOfId(stop.designator)].name} />
             ) : (
               <OperatorTag op="kb" label="Komunikacja Beskidzka" />
             )}
             <span className="text-text-faint">
               {isStation ? "Dworzec autobusowy" : "Przystanek"}
-              {stop.onRequest && ", na żądanie"}
             </span>
+            {stop.onRequest && <RequestStopTag />}
             {walkM != null && (
               <span className="tabular-nums text-text-faint">
                 {formatDistance(walkM)}, {formatWalk(walkM)}
@@ -723,27 +751,35 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
           </button>
         ))}
       </div>
-      {lines.length > 1 && (
-        <div
-          role="group"
-          aria-label="Pokaż jedną linię"
-          className="-mx-4 mt-2.5 flex gap-1.5 overflow-x-auto px-4 [scrollbar-width:none]"
-        >
-          <button type="button" aria-pressed={lineSel == null} onClick={() => setLineSel(null)} className={chip(lineSel == null)}>
-            Wszystkie
-          </button>
-          {lines.map(([k, l]) => (
-            <button
-              key={k}
-              type="button"
-              aria-pressed={lineSel === k}
-              onClick={() => setLineSel(lineSel === k ? null : k)}
-              className={`${chip(lineSel === k)} tabular-nums`}
-            >
-              <span className="h-2 w-2 rounded-full" style={{ background: operatorColor(l.operator, l.line) }} aria-hidden />
-              {l.line}
-            </button>
-          ))}
+      {(lines.length > 1 || (tab === "live" && poles > 1)) && (
+        <div className="-mx-4 mt-2.5 flex gap-1.5 overflow-x-auto px-4 [scrollbar-width:none]">
+          {tab === "live" && poles > 1 && (
+            <>
+              <button type="button" aria-pressed={wholeStop} onClick={toggleWhole} className={chip(wholeStop)}>
+                Cały przystanek
+              </button>
+              {lines.length > 1 && <span className="my-1.5 w-px shrink-0 bg-hairline" aria-hidden />}
+            </>
+          )}
+          {lines.length > 1 && (
+            <div role="group" aria-label="Pokaż jedną linię" className="flex gap-1.5">
+              <button type="button" aria-pressed={lineSel == null} onClick={() => setLineSel(null)} className={chip(lineSel == null)}>
+                Wszystkie
+              </button>
+              {lines.map(([k, l]) => (
+                <button
+                  key={k}
+                  type="button"
+                  aria-pressed={lineSel === k}
+                  onClick={() => setLineSel(lineSel === k ? null : k)}
+                  className={`${chip(lineSel === k)} tabular-nums`}
+                >
+                  <span className="h-2 w-2 rounded-full" style={{ background: operatorColor(l.operator, l.line) }} aria-hidden />
+                  {l.line}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       )}
       {tab !== "live" && (
@@ -821,7 +857,7 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
                 </button>
               </p>
             )}
-            {earlierDone ? (
+            {wholeStop ? null : earlierDone ? (
               earlier.tried && (
                 <p className="px-4 py-2.5 text-center text-[12px] text-text-faint">Brak wcześniejszych odjazdów dziś</p>
               )
@@ -880,7 +916,9 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
                 const sideNum = row.side_number || veh?.side_number;
                 const vehModel = row.model || veh?.model;
                 const vehDetails = sideNum ? `#${sideNum}${vehModel ? ` · ${vehModel}` : ""}` : null;
-                const sub = [plat, vehDetails].filter(Boolean).join(" · ");
+                const pole = wholeStop && row.pole ? `${cityOfId(stop.designator) === "bb" ? "kier." : "słupek"} ${row.pole}` : null;
+                const sub = [pole, plat, vehDetails].filter(Boolean).join(" · ");
+                const lowFloor = !!(row.features ?? veh?.features)?.lowFloor;
                 /* KB boards carry only direction_id; the server resolves it through the board's
                    `directions` map, the live vehicle's headsign is the fallback */
                 const dest = row.direction || veh?.headsign;
@@ -899,8 +937,11 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
                       <LineBadge line={line} operator={row.operator} />
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-[13.5px] font-medium text-text">{destText}</p>
-                        {sub && (
-                          <p className="mt-0.5 truncate text-[12px] tabular-nums text-text-faint">{sub}</p>
+                        {(sub || lowFloor) && (
+                          <p className="mt-0.5 flex items-center gap-1 truncate text-[12px] tabular-nums text-text-faint">
+                            {lowFloor && <LowFloorMark />}
+                            {sub}
+                          </p>
                         )}
                       </div>
                       <TimeCell timing={timing} big={etaLabel(timing, nowTs, row.time ?? "")} />
@@ -923,7 +964,7 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
               })}
             </ul>
             )}
-            {laterDone ? (
+            {wholeStop ? null : laterDone ? (
               <p className="px-4 py-2.5 text-center text-[12px] text-text-faint">Brak dalszych odjazdów w rozkładzie</p>
             ) : (
               <MoreButton dir="later" busy={later.busy} err={later.err} onClick={showLater} />

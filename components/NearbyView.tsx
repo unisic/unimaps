@@ -2,11 +2,11 @@
 
 import { memo, useEffect, useMemo, useState } from "react";
 import BottomSheet from "@/components/BottomSheet";
-import { CaretRightIcon, PersonSimpleWalkIcon } from "@/components/icons";
+import { CaretRightIcon, MapPinIcon, PersonSimpleWalkIcon } from "@/components/icons";
 import type { GeoStatus } from "@/components/hooks";
 import { CloseIcon, ErrorState, IconButton, LineBadge, LiveMark, SkeletonRows } from "@/components/ui";
 import { fetchJSON, isWarming } from "@/lib/client/api";
-import { GZM_LOADING } from "@/lib/client/city";
+import { cityOfId, GZM_LOADING } from "@/lib/client/city";
 import { delayClass, displayStopName } from "@/lib/client/format";
 import { formatDistance, formatWalk, nearestStops } from "@/lib/client/geo";
 import { createLivePoll } from "@/lib/client/live-poll";
@@ -23,6 +23,8 @@ interface Props {
   /** null until the first fix (opened from the palette before locating) */
   pos: { lat: number; lon: number } | null;
   geoStatus: GeoStatus;
+  /** an address from search instead of the user's position: `pos` is its point */
+  place?: { name: string; detail: string } | null;
   vehicles?: Vehicle[];
   onSelectStop: (s: Stop) => void;
   onClose: () => void;
@@ -33,7 +35,7 @@ type Boards = Map<string, DepartureRow[] | null>;
 
 /** The few stops closest to the user with their next departures, one tap from the full stop sheet.
  *  Mounted only while open, like StopView. */
-function NearbyView({ desktop, stops, pos, geoStatus, vehicles, onSelectStop, onClose }: Props) {
+function NearbyView({ desktop, stops, pos, geoStatus, place, vehicles, onSelectStop, onClose }: Props) {
   const near = useMemo(() => (pos ? nearestStops(stops, pos, NEAR_STOPS) : []), [stops, pos]);
   /* the poll restarts only when the SET of nearby stops changes, not on every GPS fix */
   const key = near.map((n) => n.s.designator).sort().join("\n");
@@ -73,7 +75,7 @@ function NearbyView({ desktop, stops, pos, geoStatus, vehicles, onSelectStop, on
         setNowTs(Date.now() / 1000 + skew);
       },
       onFail: (e) => {
-        if (!have) setErr(designators[0].startsWith("gzm:") && isWarming(e) ? "warming" : "error");
+        if (!have) setErr(cityOfId(designators[0]) !== "bb" && isWarming(e) ? "warming" : "error");
       },
       isVisible: () => !document.hidden,
     });
@@ -97,11 +99,15 @@ function NearbyView({ desktop, stops, pos, geoStatus, vehicles, onSelectStop, on
     <header className="px-4 pb-3 pt-2 md:pt-4">
       <div className="flex items-center gap-3">
         <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-tint/6 text-[18px] text-text-mute">
-          <PersonSimpleWalkIcon />
+          {place ? <MapPinIcon /> : <PersonSimpleWalkIcon />}
         </span>
         <div className="min-w-0 flex-1">
-          <h2 className="truncate text-[17px] font-semibold leading-tight tracking-tight text-text">W pobliżu</h2>
-          <p className="mt-0.5 text-[12px] text-text-faint">Najbliższe przystanki i odjazdy</p>
+          <h2 className="truncate text-[17px] font-semibold leading-tight tracking-tight text-text">
+            {place ? place.name : "W pobliżu"}
+          </h2>
+          <p className="mt-0.5 truncate text-[12px] text-text-faint">
+            {place?.detail ? `${place.detail} · najbliższe przystanki` : "Najbliższe przystanki i odjazdy"}
+          </p>
         </div>
         <IconButton label="Zamknij" onClick={onClose}>
           <CloseIcon />

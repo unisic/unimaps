@@ -12,22 +12,26 @@ import {
   CrosshairIcon,
   DotsThreeVerticalIcon,
   DropIcon,
+  FlagIcon,
   LeafIcon,
   LightningIcon,
   SnowflakeIcon,
   TicketIcon,
   WheelchairIcon,
 } from "@/components/icons";
-import { BackIcon, CloseIcon, ErrorState, IconButton, LineBadge, ModeIcon, ShareButton } from "@/components/ui";
+import { BackIcon, CloseIcon, ErrorState, IconButton, LineBadge, ModeIcon, RequestStopTag, ShareButton } from "@/components/ui";
 import {
   ALERT_LEADS,
   MAX_ALERTS,
   addAlert,
   alertUntil,
+  notify,
   removeAlert,
   tripAlertKey,
   useAlerts,
 } from "@/lib/client/alerts";
+import { currentInstallKind, IOS_INSTALL_HINT } from "@/lib/client/install";
+import { holdWakeLock } from "@/lib/client/wakeLock";
 import {
   computeEta,
   countdown,
@@ -46,8 +50,9 @@ import {
   secsFromHHMM,
   transitMode,
   tripTimeMatchesStop,
+  withoutRequestTail,
 } from "@/lib/client/format";
-import { cityOfId } from "@/lib/client/city";
+import { CITY, cityOfId } from "@/lib/client/city";
 import { findActiveStop, type ActiveStopResult } from "@/lib/client/geo";
 import type { LatLng, Stop, TripView as TripViewState, Vehicle, VehicleFeatures } from "@/lib/client/types";
 import { progressFromVehicle, stopAlongFor } from "@/lib/shared/trip-progress";
@@ -66,6 +71,9 @@ interface Props {
   onFocusStop: (s: Stop) => void;
   /** fly the map to the vehicle (`id` = its fleet track, whose drawn position wins over the raw fix) */
   onLocate: (v: { id: string | null; lat: number; lon: number }) => void;
+  /** the map keeps the bus in view (MapApp ends it on a drag or when the trip changes) */
+  following: boolean;
+  onToggleFollow: () => void;
   onRetry: () => void;
   /** open the MZK vehicle card over the map (closing it returns to this trip) */
   onOpenVehicleCard: (side: string) => void;
@@ -133,6 +141,8 @@ function TripView({
   onClose,
   onFocusStop,
   onLocate,
+  following,
+  onToggleFollow,
   onRetry,
   onOpenVehicleCard,
   onShowToast,
@@ -173,10 +183,9 @@ function TripView({
   }
 
   const currentVeh = liveVeh ?? lastLive.veh ?? vehMeta;
-  const tripOp =
-    currentVeh?.operator ??
-    trip.operator ??
-    (cityOfId(trip.execId) === "gzm" || cityOfId(trip.tripId) === "gzm" ? "GZM" : undefined);
+  /* the zbiorkom city of the trip (its ids carry the slug); "bb" for KB/MZK */
+  const zbCity = cityOfId(trip.execId) !== "bb" ? cityOfId(trip.execId) : cityOfId(trip.tripId);
+  const tripOp = currentVeh?.operator ?? trip.operator ?? (zbCity !== "bb" ? "GZM" : undefined);
   const isMzkTrip = isMzk(tripOp, trip.line);
   const isGzmTrip = tripOp === "GZM";
   /* fleet card key: MZK side number; GZM `<op>_<fleet>` from the vehicle id (side_number is the bare fleet label) */
@@ -282,6 +291,33 @@ function TripView({
 
   const vti = activeStop.index;
   const isAtStop = activeStop.isAtStop;
+
+  /* "Wysiadam tu": one notification when the bus stands at the stop before the chosen one or has left it.
+     Page-only (needs the poll), so the screen stays on while armed; the sheet is keyed by trip.gen, a new
+     trip starts clean. Firing is decided in render (setState-during-render, like lastLiveHeld above) and
+     the effect only delivers the fired state, once per arm */
+  const [alight, setAlight] = useState<{ idx: number; name: string; fired: boolean } | null>(null);
+  const armed = alight != null && !alight.fired;
+  if (armed && isLiveWithLoc && (vti >= alight.idx || (vti === alight.idx - 1 && isAtStop))) setAlight({ ...alight, fired: true });
+  useEffect(() => (armed ? holdWakeLock() : undefined), [armed]);
+  useEffect(() => {
+    if (!alight?.fired) return;
+    void notify(`Wysiadasz: ${alight.name}`, `Linia ${trip.line}, następny przystanek`, `alight:${trip.gen}`, `${location.pathname}${location.search}`);
+    navigator.vibrate?.([300, 150, 300]);
+    onShowToast(`Następny przystanek: ${alight.name}. Wysiadasz.`);
+  }, [alight, trip.line, trip.gen, onShowToast]);
+  /* runs from a tap, so the permission prompt is allowed; without permission the toast and vibration still fire */
+  const pickAlight = async (idx: number) => {
+    if (armed && alight.idx === idx) {
+      setAlight(null);
+      return onShowToast("Alarm wysiadania wyłączony.");
+    }
+    const name = displayStopName(trip.rawTimes[idx].stop_name);
+    setAlight({ idx, name, fired: false });
+    if (typeof Notification !== "undefined" && Notification.permission === "default") await Notification.requestPermission();
+    onShowToast(`Powiadomię przed przystankiem ${name}. Zostaw aplikację otwartą.`);
+  };
+
   const activeProgress = Math.max(0, Math.min(1, activeStop.progress ?? (isAtStop ? 1 : 0.5)));
   /* the vehicle on the rail in stop units: k = at stop k, k + p = between stops k and k + 1 */
   const railPos = Math.min(trip.rawTimes.length - 1, Math.max(-0.5, isAtStop ? vti : vti - 1 + activeProgress));
@@ -353,7 +389,12 @@ function TripView({
   /* runs from a tap, so the permission prompt is allowed (browsers drop it without a user gesture) */
   const pickAlert = async (key: string, stop: Stop, planned: number, leadMin: number) => {
     setAlertMenu(null);
-    if (typeof Notification === "undefined") return onShowToast("Ta przeglądarka nie obsługuje powiadomień.");
+    if (typeof Notification === "undefined")
+      return onShowToast(
+        currentInstallKind() === "ios"
+          ? `Na iPhonie powiadomienia działają w zainstalowanej aplikacji: ${IOS_INSTALL_HINT}.`
+          : "Ta przeglądarka nie obsługuje powiadomień.",
+      );
     const perm = Notification.permission === "default" ? await Notification.requestPermission() : Notification.permission;
     if (perm !== "granted") return onShowToast("Powiadomienia są zablokowane. Włącz je w ustawieniach przeglądarki.");
     const ok = addAlert({
@@ -409,10 +450,14 @@ function TripView({
         </div>
         {isLiveWithLoc && locateFix && (
           <IconButton
-            label="Pokaż pojazd na mapie"
-            onClick={() => onLocate({ id: currentVeh?.id ?? trip.execId, lat: locateFix.lat, lon: locateFix.lon })}
+            label={following ? "Przestań śledzić pojazd" : "Śledź pojazd na mapie"}
+            pressed={following}
+            onClick={() => {
+              if (!following) onLocate({ id: currentVeh?.id ?? trip.execId, lat: locateFix.lat, lon: locateFix.lon });
+              onToggleFollow();
+            }}
           >
-            <CrosshairIcon />
+            <CrosshairIcon weight={following ? "fill" : "bold"} />
           </IconButton>
         )}
         {hasDetails && (
@@ -449,13 +494,13 @@ function TripView({
               aria-hidden
             />
             <span className="flex-1 text-[12px] font-medium text-text-faint">
-              {isGzmTrip ? "Metropolia GZM" : isMzkTrip ? "MZK Bielsko-Biała" : "Komunikacja Beskidzka"}
+              {isGzmTrip ? CITY[zbCity].name : isMzkTrip ? "MZK Bielsko-Biała" : "Komunikacja Beskidzka"}
             </span>
             <ShareButton title={`Linia ${trip.line}${direction ? ` → ${displayStopName(direction)}` : ""}`} />
           </div>
           {cardSide && (
             <a
-              href={`/brygady?${isGzmTrip ? "city=gzm&" : ""}tabor=${encodeURIComponent(cardSide)}`}
+              href={`/brygady?${zbCity === "gzm" ? "city=gzm&" : ""}tabor=${encodeURIComponent(cardSide)}`}
               onClick={(e) => {
                 // a modified click still opens the fleet page in a new tab
                 if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
@@ -567,6 +612,9 @@ function TripView({
               const ak = selected && trip.execId ? tripAlertKey(trip.execId, t.index, trip.tripId || currentVeh?.trip_id) : null;
               const al = ak ? alertByKey.get(ak) : undefined;
               const canAlert = al != null || (ak != null && !passed && !last && planned != null);
+              /* the alight flag on every stop still ahead of a live bus (the bell row keeps its bell) */
+              const canAlight = isLiveWithLoc && !notStarted && idx > vti && !(canAlert && ak);
+              const alighting = armed && alight.idx === idx;
               return (
                 <li key={`${t.index}-${idx}`} ref={idx === scrollTargetIdx ? currentRef : undefined}>
                   <div className={`flex items-center rounded-xl ${selected ? "bg-primary-dim" : ""}`}>
@@ -635,18 +683,21 @@ function TripView({
 
                     {/* name */}
                     <span className="min-w-0 flex-1 self-center py-3">
-                      <span
-                        className={`block truncate text-[13.5px] ${
-                          isCurrent
-                            ? "font-semibold text-text"
-                            : passed
-                              ? "text-text-faint"
-                              : selected
-                                ? "font-semibold text-text"
-                                : "font-medium text-text"
-                        }`}
-                      >
-                        {displayStopName(t.stop_name)}
+                      <span className="flex min-w-0 items-center gap-1.5">
+                        <span
+                          className={`truncate text-[13.5px] ${
+                            isCurrent
+                              ? "font-semibold text-text"
+                              : passed
+                                ? "text-text-faint"
+                                : selected
+                                  ? "font-semibold text-text"
+                                  : "font-medium text-text"
+                          }`}
+                        >
+                          {displayStopName(coord?.onRequest ? withoutRequestTail(t.stop_name) : t.stop_name)}
+                        </span>
+                        {coord?.onRequest && <RequestStopTag dim={passed} />}
                       </span>
                       {(status || plat) && (
                         <span className="mt-0.5 block truncate text-[12px] text-text-faint">
@@ -673,6 +724,19 @@ function TripView({
                       }`}
                     >
                       <BellIcon weight={al ? "fill" : "bold"} aria-hidden />
+                    </button>
+                  )}
+                  {canAlight && (
+                    <button
+                      type="button"
+                      aria-pressed={alighting}
+                      aria-label={alighting ? "Wyłącz alarm wysiadania" : "Powiadom przed tym przystankiem"}
+                      onClick={() => void pickAlight(idx)}
+                      className={`tap grid h-11 w-10 shrink-0 place-items-center rounded-xl text-[16px] hover:bg-tint/5 ${
+                        alighting ? "text-primary" : "text-text-faint hover:text-text"
+                      }`}
+                    >
+                      <FlagIcon weight={alighting ? "fill" : "bold"} aria-hidden />
                     </button>
                   )}
                   </div>

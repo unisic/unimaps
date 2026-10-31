@@ -1,3 +1,4 @@
+import { cityOfId } from "@/lib/client/city";
 import { fetchJSON, getTripsBatch, isWarming } from "@/lib/client/api";
 import { getFavorites } from "@/lib/client/favorites";
 import { offsetDateISO } from "@/lib/client/format";
@@ -81,7 +82,7 @@ export async function loadDay(
     if (signal.aborted) return { status: "error" };
     const saved = await loadOffline<TtRow[]>(ttKey(designator, date));
     if (saved) return { status: "ok", rows: saved, warnings: NO_WARNINGS, offline: true };
-    return isWarming(err) && designator.startsWith("gzm:") ? { status: "error", warming: true } : { status: "error" };
+    return isWarming(err) && cityOfId(designator) !== "bb" ? { status: "error", warming: true } : { status: "error" };
   }
 }
 

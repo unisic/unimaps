@@ -33,6 +33,8 @@
   --color-kb: #dc2626;
   --color-mzk: #2563eb;
   --color-gzm: #a16207;
+  /* Metrorower stations (white text at 5.2:1) */
+  --color-bike: #0b7a6b;
 
   /* ---- status ---- */
   --color-good: #7ee2a8;
@@ -209,6 +211,8 @@ body {
   cursor: pointer;
 }
 .veh-pill.no-heading { padding-left: 7px; }
+/* a metro train placed by the timetable: a dashed ring instead of the solid one, no GPS behind it */
+.veh-sched .veh-pill { box-shadow: 0 2px 6px -1px rgba(0, 0, 0, 0.45); outline: 1.5px dashed #fff; }
 
 /* heading arrow: ONLY this element rotates (angle set inline by the animator);
    the glyph's own 45deg base turn lives inside the SVG, never in this transform */
@@ -236,6 +240,12 @@ body {
 .veh-mode .veh-poles { fill: none; stroke: currentColor; stroke-width: 16; stroke-linecap: round; }
 
 .veh-line { display: block; }
+/* "+N": the pill stands for a stack of vehicles that would cover each other */
+.veh-more {
+  margin-left: 2px; padding: 2px 4px; border-radius: 999px;
+  background: rgba(255, 255, 255, 0.28);
+  font-size: 10.5px;
+}
 
 .leaflet-marker-icon.veh-marker:hover .veh-pill,
 .leaflet-marker-icon.veh-marker:focus-visible .veh-pill {
@@ -254,6 +264,13 @@ body {
   position: absolute; inset: 0; border-radius: 999px;
   background: rgba(43, 131, 255, 0.3);
   animation: user-loc-pulse 2.2s var(--ease-out-soft) infinite;
+}
+/* heading arrow just outside the dot (moving fixes only), rotated by MapApp */
+.user-loc-head { position: absolute; inset: -8px; pointer-events: none; }
+.user-loc-head::before {
+  content: ""; position: absolute; top: 0; left: 50%; margin-left: -5px;
+  border: solid transparent; border-width: 0 5px 8px; border-bottom-color: #2b83ff;
+  filter: drop-shadow(0 0 1.5px #fff);
 }
 @keyframes user-loc-pulse {
   0% { transform: scale(0.5); opacity: 0.9; }
@@ -303,6 +320,25 @@ body {
   z-index: 3;
 }
 .stop-mk-sign.stop-mk-station svg { width: 14px; height: 14px; }
+
+/* Metrorower station: bike glyph + available count; empty = hollow pill */
+.bike-mk-icon { background: none; border: 0; }
+.bike-mk {
+  display: inline-flex; align-items: center; gap: 3px;
+  height: 20px; padding: 0 7px 0 5px;
+  border-radius: 999px;
+  background: var(--color-bike);
+  color: #fff;
+  font-weight: 650; font-size: 11px; line-height: 1;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+  box-shadow: 0 0 0 1.5px #fff, 0 1px 4px rgba(0, 0, 0, 0.4);
+  cursor: pointer;
+  animation: pop 0.22s var(--ease-spring) backwards;
+  transition: transform 0.16s var(--ease-spring);
+}
+.bike-mk svg { width: 13px; height: 13px; display: block; fill: currentColor; }
+.bike-mk.is-empty { background: var(--color-surface); color: var(--color-text-faint); }
+.leaflet-marker-icon.bike-mk-icon:hover .bike-mk { transform: scale(1.1); }
 
 /* one wrapper per bearing, rotating about the icon centre (17px = half of 34) */
 .stop-dir {
@@ -383,6 +419,16 @@ body {
   border-radius: 14px;
   padding: 6px 12px 6px 6px;
 }
+/* list of a vehicle stack (VehicleLayer): the tooltip card's surface */
+.leaflet-popup.kb-popup .leaflet-popup-content-wrapper {
+  background: var(--color-surface);
+  color: var(--color-text);
+  border: 1px solid var(--color-hairline);
+  border-radius: 14px;
+  box-shadow: var(--shadow-float);
+}
+.leaflet-popup.kb-popup .leaflet-popup-content { margin: 4px; }
+.leaflet-popup.kb-popup .leaflet-popup-tip { background: var(--color-surface); }
 .leaflet-tooltip-top.kb-tooltip::before { border-top-color: var(--color-surface); }
 .leaflet-tooltip-bottom.kb-tooltip::before { border-bottom-color: var(--color-surface); }
 .leaflet-tooltip-left.kb-tooltip::before { border-left-color: var(--color-surface); }

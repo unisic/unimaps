@@ -1,4 +1,4 @@
-import { badRequest, jsonWithEtag, parseCity, upstreamError } from "@/lib/api-helpers";
+import { badRequest, jsonWithEtag, notFound, parseCity, upstreamError } from "@/lib/api-helpers";
 import { getFleetTracker } from "@/lib/fleet-tracker";
 import { GZM_SIDE_RE, getGzmFleetTracker, gzmIdleDetail } from "@/lib/gzm-fleet";
 import { getGzm, startGzm } from "@/lib/gzm";
@@ -20,6 +20,7 @@ export async function GET(
 ): Promise<Response> {
   const city = parseCity(req);
   if (city instanceof Response) return city;
+  if (city !== "bb" && city !== "gzm") return notFound();
   try {
     const { sideNumber } = await params;
     let detail;

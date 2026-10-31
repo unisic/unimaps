@@ -154,10 +154,30 @@ export const GZM_POSITIONS_URL = envStr(
 /** SDIP (sdip.transportgzm.pl) vehicle overlay, polled every 5 s only while someone watches GZM. */
 export const GZM_SDIP_ENABLED = envInt("KB_GZM_SDIP", 1, 0) !== 0;
 export const GZM_SDIP_URL = envStr("KB_GZM_SDIP_URL", "https://sdip.transportgzm.pl/vm/main");
+/** GZM news page scraped for "Utrudnienia" (lib/gzm-news.ts), at most every 15 min; `off` = no GZM announcements (404). */
+export const GZM_NEWS_URL: string | null = (() => {
+  const v = envStr("KB_GZM_NEWS_URL", "https://rj.transportgzm.pl/v2/news/").trim();
+  return v.toLowerCase() === "off" ? null : v;
+})();
+/** Metrorower GBFS v2 root (nextbike) behind the GZM bike-stations layer (lib/gbfs.ts); `off` = no /api/bikes (404). */
+export const GZM_GBFS_URL: string | null = (() => {
+  const v = envStr("KB_GZM_GBFS_URL", "https://gbfs.nextbike.net/maps/gbfs/v2/nextbike_zz").trim().replace(/\/+$/, "");
+  return v.toLowerCase() === "off" ? null : v;
+})();
 /** GZM state on disk: the last good GTFS zip and the GZM fleet history (outside output/gtfs). */
 export const GZM_DIR = envStr("KB_GZM_DIR", path.join(OUTPUT_DIR, "gzm"));
 /** Days of GZM fleet history kept on disk (~12-14 MB per day: ~22 000 finished courses x ~530 B, plus the running ones). */
 export const GZM_FLEET_HISTORY_DAYS = envInt("KB_GZM_FLEET_HISTORY_DAYS", 30);
+/**
+ * The other zbiorkom cities (lib/shared/cities.ts): the GZM feed + positions pipeline per slug, loaded on
+ * the first request for a city, dropped after KB_ZB_IDLE_MIN minutes without one, at most KB_ZB_RESIDENT
+ * of them in memory beside GZM (a Warsaw-sized feed is ~230 MB of heap). KB_ZB=0 switches them off
+ * (404); GZM stays on KB_GZM.
+ */
+export const ZB_ENABLED = envInt("KB_ZB", 1, 0) !== 0;
+export const ZB_API_URL = envStr("KB_ZB_API_URL", "https://api.zbiorkom.live/api6-open").replace(/\/+$/, "");
+export const ZB_RESIDENT = envInt("KB_ZB_RESIDENT", 2, 1);
+export const ZB_IDLE_MIN = envInt("KB_ZB_IDLE_MIN", 30, 1);
 
 /**
  * Web push of departure alerts (lib/push-alerts.ts, lib/web-push.ts): KB_PUSH=0 switches it off

@@ -142,6 +142,8 @@ export function vehicleExtras(v: VehiclePos, shapes: { wireId(key: string): stri
     if (v.geoLastSeq != null && v.geoLastSeq >= 0) out.geo_seq = v.geoLastSeq;
     if (v.notStarted) out.not_started = true;
     if (v.schedTripId) out.sched_trip_id = v.schedTripId;
+    if (v.agency) out.agency = v.agency;
+    if (v.scheduled) out.scheduled = true;
     if (v.speed != null && Number.isFinite(v.speed) && v.speedAt != null && nowEpoch - v.speedAt <= 90) {
       out.speed = Math.round(v.speed * 10) / 10;
     }

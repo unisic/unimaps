@@ -11,6 +11,22 @@ export function metersBetween(lat1: number, lon1: number, lat2: number, lon2: nu
   return Math.hypot(dLat, dLon);
 }
 
+/** The points of `all` within `maxM` of `from`, nearest first, at most `max`. O(n log n). */
+export function nearestWithin<T extends { lat: number; lon: number }>(
+  from: { lat: number; lon: number },
+  all: Iterable<T>,
+  maxM: number,
+  max: number,
+): T[] {
+  const near: Array<{ p: T; d: number }> = [];
+  for (const p of all) {
+    const d = metersBetween(from.lat, from.lon, p.lat, p.lon);
+    if (d <= maxM) near.push({ p, d });
+  }
+  near.sort((a, b) => a.d - b.d);
+  return near.slice(0, max).map((n) => n.p);
+}
+
 /** Initial great-circle bearing from point 1 to point 2, degrees [0, 360). */
 export function bearing(lat1: number, lon1: number, lat2: number, lon2: number): number | null {
   if (lat1 === lat2 && lon1 === lon2) return null;

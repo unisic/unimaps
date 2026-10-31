@@ -30,6 +30,11 @@ describe("formatKbStops / formatMzkStops (shared by every route)", () => {
     assert.deepEqual(out[1].dirs, [2]);
     assert.deepEqual(out[2].dirs, [218]);
   });
+  it("a KB name ending in NŻ is a request stop (KB has no flag); NŻ inside a word is not", () => {
+    const out = formatKbStops([kbStop(1, "1", "KĘTY PODLESIE NŻ", 49.88, 19.22), kbStop(2, "2", "KĘTY NŻARY", 49.88, 19.22)], NO_DIRS);
+    assert.equal(out[0].onRequest, true);
+    assert.equal(out[1].onRequest, undefined);
+  });
   it("MZK stops carry symbol and flags — and NO dirs (learned bearings steer the pairing only)", () => {
     const [m] = formatMzkStops([mzkStop("265", "Piastowska Lubertowicza", 49.827, 19.036, { onRequest: true })]);
     assert.equal(m.symbol, "265");

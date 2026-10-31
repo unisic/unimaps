@@ -6,11 +6,11 @@
 import assert from "node:assert/strict";
 import { before, describe, it } from "node:test";
 
-import { GzmLive, matchTrip, nextPollDelay, parseSdip, parseZbiorkom } from "../lib/gzm";
+import { GzmLive, matchTrip, nextPollDelay, parseSdip, parseZbiorkom, schedulePosition, zbKey } from "../lib/gzm";
 import type { GzmFeed } from "../lib/gzm-feed";
 import type { GzmFleetSource } from "../lib/gzm-fleet";
 import type { VehicleJson, VehiclesResponse } from "../lib/types";
-import { DATE, LAT, LON, at, loadGzmFeed, rec, type RecOpts } from "./support/gzm-fixture";
+import { DATE, FILES, LAT, LON, at, loadGzmFeed, rec, type RecOpts } from "./support/gzm-fixture";
 
 let feed: GzmFeed;
 before(async () => {
@@ -18,10 +18,11 @@ before(async () => {
 });
 
 /** A GzmLive whose upstream answers `body()` and whose clock is `clock.ms`. */
-function rig(feedOf: () => GzmFeed | null = () => feed) {
+function rig(feedOf: () => GzmFeed | null = () => feed, slug?: string) {
   const clock = { ms: at("08:03") * 1000 };
   let positions: unknown[] = [];
   const live = new GzmLive({
+    slug,
     feed: feedOf,
     now: () => clock.ms,
     url: "https://x.invalid/positions",
@@ -62,6 +63,24 @@ describe("parseZbiorkom", () => {
     assert.equal(recs[1].bearing, 270);
   });
 
+  it("keys another city's vehicles by type, agency and id: two operators' bus 101 stay two vehicles", () => {
+    assert.equal(zbKey({ type: "3", id: "36146", agency: "default" }), "3_36146");
+    assert.equal(zbKey({ type: "3", id: "101", agency: "MINSK" }), "3_MINSK_101");
+    assert.equal(zbKey({ type: "3", id: "101", agency: "GPA" }), "3_GPA_101");
+    assert.equal(zbKey({ type: "3", id: "04 ", agency: "OTWOCK" }), "3_OTWOCK_04_");
+    assert.equal(zbKey({ type: "0", id: "2369" }), "0_2369");
+    assert.equal(zbKey({ type: "3", id: "", agency: "MINSK" }), undefined);
+  });
+
+  it("marks another operator's vehicle with its agency in a zbiorkom city, never in GZM", () => {
+    const own = rec({ ts: at("08:02"), calls: [] });
+    const otwock = { ...own, vehicle: { ...own.vehicle, id: "03", type: "3", agency: "OTWOCK" } };
+    const [a, b] = parseZbiorkom({ positions: [own, otwock] }, now, undefined, true);
+    assert.deepEqual([a.key, a.agency, b.key, b.agency], ["0_4285", null, "3_OTWOCK_03", "OTWOCK"]);
+    const gzm = { ...otwock, url: own.url.replace("283_4285", "1_1") };
+    assert.equal(parseZbiorkom({ positions: [gzm] }, now)[0].agency, null);
+  });
+
   it("throws on a body without a positions array", () => {
     assert.throws(() => parseZbiorkom({ vehicles: [] }, now));
   });
@@ -76,6 +95,13 @@ describe("matchTrip", () => {
     assert.equal(matchTrip(feed, one({ ts: at("07:58"), calls: [[0, "08:00"]], brigade: "4" }), days)?.trip.tripId, "gzm:tX");
     assert.equal(matchTrip(feed, one({ ts: at("07:58"), calls: [[0, "08:00"]], brigade: "9" }), days), null);
     assert.equal(matchTrip(feed, one({ ts: at("08:02"), calls: [[1, "08:05"]], line: "8" }), days), null);
+  });
+
+  it("joins calls timed a few seconds off the feed only when no trip fits exactly", () => {
+    const r = one({ ts: at("08:02"), calls: [[1, "08:05"], [2, "08:10"]] });
+    const late = (s: number) => ({ ...r, upcoming: r.upcoming.map((c) => ({ ...c, dep: c.dep + s })) });
+    assert.equal(matchTrip(feed, late(5), days)?.trip.tripId, "gzm:tA");
+    assert.equal(matchTrip(feed, late(45), days), null);
   });
 });
 
@@ -149,6 +175,15 @@ describe("GzmLive", () => {
     assert.equal(v.not_started, true);
     assert.equal(v.delay, null);
     assert.equal(v.at_stop, true);
+  });
+
+  it("a bus driving to its first stop off the route is not_started; one on the route past it has begun", async () => {
+    const { poll } = rig();
+    const call = { ts: at("07:59", 40), calls: [[0, "08:00"]] as Array<[number, string]>, brigade: "3" };
+    const depot = only(await poll(at("08:00"), [rec({ ...call, lat: LAT + 0.01, lon: LON.a + 0.005 })]));
+    assert.deepEqual([depot.trip_id, depot.not_started, depot.delay], ["gzm:tA", true, null]);
+    const lagging = only(await poll(at("08:00", 20), [rec({ ...call, ts: at("08:00"), lon: LON.a + 0.007 })]));
+    assert.equal(lagging.not_started, undefined);
   });
 
   it("lays over onto the brigade's next trip once the last stop is behind, then hands over", async () => {
@@ -284,6 +319,35 @@ describe("GzmLive", () => {
     assert.deepEqual(live.shapes(["gzm:shA"]), { shapes: {}, missing: ["gzm:shA"], exact: false });
   });
 
+  it("a zbiorkom city polls all of Poland while its feed parses, then again as soon as the feed lands", async () => {
+    let f: GzmFeed | null = null;
+    const urls: string[] = [];
+    const live = new GzmLive({
+      slug: "warsaw",
+      feed: () => f,
+      now: () => at("08:03", 4) * 1000, // the next grid step is 19 s away
+      fetchImpl: async (u) => {
+        urls.push(String(u));
+        return new Response(JSON.stringify({ positions: [rec({ ts: at("08:02", 40), calls: [[1, "08:05"]], lat: 52.23, lon: 21.01 })] }));
+      },
+    });
+    const until = async (ok: () => boolean) => {
+      for (const t0 = Date.now(); !ok(); await new Promise((r) => setTimeout(r, 20))) assert.ok(Date.now() - t0 < 3000, "timed out");
+    };
+    live.touch();
+    live.start();
+    try {
+      await until(() => (JSON.parse(live.vehiclesBody()) as VehiclesResponse).count === 1);
+      assert.match(urls[0], /\/warsaw\/positions\/14,49,24\.2,55$/);
+      assert.equal(only(JSON.parse(live.vehiclesBody())).lat, 52.23);
+      f = feed;
+      await until(() => urls.length === 2);
+      assert.doesNotMatch(urls[1], /14,49,24\.2,55$/);
+    } finally {
+      live.stop();
+    }
+  });
+
   it("lists a pole's day timetable and nothing outside the feed's dates", () => {
     const live = new GzmLive({ feed: () => feed, fetchImpl: async () => new Response("{}") });
     const tt = live.timetable("gzm:b", DATE);
@@ -294,6 +358,63 @@ describe("GzmLive", () => {
       ["gzm:tB", 8 * 3600 + 1500],
     ]);
     assert.deepEqual(live.timetable("gzm:b", "2027-01-01"), { departures: [] });
+  });
+});
+
+describe("schedulePosition", () => {
+  const stops = [
+    { stopId: "a", seq: 0, arr: 100, dep: 100 },
+    { stopId: "b", seq: 1, arr: 200, dep: 230 },
+    { stopId: "c", seq: 2, arr: 330, dep: 330 },
+  ];
+  it("runs from the first departure up to the last arrival, standing through a dwell", () => {
+    assert.equal(schedulePosition(stops, 99), null);
+    assert.deepEqual(schedulePosition(stops, 100), { i: 0, f: 0, next: 1 });
+    assert.deepEqual(schedulePosition(stops, 150), { i: 0, f: 0.5, next: 1 });
+    assert.deepEqual(schedulePosition(stops, 215), { i: 1, f: 0, next: 1 });
+    assert.deepEqual(schedulePosition(stops, 280), { i: 1, f: 0.5, next: 2 });
+    assert.equal(schedulePosition(stops, 330), null);
+    assert.equal(schedulePosition(stops.slice(0, 1), 100), null);
+  });
+});
+
+describe("scheduled metro (a zbiorkom city)", () => {
+  let metro: GzmFeed;
+  before(async () => {
+    metro = await loadGzmFeed({ ...FILES, "routes.txt": FILES["routes.txt"].replace("Tramwaj 7,0", "Metro 7,1") }, "warsaw");
+  });
+
+  it("places every running metro trip by the timetable, on the shape when it has one", async () => {
+    const { live, poll } = rig(() => metro, "warsaw");
+    const r = await poll(at("08:02", 30), []);
+    const byTrip = new Map(r.vehicles.map((v) => [v.trip_id, v]));
+    assert.deepEqual([...byTrip.keys()].sort(), ["warsaw:tA", "warsaw:tX"]);
+    const a = byTrip.get("warsaw:tA")!;
+    assert.equal(a.scheduled, true);
+    assert.equal(a.delay, null);
+    assert.equal(a.vehicle_type, 1);
+    assert.equal(a.next_stop_name, "Beta 01");
+    assert.ok(Math.abs(a.lon - (LON.a + LON.b) / 2) < 1e-4);
+    assert.ok(a.shape?.startsWith("warsaw:shA.") && a.dist_m! > 0);
+    const x = byTrip.get("warsaw:tX")!;
+    assert.equal(x.shape, undefined);
+    assert.ok(Math.abs(x.lon - (LON.a + (LON.b - LON.a) * (150 / 360))) < 1e-6);
+    assert.match(a.id, /^warsaw:1_S[A-Za-z0-9_-]{10}$/);
+    // the same trip keeps its id between polls, so the marker glides
+    const again = await poll(at("08:03"), []);
+    assert.ok(again.vehicles.some((v) => v.id === a.id));
+    assert.equal(live.health().scheduled, 2);
+    const ex = live.tripExecution(a.id) as { vehicle_trip_index?: number } | null;
+    assert.equal(ex?.vehicle_trip_index, 1);
+  });
+
+  it("a line some live record serves is never doubled; GZM never schedules", async () => {
+    const { poll } = rig(() => metro, "warsaw");
+    const live7 = rec({ key: "1_9", ts: at("08:02", 20), calls: [[1, "08:05"]] });
+    const r = await poll(at("08:02", 30), [{ ...live7, vehicle: { ...live7.vehicle, type: "1" } }]);
+    assert.equal(r.vehicles.filter((v) => v.scheduled).length, 0);
+    const gzm = rig(() => metro);
+    assert.equal((await gzm.poll(at("08:02", 30), [])).vehicles.length, 0);
   });
 });
 
@@ -396,6 +517,21 @@ describe("SDIP overlay", () => {
     // SDIP silent for > 60 s: zbiorkom's fresh fix again
     await zb(at("08:05"), [rec({ ts: at("08:04", 40), calls, lon: 19.009 })]);
     assert.equal(veh().lon, 19.009);
+  });
+
+  it("a standing bus stays on SDIP's position: zbiorkom's lagging copy never pulls it back", async () => {
+    const { zb, sdip, veh } = sdipRig();
+    await zb(at("08:03"), [rec({ ts: at("08:02", 40), calls, lon: 19.004 })]);
+    await sdip(at("08:03", 1), sd(19.0045));
+    await sdip(at("08:03", 6), sd(19.006));
+    // standing since 08:03:03.5; zbiorkom's next snapshots still show where the bus was before, with newer stamps
+    for (let i = 1; i <= 14; i++) {
+      await sdip(at("08:03", 6 + 5 * i), i === 7 ? [] : sd(19.006));
+      if (i % 4 === 0) await zb(at("08:03", 6 + 5 * i), [rec({ ts: at("08:03", 5 * i), calls, lon: 19.005 })]);
+    }
+    const v = veh();
+    assert.equal(v.lon, 19.006, "one SDIP list without the bus holds it too");
+    assert.equal(v.fix_at, at("08:03", 3.5));
   });
 
   it("never dates a change across a long gap; re-logs in when the session expired", async () => {

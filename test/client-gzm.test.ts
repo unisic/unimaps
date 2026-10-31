@@ -4,7 +4,7 @@ import { afterEach, describe, it } from "node:test";
 import { tripAlertKey } from "../lib/client/alerts";
 import { getTrip, HttpError, isWarming, tripWarming } from "../lib/client/api";
 import { CITY, cityOfId, cityUrl, resolveCity, withCity } from "../lib/client/city";
-import { DENSE_FLEET, fleetMarkers, PILL_MIN_ZOOM } from "../lib/client/fleetMarkers";
+import { DENSE_FLEET, fleetMarkers, PILL_MIN_ZOOM, stackPills } from "../lib/client/fleetMarkers";
 import { arrivedSecs, BRAND_GZM, BRAND_KB, BRAND_MZK, isMzk, operatorColor } from "../lib/client/format";
 import { loadDay } from "../lib/client/timetable";
 import { buildSearch, EMPTY_URL_STATE, parseUrlState, savedLinesKey } from "../lib/client/urlState";
@@ -42,6 +42,13 @@ describe("fleet markers", () => {
     assert.deepEqual(new Set(near.list.map((v) => v.lat)), new Set([50]));
     assert.equal(near.list.length, 84);
   });
+
+  it("stacks pills that cover each other under the first one, across grid cells, never by both-axis neighbours", () => {
+    const p = (id: string, x: number, y: number) => ({ id, x, y });
+    const stacks = stackPills([p("a", 0, 0), p("b", 10, 5), p("c", 40, 0), p("d", 45, -5), p("e", 0, 30), p("f", 62, 20)]);
+    assert.deepEqual(Object.fromEntries(stacks), { a: ["b"], c: ["d"], e: [], f: [] });
+    assert.deepEqual(Object.fromEntries(stackPills([p("x", 30, 0), p("y", 35, 3)])), { x: ["y"] });
+  });
 });
 
 describe("city resolution", () => {
@@ -63,7 +70,12 @@ describe("city resolution", () => {
     assert.equal(resolveCity("", "gzm"), "gzm");
     assert.equal(resolveCity("?utm=x", "bb"), "bb");
     assert.equal(resolveCity("", null), null);
-    assert.equal(resolveCity("", "krakow"), null);
+    assert.equal(resolveCity("", "krk"), null);
+    assert.equal(resolveCity("", "krakow"), "krakow");
+    assert.equal(resolveCity("?city=warsaw", "bb"), "warsaw");
+    assert.equal(resolveCity("?stop=warsaw%3Aabc", null), "warsaw");
+    assert.equal(cityUrl("/api/stops", "krakow"), "/api/stops?city=krakow");
+    assert.equal(withCity("?stop=x", "krakow"), "?stop=x&city=krakow");
   });
 
   it("tells the city of an id", () => {

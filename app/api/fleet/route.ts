@@ -1,4 +1,4 @@
-import { badRequest, etagMatches, jsonWithEtag, parseCity, upstreamError } from "@/lib/api-helpers";
+import { badRequest, etagMatches, jsonWithEtag, notFound, parseCity, upstreamError } from "@/lib/api-helpers";
 import { getFleetTracker, type FleetTracker } from "@/lib/fleet-tracker";
 import { GZM_SIDE_RE, getGzmFleetTracker, gzmFleetListBody } from "@/lib/gzm-fleet";
 import { startGzm } from "@/lib/gzm";
@@ -36,6 +36,7 @@ function summaryFilter(url: URL): Parameters<FleetTracker["getFleetSummary"]>[0]
 export async function GET(req: Request): Promise<Response> {
   const city = parseCity(req);
   if (city instanceof Response) return city;
+  if (city !== "bb" && city !== "gzm") return notFound();
   try {
     const url = new URL(req.url);
     if (city === "gzm") {

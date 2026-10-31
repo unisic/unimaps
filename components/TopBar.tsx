@@ -1,12 +1,24 @@
 "use client";
 
-import { memo, useCallback, useContext, useEffect, useId, useRef, useState } from "react";
-import TopBarSearch, { type TopBarSearchHandle } from "@/components/TopBarSearch";
-import { Segmented } from "@/components/ui";
+import {
+  memo,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
+import TopBarSearch, {
+  type TopBarSearchHandle,
+} from "@/components/TopBarSearch";
+import { CityCard, OpensMore, OthersCard } from "@/components/CityChooser";
+import { switchCity } from "@/components/CitySheet";
+import { Segmented, SwitchRow } from "@/components/ui";
 import {
   ArrowRightIcon,
   BugIcon,
   CardsIcon,
+  DownloadSimpleIcon,
   MegaphoneSimpleIcon,
   MoonIcon,
   NavigationArrowIcon,
@@ -15,7 +27,13 @@ import {
   XIcon,
 } from "@/components/icons";
 import { useAnnouncements } from "@/lib/client/announcements";
-import { CITY, CityContext, saveCity, withCity, type City } from "@/lib/client/city";
+import type { GeoHit } from "@/lib/client/api";
+import { CITY, CityContext, withCity, type City } from "@/lib/client/city";
+import {
+  IOS_INSTALL_HINT,
+  promptInstall,
+  useInstall,
+} from "@/lib/client/install";
 import { useSmoothMotion } from "@/lib/client/smoothMotion";
 import { setThemePref, useThemePref, type ThemePref } from "@/lib/client/theme";
 import type { GeoPos } from "@/components/hooks";
@@ -74,10 +92,15 @@ export interface TopBarProps {
   offline: boolean;
   stopsVisible: boolean;
   onToggleStops: () => void;
+  /** Metrorower stations layer; absent where the city has no bike share */
+  bikesVisible?: boolean;
+  onToggleBikes?: () => void;
   baseLayer: BaseLayerId;
   onBaseLayer: (id: BaseLayerId) => void;
   /** opens the service-announcements sheet ("Utrudnienia") */
   onOpenAnnouncements: () => void;
+  /** opens the "Inne miasto" sheet (every city but BB and GZM) */
+  onOpenCity: () => void;
   // Search props
   stops: Stop[];
   geoPos: GeoPos | null;
@@ -90,65 +113,12 @@ export interface TopBarProps {
   onClearView: () => void;
   onOpenNearby: () => void;
   onOpenConnections?: () => void;
+  /** an address from the search; absent = no address search */
+  onPickPlace?: (g: GeoHit) => void;
   searchRef?: React.RefObject<TopBarSearchHandle | null>;
   operatorFilter: "all" | "kb" | "mzk";
   onOperatorFilter: (op: "all" | "kb" | "mzk") => void;
   onShowToast?: (msg: string) => void;
-}
-
-/** One settings toggle row (role="switch"), optionally with a hint line. */
-function SwitchRow({
-  checked,
-  onToggle,
-  label,
-  hint,
-  badge,
-}: {
-  checked: boolean;
-  onToggle: () => void;
-  label: string;
-  hint?: string;
-  badge?: string;
-}) {
-  const hintId = useId();
-  return (
-    <button
-      type="button"
-      onClick={onToggle}
-      role="switch"
-      aria-checked={checked}
-      aria-describedby={hint ? hintId : undefined}
-      className="flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2.5 text-left transition-colors hover:bg-tint/5"
-    >
-      <span className="flex flex-col gap-0.5">
-        <span className="flex items-center gap-2 text-text">
-          {label}
-          {badge && (
-            <span className="shrink-0 rounded-full bg-tint/6 px-1.5 py-px text-[10.5px] font-medium text-text-mute">
-              {badge}
-            </span>
-          )}
-        </span>
-        {hint && (
-          <span id={hintId} className="text-[12px] leading-snug text-text-faint">
-            {hint}
-          </span>
-        )}
-      </span>
-      <span
-        className={`relative inline-flex h-[22px] w-[38px] shrink-0 items-center rounded-full px-[3px] transition-colors duration-200 ${
-          checked ? "bg-primary" : "bg-tint/12"
-        }`}
-        aria-hidden
-      >
-        <span
-          className={`h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-200 ease-spring ${
-            checked ? "translate-x-4" : "translate-x-0"
-          }`}
-        />
-      </span>
-    </button>
-  );
 }
 
 const OP_DOT = { kb: "bg-kb", mzk: "bg-mzk", gzm: "bg-gzm" } as const;
@@ -167,21 +137,16 @@ const OPERATOR_OPTIONS: { id: "all" | "kb" | "mzk"; label: string; title?: strin
   { id: "mzk", label: "MZK", title: "MZK Bielsko-Biała", lead: <OperatorDot op="mzk" /> },
 ];
 
-const CITY_OPTIONS: { id: City; label: string }[] = [
-  { id: "bb", label: CITY.bb.name },
-  { id: "gzm", label: CITY.gzm.name },
-];
-
-/* a full navigation: every store, poll and cache of the page is keyed to one city */
-function switchCity(next: City): void {
-  saveCity(next);
-  window.location.assign(next === "gzm" ? "/?city=gzm" : "/");
-}
-
-/** Its own component so the announcements store (and its poll) only runs where it is rendered: never in GZM. */
-function AnnouncementsButton({ onClick }: { onClick: () => void }) {
+/** Its own component so the announcements store (and its poll) only runs where it is rendered. */
+function AnnouncementsButton({
+  city,
+  onClick,
+}: {
+  city: City;
+  onClick: () => void;
+}) {
   /* store notifies at most once per 15 min: no extra work in the 5 s cycle */
-  const { unseen } = useAnnouncements();
+  const { unseen } = useAnnouncements(city);
   return (
     <button
       type="button"
@@ -217,9 +182,12 @@ function TopBar({
   offline,
   stopsVisible,
   onToggleStops,
+  bikesVisible,
+  onToggleBikes,
   baseLayer,
   onBaseLayer,
   onOpenAnnouncements,
+  onOpenCity,
   stops,
   geoPos,
   onLocate,
@@ -231,12 +199,17 @@ function TopBar({
   onClearView,
   onOpenNearby,
   onOpenConnections,
+  onPickPlace,
   searchRef,
   operatorFilter,
   onOperatorFilter,
   onShowToast,
 }: TopBarProps) {
   const [menu, setMenu] = useState(false);
+  const openCity = () => {
+    setMenu(false);
+    onOpenCity();
+  };
   const closeMenuOnDropdown = useCallback((isOpen: boolean) => {
     if (isOpen) setMenu(false);
   }, []);
@@ -244,8 +217,9 @@ function TopBar({
   /* per-browser preference; only this component re-renders on toggle */
   const [smoothMotion, setSmoothMotion] = useSmoothMotion();
   const themePref = useThemePref();
+  const install = useInstall();
   const city = useContext(CityContext);
-  const gzm = city === "gzm";
+  const bb = city === "bb";
 
   /* close the menu on outside tap */
   useEffect(() => {
@@ -280,6 +254,7 @@ function TopBar({
           onClearView={onClearView}
           onOpenNearby={onOpenNearby}
           onOpenConnections={onOpenConnections}
+          onPickPlace={onPickPlace}
           searchRef={searchRef}
           onShowToast={onShowToast}
           onDropdownChange={closeMenuOnDropdown}
@@ -312,9 +287,9 @@ function TopBar({
           {count ?? "…"}
         </span>
 
-        {/* Announcements button: KB/MZK only, GZM has no announcements feed */}
-        {!gzm && (
+        {(bb || city === "gzm") && (
           <AnnouncementsButton
+            city={city}
             onClick={() => {
               setMenu(false);
               searchRef?.current?.blur();
@@ -346,10 +321,26 @@ function TopBar({
         <div className="surface mt-2 rounded-[20px] p-2 text-[13.5px] animate-drop">
           <MenuLabel>Miasto</MenuLabel>
           <div className="px-1">
-            <Segmented label="Wybór miasta" value={city} options={CITY_OPTIONS} onChange={switchCity} />
+            <CityCard id="bb" current={bb} onClick={() => switchCity("bb")} />
+            <CityCard
+              id="gzm"
+              current={city === "gzm"}
+              onClick={() => switchCity("gzm")}
+            />
+            {/* every other city lives in the sheet; the current one is shown here in its place */}
+            {bb || city === "gzm" ? (
+              <OthersCard onClick={openCity} />
+            ) : (
+              <CityCard
+                id={city}
+                current
+                trailing={<OpensMore />}
+                onClick={openCity}
+              />
+            )}
           </div>
 
-          {!gzm && (
+          {bb && (
             <>
               <MenuLabel>Przewoźnik</MenuLabel>
               <div className="px-1">
@@ -387,7 +378,19 @@ function TopBar({
           )}
 
           <div className="mt-2 border-t border-hairline pt-1">
-            <SwitchRow checked={stopsVisible} onToggle={onToggleStops} label="Przystanki na mapie" />
+            <SwitchRow
+              checked={stopsVisible}
+              onToggle={onToggleStops}
+              label="Przystanki na mapie"
+            />
+            {onToggleBikes && (
+              <SwitchRow
+                checked={!!bikesVisible}
+                onToggle={onToggleBikes}
+                label="Metrorower na mapie"
+                hint="Stacje i liczba dostępnych rowerów"
+              />
+            )}
             <SwitchRow
               checked={smoothMotion}
               onToggle={() => setSmoothMotion(!smoothMotion)}
@@ -397,14 +400,40 @@ function TopBar({
             />
           </div>
 
-          <a
-            href={`/brygady${withCity("", city)}`}
-            className="group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-text transition-colors hover:bg-tint/5"
-          >
-            <CardsIcon className="text-[17px] text-text-mute" />
-            <span className="flex-1">Karty brygad i tabor na żywo</span>
-            <ArrowRightIcon className="text-[14px] text-text-faint transition-transform duration-200 group-hover:translate-x-0.5" />
-          </a>
+          {/* the fleet tracker exists for BB (MZK) and GZM only: /brygady?city=<other> would show BB */}
+          {(bb || city === "gzm") && (
+            <a
+              href={`/brygady${withCity("", city)}`}
+              className="group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-text transition-colors hover:bg-tint/5"
+            >
+              <CardsIcon className="text-[17px] text-text-mute" />
+              <span className="flex-1">Karty brygad i tabor na żywo</span>
+              <ArrowRightIcon className="text-[14px] text-text-faint transition-transform duration-200 group-hover:translate-x-0.5" />
+            </a>
+          )}
+          {install === "prompt" && (
+            <button
+              type="button"
+              onClick={() => void promptInstall()}
+              className="group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-text transition-colors hover:bg-tint/5"
+            >
+              <DownloadSimpleIcon className="text-[17px] text-text-mute" />
+              <span className="flex-1">Zainstaluj aplikację</span>
+              <ArrowRightIcon className="text-[14px] text-text-faint transition-transform duration-200 group-hover:translate-x-0.5" />
+            </button>
+          )}
+          {install === "ios" && (
+            <div className="flex w-full items-start gap-3 rounded-xl px-3 py-2.5 text-text">
+              <DownloadSimpleIcon className="mt-0.5 shrink-0 text-[17px] text-text-mute" />
+              <span className="flex flex-col gap-0.5">
+                <span>Zainstaluj aplikację</span>
+                <span className="text-[12px] leading-snug text-text-mute">
+                  {IOS_INSTALL_HINT}. Powiadomienia o odjazdach działają tylko w
+                  zainstalowanej aplikacji.
+                </span>
+              </span>
+            </div>
+          )}
           <a
             href="https://github.com/unisic/unimaps/issues/new"
             target="_blank"
@@ -417,10 +446,10 @@ function TopBar({
           </a>
 
           <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1.5 border-t border-hairline px-3 pb-1.5 pt-3 text-[12px] text-text-mute">
-            {gzm ? (
+            {!bb ? (
               <span className="inline-flex items-center gap-1.5">
                 <OperatorDot op="gzm" />
-                Metropolia GZM
+                {CITY[city].name}
               </span>
             ) : (
               <>
@@ -456,7 +485,8 @@ function TopBar({
             <a href="https://project-osrm.org/" target="_blank" rel="noopener">
               OSRM
             </a>
-            {CITY[city].attribution && <>. Dane: {CITY[city].attribution}</>}
+            {CITY[city].attribution && <>. Dane: {CITY[city].attribution}</>}.{" "}
+            <a href="/prywatnosc">Prywatność i dane</a>
           </p>
         </div>
       )}

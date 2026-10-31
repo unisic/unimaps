@@ -17,7 +17,7 @@ import * as tripExecRoute from "../app/api/trip_execution/route";
 import * as tripRoute from "../app/api/trip/[tripId]/route";
 import * as tripsRoute from "../app/api/trips/route";
 import * as vehiclesRoute from "../app/api/vehicles/route";
-import { isGzmId, isValidId, isValidShapeId, parseCity } from "../lib/api-helpers";
+import { isValidId, isValidShapeId, parseCity, zbIdCity } from "../lib/api-helpers";
 import { GzmLive, safeGzmHealth } from "../lib/gzm";
 import type { GzmFeed } from "../lib/gzm-feed";
 import { DATE, at, loadGzmFeed, rec } from "./support/gzm-fixture";
@@ -47,16 +47,20 @@ describe("gzm id spaces", () => {
     assert.equal(isValidId(`gzm:${"a".repeat(52)}`), true);
     assert.equal(isValidId("gzm:49c1791d4acf03df"), true);
     assert.equal(isValidId("gzm:283_4285"), true);
-    assert.equal(isGzmId("gzm:283_4285"), true);
-    assert.equal(isGzmId("mzk:13954"), false);
+    assert.equal(zbIdCity("gzm:283_4285"), "gzm");
+    assert.equal(zbIdCity("warsaw:3_1234"), "warsaw");
+    assert.equal(zbIdCity("mzk:13954"), null);
+    assert.equal(zbIdCity("krk:1"), null);
   });
 
-  it("accepts gzm shape ids with an optional rev and nothing else", () => {
+  it("accepts zbiorkom shape ids (sanitised GTFS ids, optional rev) of registry cities only", () => {
     assert.equal(isValidShapeId("gzm:0_428"), true);
     assert.equal(isValidShapeId("gzm:0_428.7b21c0"), true);
-    assert.equal(isValidShapeId("gzm:0-428"), false);
+    assert.equal(isValidShapeId("warsaw:TP-BAN_a1b2c3"), true);
+    assert.equal(isValidShapeId("gzm:0/428"), false);
     assert.equal(isValidShapeId("gzm:"), false);
-    assert.equal(isValidShapeId("gzm:0_428.7b21c"), false);
+    assert.equal(isValidShapeId("krk:0_428"), false);
+    assert.equal(isValidShapeId(`gzm:${"a".repeat(61)}`), false);
   });
 });
 

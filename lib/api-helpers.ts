@@ -4,8 +4,9 @@
  */
 import { createHash } from "node:crypto";
 
-import { GZM_ENABLED } from "./config";
+import { GZM_ENABLED, ZB_ENABLED } from "./config";
 import { log } from "./logger";
+import { isZbSlug, zbCityOf, type ZbSlug } from "./shared/cities";
 
 /** Upstream-safe id: letters/digits and ':' '.' '_' '-' only, so the value can
  *  never smuggle a '/', '?', '#', '&' or '%' that would rewrite the upstream URL
@@ -18,11 +19,12 @@ export function isValidId(v: string): boolean {
   return ID_RE.test(v) && v !== "." && v !== "..";
 }
 
-/** Road-shape wire id: "kb:<12 hex>", "mzk:<variant>" or "gzm:<GTFS shape_id>", optionally ".<rev6>". */
-const SHAPE_ID_RE = /^(?:kb:[0-9a-f]{12}|mzk:[0-9]{1,10}|gzm:[A-Za-z0-9_]{1,16})(?:\.[0-9a-f]{6})?$/;
+/** Road-shape wire id: "kb:<12 hex>", "mzk:<variant>" or "<zbiorkom slug>:<GTFS shape_id>", optionally ".<rev6>". */
+const SHAPE_ID_RE = /^(?:kb:[0-9a-f]{12}|mzk:[0-9]{1,10})(?:\.[0-9a-f]{6})?$/;
+const ZB_SHAPE_ID_RE = /^[a-zA-Z]+:[A-Za-z0-9_.-]{1,60}$/;
 
 export function isValidShapeId(v: string): boolean {
-  return SHAPE_ID_RE.test(v);
+  return SHAPE_ID_RE.test(v) || (zbCityOf(v) !== null && ZB_SHAPE_ID_RE.test(v));
 }
 
 /** A real calendar day: 2026-02-31 would reach KB verbatim while MZK's Date.UTC rolls it into March. */
@@ -33,21 +35,24 @@ export function isValidDate(v: string): boolean {
   return t.getUTCFullYear() === y && t.getUTCMonth() === m - 1 && t.getUTCDate() === d;
 }
 
-export type City = "bb" | "gzm";
+export type City = "bb" | ZbSlug;
 
-/** `?city=`: absent = "bb" (the BB paths stay exactly as they were), "gzm" while GZM is enabled;
- *  any other value is a 400, "gzm" with KB_GZM=0 a 404. */
+/** True when a zbiorkom city is served: GZM follows KB_GZM, every other slug KB_ZB. */
+export function zbEnabled(slug: string): boolean {
+  return slug === "gzm" ? GZM_ENABLED : ZB_ENABLED;
+}
+
+/** `?city=`: absent = "bb" (the BB paths stay exactly as they were), a registry slug while that city is
+ *  enabled; any other value is a 400, a disabled city a 404. */
 export function parseCity(req: Request): City | Response {
   const v = new URL(req.url).searchParams.get("city");
   if (v === null || v === "bb") return "bb";
-  if (v !== "gzm") return badRequest("Unknown city");
-  return GZM_ENABLED ? "gzm" : notFound();
+  if (!isZbSlug(v)) return badRequest("Unknown city");
+  return zbEnabled(v) ? v : notFound();
 }
 
-/** True for an id in the GZM space ("gzm:<id>"). */
-export function isGzmId(v: string): boolean {
-  return v.startsWith("gzm:");
-}
+/** The zbiorkom city of an id (`<slug>:<id>`), null for a BB one (KB plain, `mzk:`). */
+export const zbIdCity = zbCityOf;
 
 export function notFound(message = "Not found"): Response {
   return Response.json({ error: message }, { status: 404 });
@@ -78,6 +83,18 @@ export function upstreamError(tag: string, err: unknown): Response {
 }
 
 /** RFC 9110 weak comparison: any listed tag (W/ prefix ignored) or "*" — a proxy may weaken our strong ETag. */
+/** A JSON object body of at most `max` bytes; a chunked body (no Content-Length) is refused unread. */
+export async function readJsonBody(req: Request, max = 4096): Promise<Record<string, unknown> | null> {
+  const len = Number(req.headers.get("content-length"));
+  if (!Number.isInteger(len) || len <= 0 || len > max) return null;
+  try {
+    const v: unknown = JSON.parse(await req.text());
+    return v && typeof v === "object" ? (v as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
 export function etagMatches(header: string | null, etag: string): boolean {
   if (!header) return false;
   const want = etag.replace(/^W\//, "");

@@ -1,4 +1,5 @@
 import { delayMinutes } from "../shared/departures";
+import { CITY, getPageCity } from "./city";
 import type { Stop, TripExecutionResponse, TripTime, TripView, Vehicle } from "./types";
 
 /**
@@ -71,9 +72,12 @@ export function isMzk(operator?: string | null, line?: string | null): boolean {
   return s.length <= 2 || /^\d{1,2}[A-Z]$/i.test(s) || s.startsWith("N") || s.startsWith("P");
 }
 
-/** Constant brand color: red for KB, characteristic blue for MZK, amber for GZM. */
+/** Constant brand color: red for KB, characteristic blue for MZK, amber for GZM, the page's own for any other zbiorkom city. */
 export function operatorColor(operator?: string | null, line?: string | null): string {
-  if (operator === "GZM") return BRAND_GZM;
+  if (operator === "GZM") {
+    const c = CITY[getPageCity()];
+    return (line && c.lineColors?.[line]) || c.color || BRAND_GZM;
+  }
   return isMzk(operator, line) ? BRAND_MZK : BRAND_KB;
 }
 
@@ -86,12 +90,12 @@ export function hslColor(s: string | null | undefined): string {
   return `hsl(${h},58%,46%)`;
 }
 
-export type TransitMode = "bus" | "tram" | "trolleybus";
+export type TransitMode = "bus" | "tram" | "trolleybus" | "metro";
 
-/** GZM sends the GTFS route_type (0 tram, 11 trolleybus, 3 bus); KB sends 0 for its buses, so only GZM is read. */
+/** GZM sends the GTFS route_type (0 tram, 1 metro, 11 trolleybus, 3 bus); KB sends 0 for its buses, so only GZM is read. */
 export function transitMode(operator: string | null | undefined, vehicleType: number | null | undefined): TransitMode {
   if (operator !== "GZM") return "bus";
-  return vehicleType === 0 ? "tram" : vehicleType === 11 ? "trolleybus" : "bus";
+  return vehicleType === 0 ? "tram" : vehicleType === 1 ? "metro" : vehicleType === 11 ? "trolleybus" : "bus";
 }
 
 /** Vehicle marker color: constant operator color (KB red, MZK characteristic blue). */
@@ -206,6 +210,9 @@ export function countdown(secs: number | null, now: number): string {
  * raw names. Kept uppercase: dotted abbreviations (D.A. — single letters),
  * vowelless acronyms (ZML, PKP) and roman numerals (II, IV).
  */
+/** A name without its " NŻ" (na żądanie) tail, for a row that shows RequestStopTag instead. */
+export const withoutRequestTail = (name: string): string => name.replace(/\s+NŻ$/iu, "");
+
 export function displayStopName(raw: string): string {
   if (!raw) return raw;
   return raw.toLocaleLowerCase("pl-PL").replace(/\p{L}+/gu, (w, at: number, s: string) => {

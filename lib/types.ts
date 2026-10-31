@@ -117,6 +117,10 @@ export interface VehiclePos {
   sideNumber?: string;
   model?: string;
   features?: VehicleFeatures;
+  /** zbiorkom: another operator's vehicle mixed into the city (lib/gzm.ts ZbRecord.agency) */
+  agency?: string;
+  /** zbiorkom city: a metro train placed by the timetable, not by a GPS fix (lib/gzm.ts scheduledTracks) */
+  scheduled?: boolean;
   /* ---- route info for client-side motion (not part of the Python port) ---- */
   /** epoch secs the current position was (estimated to be) first reported */
   fixAt?: number;
@@ -194,6 +198,9 @@ export interface VehicleJson {
   not_started?: boolean;
   /** KB: static timetable trip id (same space as the timetable's / board's `trip_id`); MZK's `trip_id` already is one */
   sched_trip_id?: string;
+  /** zbiorkom: another operator's vehicle (e.g. "OTWOCK"); its `line` is not a line of the city's feed */
+  agency?: string;
+  scheduled?: boolean;
 }
 
 /** GET /api/vehicles response. */
@@ -280,6 +287,8 @@ export interface HealthResponse {
   gps_disagree?: number;
   /** Metropolia GZM live layer + feed (lib/gzm.ts) — informational, never affects `status` */
   gzm?: Record<string, unknown>;
+  /** the other zbiorkom cities resident right now (lib/gzm.ts getZb), informational */
+  zb?: Record<string, unknown>;
 }
 
 /** One row of an upstream departures board (loosely typed). */

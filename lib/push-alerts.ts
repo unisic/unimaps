@@ -15,9 +15,9 @@ import path from "node:path";
 
 import pLimit from "p-limit";
 
-import { isGzmId, isValidId } from "./api-helpers";
-import { GZM_ENABLED, PUSH_DIR } from "./config";
-import { getGzm, startGzm } from "./gzm";
+import { isValidId, zbEnabled, zbIdCity } from "./api-helpers";
+import { PUSH_DIR } from "./config";
+import { getZb, startZb } from "./gzm";
 import { log } from "./logger";
 import { startPoller } from "./poller-singleton";
 import { ALERT_LEADS, alertAction, alertMessage, MAX_ALERTS, type Alert } from "./shared/alerts";
@@ -229,10 +229,11 @@ export class PushAlerts {
 }
 
 async function readBoard(designator: string): Promise<{ rows: readonly TimingRow[]; nowTs: number } | null> {
-  if (isGzmId(designator)) {
-    if (!GZM_ENABLED) return null;
-    void startGzm();
-    const b = getGzm().departures(designator);
+  const slug = zbIdCity(designator);
+  if (slug) {
+    if (!zbEnabled(slug)) return null;
+    void startZb(slug);
+    const b = getZb(slug).departures(designator);
     return b && b !== "unknown" ? { rows: b.rows as TimingRow[], nowTs: b.server_ts } : null;
   }
   await startPoller();

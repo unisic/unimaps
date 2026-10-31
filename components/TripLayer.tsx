@@ -67,8 +67,9 @@ function TripLayer({ trip, desktop, vehMeta, liveVehicle }: Props) {
       iconHeading = vehMeta.bearing != null;
     }
   }
+  const sched = lastLive?.scheduled === true;
   const mode = transitMode(op, (lastLive ?? vehMeta)?.vehicle_type);
-  const iconKey = iconLine === null ? null : `${iconLine}|${lineColor}|${op}|${mode}|${iconHeading ? 1 : 0}`;
+  const iconKey = iconLine === null ? null : `${iconLine}|${lineColor}|${op}|${mode}|${iconHeading ? 1 : 0}|${sched ? 1 : 0}`;
   const staticLat = trip?.vehicle?.lat ?? (trip?.isLive && vehMeta ? vehMeta.lat : null);
   const staticLon = trip?.vehicle?.lon ?? (trip?.isLive && vehMeta ? vehMeta.lon : null);
   const staticHeading = vehMeta?.bearing ?? null;
@@ -112,14 +113,14 @@ function TripLayer({ trip, desktop, vehMeta, liveVehicle }: Props) {
     let cur = markerRef.current;
     if (!cur) {
       const marker = L.marker(pos, {
-        icon: makeVehicleIcon(iconLine, lineColor, heading, op, mode),
+        icon: makeVehicleIcon(iconLine, lineColor, heading, op, mode, sched),
         zIndexOffset: 200,
         keyboard: false,
       }).addTo(map);
       cur = { marker, key: iconKey };
       markerRef.current = cur;
     } else if (cur.key !== iconKey) {
-      cur.marker.setIcon(makeVehicleIcon(iconLine, lineColor, heading, op, mode));
+      cur.marker.setIcon(makeVehicleIcon(iconLine, lineColor, heading, op, mode, sched));
       cur.key = iconKey;
       anim.refreshViewDom(TRACKED);
     }
@@ -132,7 +133,7 @@ function TripLayer({ trip, desktop, vehMeta, liveVehicle }: Props) {
     }
     // liveLat/liveLon only seed a brand-new marker — not deps, or every poll would re-run this
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [map, iconKey, iconLine, iconHeading, lineColor, op, trackId, staticLat, staticLon, staticHeading]);
+  }, [map, iconKey, iconLine, iconHeading, lineColor, op, sched, trackId, staticLat, staticLon, staticHeading]);
 
   /* follow the drawn route — unless it IS the fleet shape the track already uses */
   const tripGen = trip?.gen ?? -1;

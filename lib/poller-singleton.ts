@@ -16,7 +16,7 @@ import { MzkApi } from "./mzk-api";
 import { MZK_STALE_SEC, MzkPoller } from "./mzk-poller";
 import { LivePoller, vehicleToJson } from "./poller";
 import { vehicleExtras } from "./route-info";
-import { readGtfsPatternSeeds } from "./shape-patterns";
+import { rawTripId, readGtfsPatternSeeds } from "./shape-patterns";
 import { getStopDirections } from "./stop-directions";
 import { getShapeStore as getStoreSingleton, ShapeStore } from "./shape-store";
 import type { LineInfo, VehicleJson, VehiclesResponse } from "./types";
@@ -148,6 +148,30 @@ export function kbShapeRef(
   } catch (err) {
     log.error("shapes", `kbShapeRef failed: ${err}`);
     return { shape_status: "none" };
+  }
+}
+
+/**
+ * `shape_id` for a line-view pattern: KB from its GTFS stop ids (= internal ids; an
+ * unseen pattern is queued for routing), MZK from the variant in the router trip id.
+ * Null = the client draws straight stop-to-stop lines. Never throws.
+ */
+export function lineShapeRef(tripId: string, stopIds: readonly string[], line: string, headsign: string): string | null {
+  try {
+    const st = state();
+    const mzk = /^mzk:\d+:(\d+)$/.exec(tripId);
+    if (mzk) {
+      const variantId = Number(mzk[1]);
+      st.shapes.touchMzk(variantId, "background");
+      return st.shapes.wireId(`mzk:${variantId}`);
+    }
+    const p = st.poller.kbPatternFor(stopIds.map((id) => ({ designator: Number(id) })), line, headsign);
+    if (!p) return null;
+    st.shapes.touchKb(p, "background");
+    return st.shapes.wireId(p.key);
+  } catch (err) {
+    log.error("shapes", `lineShapeRef failed: ${err}`);
+    return null;
   }
 }
 
@@ -297,6 +321,25 @@ export function getCombinedVehicles(operator?: string | null): VehiclesResponse 
   };
   st.vehiclesMemo.set(memoKey, { kbKey, mzkPositions: st.mzkPoller.positions, value });
   return value;
+}
+
+/**
+ * Today's delay (s) of each running BB trip in the router's id space, for a live connection search: KB legs carry
+ * "<upstream static id>[_<service>]", the bus its upstream id; MZK legs "mzk:<course>:<variant>", the bus its course.
+ * undefined when no bus reports a delay.
+ */
+// ponytail: a trip still running after midnight is keyed to today, so it keeps its timetable times
+export function bbLiveDelay(): ((tripId: string, serviceDate: string) => number | undefined) | undefined {
+  const st = state();
+  const nowEpoch = Date.now() / 1000;
+  const delays = new Map<string, number>();
+  for (const v of st.poller.liveVehicles(nowEpoch)) if (v.schedTripId && v.delay != null) delays.set(v.schedTripId, v.delay);
+  for (const v of st.mzkPoller.positions.values())
+    if (v.delay != null && nowEpoch - v.updatedAt <= MZK_STALE_SEC) delays.set(`mzk:${v.tripId}`, v.delay);
+  if (!delays.size) return undefined;
+  const today = config.todayLocalISO();
+  return (id, d) =>
+    d !== today ? undefined : delays.get(id.startsWith("mzk:") ? id.slice(0, id.indexOf(":", 4)) : rawTripId(id));
 }
 
 /**

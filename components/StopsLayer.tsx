@@ -3,6 +3,7 @@
 import { memo, useEffect, useRef } from "react";
 import { useMap } from "react-leaflet";
 import L from "leaflet";
+import { CITY, getPageCity } from "@/lib/client/city";
 import { displayStopName, isBusStation } from "@/lib/client/format";
 import { makeStopIcon } from "@/lib/client/leafletIcons";
 import type { Stop } from "@/lib/client/types";
@@ -83,7 +84,7 @@ function StopsLayer({ stops, visible, onSelect, minZoom = ZOOM_THRESHOLD }: Prop
               : s.operator === "MZK"
                 ? " · MZK"
                 : s.operator === "GZM"
-                  ? " · Metropolia GZM"
+                  ? ` · ${CITY[getPageCity()].name}`
                   : " · KB";
           label.textContent = `${displayStopName(s.name)}${s.symbol ? ` (${s.symbol})` : ""}${opBadge}`;
           m.bindTooltip(label, { direction: "top", offset: [0, -14], opacity: 1, className: "kb-tooltip" });

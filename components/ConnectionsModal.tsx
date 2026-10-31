@@ -5,6 +5,7 @@ import {
   ArrowRightIcon,
   ArrowsClockwiseIcon,
   ArrowsDownUpIcon,
+  ArrowsLeftRightIcon,
   BriefcaseIcon,
   BusIcon,
   CalendarBlankIcon,
@@ -22,9 +23,9 @@ import {
   PersonSimpleWalkIcon,
   ShieldCheckIcon,
 } from "@/components/icons";
-import { CHIP, chip, CHIP_OFF, CloseIcon, ErrorState, IconButton, LineBadge, Segmented, StarIcon } from "@/components/ui";
+import { CHIP, chip, CHIP_OFF, CloseIcon, ErrorState, IconButton, LineBadge, ModeIcon, Segmented, StarIcon } from "@/components/ui";
 import { geocode, getConnections, isWarming, type GeoHit } from "@/lib/client/api";
-import { CityContext, GZM_LOADING } from "@/lib/client/city";
+import { CITY, CityContext, GZM_LOADING } from "@/lib/client/city";
 import { useFavorites } from "@/lib/client/favorites";
 import {
   addMinutesToHHMM,
@@ -38,13 +39,14 @@ import {
   offsetDateISO,
   przystanekPlural,
   todayISO,
+  type TransitMode,
 } from "@/lib/client/format";
 import { formatDistance, haversineMeters, nearestStops } from "@/lib/client/geo";
 import { hasRoute, setPlace, toggleRoute, usePlaces, type Place, type PlaceSlot, type SavedRoute } from "@/lib/client/places";
 import type { ConnectionItinerary, Stop, Vehicle } from "@/lib/client/types";
 import { indexVehicles, legVehicle, transferAtRisk } from "@/lib/client/vehicleIndex";
 import { gzmStopKey } from "@/lib/shared/gzm-stop-key";
-import type { GeoPos, GeoStatus } from "@/components/hooks";
+import { useLines, type GeoPos, type GeoStatus } from "@/components/hooks";
 
 export interface ConnectionsModalProps {
   open: boolean;
@@ -75,6 +77,24 @@ function storedWalk(): number {
     return WALK_DEFAULT;
   }
 }
+/** result order; the chip steps through them */
+const SORTS = [
+  { id: "departure", label: "Wg odjazdu", title: "Kolejność: najwcześniejszy odjazd", Icon: ClockIcon },
+  { id: "duration", label: "Najszybsza trasa", title: "Kolejność: najkrótszy czas podróży", Icon: LightningIcon },
+  { id: "transfers", label: "Najmniej przesiadek", title: "Kolejność: najmniej przesiadek", Icon: ArrowsLeftRightIcon },
+  { id: "walk", label: "Najmniej pieszo", title: "Kolejność: najmniej chodzenia, przejście między przystankami liczy się potrójnie", Icon: PersonSimpleWalkIcon },
+] as const;
+type SortBy = (typeof SORTS)[number]["id"];
+/** GTFS route types a rider can leave out (zbiorkom cities; BB runs buses only) */
+const MODES: readonly { type: string; mode: TransitMode; label: string }[] = [
+  { type: "3", mode: "bus", label: "autobus" },
+  { type: "0", mode: "tram", label: "tramwaj" },
+  { type: "11", mode: "trolleybus", label: "trolejbus" },
+  { type: "1", mode: "metro", label: "metro" },
+];
+/** "Pomiń" chips: avoided lines first, then the last answer's in line order (a new answer keeps the row still) */
+const AVOID_CHIPS = 10;
+const toggled = (list: readonly string[], v: string) => (list.includes(v) ? list.filter((x) => x !== v) : [...list, v]);
 /** The one high-emphasis action of a view: neutral, inverted. */
 const CTA =
   "tap inline-flex items-center justify-center gap-1.5 rounded-full bg-text px-4 font-medium text-bg hover:bg-tint";
@@ -244,13 +264,22 @@ function ConnectionsDialog({
   // Filters state
   const [directOnly, setDirectOnly] = useState(false);
   const [minTransfer5, setMinTransfer5] = useState(false);
-  const [sortBy, setSortBy] = useState<"departure" | "duration">("departure");
+  const [sortBy, setSortBy] = useState<SortBy>("departure");
+  const [avoidTypes, setAvoidTypes] = useState<readonly string[]>([]);
+  const [avoidLines, setAvoidLines] = useState<readonly string[]>([]);
+  /* lines of the last answer: the "Pomiń" chips stay put while the next search runs */
+  const [answerLines, setAnswerLines] = useState<readonly string[]>([]);
   const [walkM, setWalkM] = useState(storedWalk);
 
   const [connections, setConnections] = useState<ConnectionItinerary[] | null>(null);
   /* "warming": the server is still loading the GZM data (503) */
   const [connErr, setConnErr] = useState<false | "error" | "warming">(false);
   const city = useContext(CityContext);
+  const { data: lineData } = useLines();
+  const modes = useMemo(() => {
+    const types = new Set(city === "bb" ? [] : (lineData?.lines ?? []).map((l) => l.type ?? "3"));
+    return MODES.filter((m) => types.has(m.type));
+  }, [city, lineData]);
   const [searchTick, setSearchTick] = useState(0);
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
 
@@ -263,9 +292,10 @@ function ConnectionsDialog({
   const [assign, setAssign] = useState<PlaceSlot | null>(null);
   if (assign && !activeInput) setAssign(null);
 
-  /* GZM names every pole ("Katowice Dworzec 01" .. "10"): the search lists the stop once and the
-     router departs from any of its poles; each result names the pole it leaves from */
-  const stopLabel = useCallback((name: string) => (city === "gzm" ? gzmStopKey(name) : name), [city]);
+  /* GTFS cities name every pole ("Katowice Dworzec 01" .. "10", "Centrum 02"): the search lists the stop once
+     and the router (poles grouped by the same key in its index) departs from any of them; each result names
+     the pole it leaves from. Names without a pole suffix (Łódź "… 0298") stay as they are. */
+  const stopLabel = useCallback((name: string) => (city !== "bb" ? gzmStopKey(name) : name), [city]);
 
   // Pre-normalized stop lookup index
   const stopIndex = useMemo(
@@ -328,6 +358,8 @@ function ConnectionsDialog({
           directOnly,
           minTransfer: minTransfer5 ? 5 : undefined,
           sortBy,
+          avoid: avoidLines,
+          avoidTypes,
           walk: walkParam,
           arriveBy: arriveBy && !!effectiveTimeParam,
           signal: ac.signal,
@@ -335,11 +367,12 @@ function ConnectionsDialog({
         });
         if (!cancelled) {
           setConnections(list);
+          setAnswerLines([...new Set(list.flatMap((c) => c.legs.map((l) => l.line)))].sort((a, b) => a.localeCompare(b, "pl", { numeric: true })));
           setConnErr(false);
         }
       } catch (err) {
         if (!cancelled && !ac.signal.aborted) {
-          setConnErr(city === "gzm" && isWarming(err) ? "warming" : "error");
+          setConnErr(city !== "bb" && isWarming(err) ? "warming" : "error");
         }
       }
     })();
@@ -358,6 +391,8 @@ function ConnectionsDialog({
     directOnly,
     minTransfer5,
     sortBy,
+    avoidLines,
+    avoidTypes,
     walkParam,
     searchTick,
     city,
@@ -715,7 +750,7 @@ function ConnectionsDialog({
           <div className="min-w-0">
             <h2 className="text-[15px] font-semibold tracking-tight text-text">Wyszukaj połączenie</h2>
             <p className="text-[12px] text-text-faint">
-              {city === "gzm" ? "Rozkład jazdy ZTM Metropolii GZM" : "Rozkład jazdy KB i MZK Bielsko-Biała"}
+              {city === "gzm" ? "Rozkład jazdy ZTM Metropolii GZM" : city === "bb" ? "Rozkład jazdy KB i MZK Bielsko-Biała" : `Rozkład jazdy: ${CITY[city].name}`}
             </p>
           </div>
           <IconButton label="Zamknij" onClick={onClose}>
@@ -998,28 +1033,78 @@ function ConnectionsDialog({
               </button>
             )}
 
-            {/* Sort order toggle chip */}
-            <button
-              type="button"
-              onClick={() => {
-                setSortBy((s) => (s === "departure" ? "duration" : "departure"));
-                setConnections(null);
-              }}
-              className={chip(sortBy === "duration")}
-              title={
-                sortBy === "duration"
-                  ? "Sortowanie: najkrótszy całkowity czas podróży"
-                  : "Sortowanie: najwcześniejszy odjazd"
-              }
-            >
-              {sortBy === "duration" ? (
-                <LightningIcon className="text-[14px]" weight="fill" />
-              ) : (
-                <ClockIcon className="text-[14px]" />
-              )}
-              <span>{sortBy === "duration" ? "Najszybsza trasa" : "Wg odjazdu"}</span>
-            </button>
+            {/* Sort order chip: each tap steps to the next order */}
+            {(() => {
+              const i = SORTS.findIndex((o) => o.id === sortBy);
+              const { label, title, Icon } = SORTS[i];
+              const next = SORTS[(i + 1) % SORTS.length];
+              return (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSortBy(next.id);
+                    setConnections(null);
+                  }}
+                  className={chip(sortBy !== "departure")}
+                  title={`${title}. Dotknij: ${next.label.toLowerCase()}`}
+                >
+                  <Icon className="text-[14px]" weight={sortBy !== "departure" ? "fill" : "bold"} />
+                  <span>{label}</span>
+                </button>
+              );
+            })()}
           </div>
+
+          {modes.length > 1 && (
+            <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Pomiń środki transportu">
+              <span className="w-[52px] shrink-0 text-[12px] text-text-faint">Bez:</span>
+              {modes.map((m) => {
+                const on = avoidTypes.includes(m.type);
+                return (
+                  <button
+                    key={m.type}
+                    type="button"
+                    onClick={() => {
+                      setAvoidTypes((t) => toggled(t, m.type));
+                      setConnections(null);
+                    }}
+                    className={chip(on)}
+                    aria-pressed={on}
+                    title={on ? `Wyszukaj też z: ${m.label}` : `Wyszukaj bez: ${m.label}`}
+                  >
+                    <span className="text-[14px]">
+                      <ModeIcon mode={m.mode} weight={on ? "fill" : "bold"} />
+                    </span>
+                    <span className={on ? "line-through" : undefined}>{m.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {(avoidLines.length > 0 || answerLines.length > 1) && (
+            <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Pomiń linie">
+              <span className="w-[52px] shrink-0 text-[12px] text-text-faint">Pomiń:</span>
+              {[...avoidLines, ...answerLines.filter((l) => !avoidLines.includes(l))].slice(0, AVOID_CHIPS).map((line) => {
+                const on = avoidLines.includes(line);
+                return (
+                  <button
+                    key={line}
+                    type="button"
+                    onClick={() => {
+                      setAvoidLines((a) => toggled(a, line));
+                      setConnections(null);
+                    }}
+                    className={`${chip(on)} tabular-nums`}
+                    aria-pressed={on}
+                    title={on ? `Wyszukaj też z linią ${line}` : `Wyszukaj bez linii ${line}`}
+                  >
+                    <span className={on ? "line-through" : undefined}>{line}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
 
           {(fromGeo || toGeo) && (
             <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Jak daleko do przystanku">
@@ -1298,7 +1383,8 @@ function ConnectionsDialog({
                   // the exact pole when the search named a whole stop (GZM) or a location
                   const showPole =
                     !!fromGeo || (!!fromStop && normalizeText(startPole) !== normalizeText(stopLabel(fromStop.name)));
-                  const delays = conn.legs.map((l) => legVehicle(l, conn.date, vix)?.delay ?? null);
+                  // the bus on the map, else the delay the search boarded it with
+                  const delays = conn.legs.map((l) => legVehicle(l, conn.date, vix)?.delay ?? l.delaySec ?? null);
 
                   return (
                     <div
@@ -1522,7 +1608,9 @@ function ConnectionsDialog({
                 <p className="mx-auto mt-1 max-w-sm text-[13px] text-text-mute">
                   {city === "gzm"
                     ? "Wyszukiwarka znajdzie najszybsze połączenia w sieci ZTM Metropolii GZM."
-                    : "Wyszukiwarka znajdzie najszybsze połączenia autobusowe w sieciach KB i MZK Bielsko-Biała."}
+                    : city === "bb"
+                      ? "Wyszukiwarka znajdzie najszybsze połączenia autobusowe w sieciach KB i MZK Bielsko-Biała."
+                      : `Wyszukiwarka znajdzie najszybsze połączenia komunikacją miejską: ${CITY[city].name}.`}
                 </p>
               </div>
             </div>

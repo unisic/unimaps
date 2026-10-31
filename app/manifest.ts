@@ -5,7 +5,7 @@ export default function manifest(): MetadataRoute.Manifest {
     name: "Unimaps: komunikacja miejska na żywo",
     short_name: "Unimaps",
     description:
-      "Autobusy, tramwaje i trolejbusy na jednej mapie: Bielsko-Biała (Komunikacja Beskidzka, MZK) i Metropolia GZM. Pozycje na żywo, opóźnienia, rozkłady przystanków i trasy linii.",
+      "Autobusy, tramwaje i trolejbusy na jednej mapie: Bielsko-Biała (Komunikacja Beskidzka, MZK), Metropolia GZM, Warszawa, Kraków, Łódź, Wrocław, Poznań i ponad 40 innych miast. Pozycje na żywo, opóźnienia, rozkłady przystanków i trasy linii.",
     id: "/",
     start_url: "/",
     scope: "/",

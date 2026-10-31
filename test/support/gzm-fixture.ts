@@ -54,13 +54,13 @@ export const FILES: Record<string, string> = {
   "feed_info.txt": ["feed_publisher_name,feed_publisher_url,feed_lang,feed_start_date,feed_end_date,feed_version", "ZTM,https://example.invalid,pl,20261020,20261110,1"].join("\n"),
 };
 
-/** Parses FILES once per call into a fresh temp dir (removed again). */
-export async function loadGzmFeed(): Promise<GzmFeed> {
+/** Parses `files` (default FILES) as city `slug` once per call into a fresh temp dir (removed again). */
+export async function loadGzmFeed(files = FILES, slug = "gzm"): Promise<GzmFeed> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "kb-gzm-fixture-"));
   try {
     const file = path.join(dir, "gtfs.zip");
-    fs.writeFileSync(file, zipSync(Object.fromEntries(Object.entries(FILES).map(([k, v]) => [k, strToU8(v)]))));
-    return await parseGzmZip(file);
+    fs.writeFileSync(file, zipSync(Object.fromEntries(Object.entries(files).map(([k, v]) => [k, strToU8(v)]))));
+    return await parseGzmZip(file, slug);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

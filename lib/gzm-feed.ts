@@ -17,7 +17,7 @@ import path from "node:path";
 import { Unzip, UnzipInflate } from "fflate";
 
 import * as config from "./config";
-import { col, parseCsvLine, pickupFlags } from "./gtfs-csv";
+import { col, DROP_OFF_ON_REQUEST, parseCsvLine, PICKUP_ON_REQUEST, pickupFlags } from "./gtfs-csv";
 import { log } from "./logger";
 import { buildRouterIndex, type RouterIndex } from "./router";
 import { finalizeShape, type ShapeGeometry, type ShapePayload, type ShapeStatus } from "./shape-store";
@@ -77,7 +77,19 @@ export interface GzmLine {
   type: string;
 }
 
+/** A lat/lon box (degrees). */
+export interface FeedArea {
+  latMin: number;
+  latMax: number;
+  lonMin: number;
+  lonMax: number;
+}
+
 export interface GzmFeed {
+  /** zbiorkom slug: the prefix of every id in the feed */
+  slug: string;
+  /** the stops' extent + 0.05 deg (median-filtered: a misplaced stop does not stretch it): the positions bbox */
+  area: FeedArea;
   version: string;
   /** ISO dates from feed_info ("" when absent) */
   startDate: string;
@@ -255,11 +267,21 @@ interface TripRow {
   brigade: string;
 }
 
+/** frequencies.txt of one template trip: the raw trip_id and its [start, end, headway] runs */
+interface Freq {
+  raw: string;
+  runs: Array<[number, number, number]>;
+}
+
 const EMPTY_DATES: ReadonlySet<string> = new Set();
 // ponytail: a calendar row spanning more than this is clipped; the zbiorkom feed spans 4 days
 const MAX_CALENDAR_DAYS = 400;
 // ponytail: decompressed-size guard against a hostile zip; the real feed is ~115 MB
 const MAX_UNZIPPED_BYTES = 512 * 1024 * 1024;
+/* frequencies.txt expansion: Warsaw's metro is 16 templates -> 3976 trips (~25 calls each, ~6 MB heap); the cap
+   bounds a feed with absurd headways to ~30 MB */
+const MIN_HEADWAY_SECS = 60;
+const MAX_FREQ_TRIPS = 20_000;
 
 const pause = (): Promise<void> => new Promise((r) => setImmediate(r));
 
@@ -276,7 +298,11 @@ class FeedBuilder {
   private readonly shapePts = new Map<string, number[]>();
   private readonly calendar: Array<{ svc: string; days: boolean[]; start: string; end: string }> = [];
   private readonly exceptions: Array<{ svc: string; date: string; add: boolean }> = [];
+  private readonly freqs = new Map<string, Freq>();
+  private freqTrips = 0;
   private info = { version: "", start: "", end: "" };
+
+  constructor(private readonly slug: string) {}
 
   private str(s: string): string {
     let v = this.pool.get(s);
@@ -287,11 +313,16 @@ class FeedBuilder {
     return v;
   }
 
-  /** raw GTFS id -> `gzm:<id>` */
+  /** raw GTFS id -> `<slug>:<id>`, kept inside the API id charset (isValidId): a char outside
+   *  [A-Za-z0-9_.-] becomes "_" (0 collisions over the 53 feeds, 2026-10-30), an id too long for 64
+   *  keeps its head plus a hash of the raw id */
   private gid(raw: string): string {
     let v = this.ids.get(raw);
     if (v === undefined) {
-      v = Buffer.from(`gzm:${raw}`).toString();
+      let id = raw.replace(/[^A-Za-z0-9_.-]/g, "_");
+      const room = 64 - this.slug.length - 1;
+      if (id.length > room) id = `${id.slice(0, room - 7)}_${createHash("sha1").update(raw).digest("hex").slice(0, 6)}`;
+      v = Buffer.from(`${this.slug}:${id}`).toString();
       this.ids.set(this.str(raw), v);
     }
     return v;
@@ -437,6 +468,24 @@ class FeedBuilder {
             this.exceptions.push({ svc: this.str(f[iSvc]), date, add: f[iType] === "1" });
           };
         });
+      case "frequencies.txt":
+        return csvSink((h) => {
+          const iTrip = col(h, "trip_id");
+          const iStart = col(h, "start_time");
+          const iEnd = col(h, "end_time");
+          const iHw = col(h, "headway_secs");
+          if (iTrip < 0 || iStart < 0 || iEnd < 0 || iHw < 0) return null;
+          return (f) => {
+            const start = hms(f[iStart]);
+            const end = hms(f[iEnd]);
+            const headway = Number(f[iHw]);
+            if (!f[iTrip] || start < 0 || end <= start || !(headway >= MIN_HEADWAY_SECS)) return;
+            const id = this.gid(f[iTrip]);
+            let freq = this.freqs.get(id);
+            if (!freq) this.freqs.set(id, (freq = { raw: this.str(f[iTrip]), runs: [] }));
+            freq.runs.push([start, end, headway]);
+          };
+        });
       case "feed_info.txt":
         return csvSink((h) => {
           const iVer = col(h, "feed_version");
@@ -502,7 +551,7 @@ class FeedBuilder {
         for (const [r, h] of acc.hs) if (h !== row.headsign) stopHeadsigns[pos ? pos[r] : r] = h;
         if (stopHeadsigns.every((h) => h === null)) stopHeadsigns = null;
       }
-      trips.set(tripId, {
+      const trip: GzmTrip = {
         tripId,
         serviceId: row.serviceId,
         routeId: row.routeId,
@@ -518,9 +567,27 @@ class FeedBuilder {
         flags: Uint8Array.from({ length: n }, (_, i) => acc.flags[order ? order[i] : i]),
         stopHeadsigns,
         next: null,
-      });
+      };
+      const freq = this.freqs.get(tripId);
+      if (freq) this.expand(trip, freq, trips);
+      else trips.set(tripId, trip);
     }
+    this.freqs.clear();
     return trips;
+  }
+
+  /** A frequencies.txt trip is a template: its stop_times give the run times from the first stop, and every
+   *  start_time + k * headway_secs < end_time is a trip of its own (`<trip_id>.<start secs>`). Both exact_times
+   *  kinds get exact times: a headway-based run shows its nominal departures. */
+  private expand(t: GzmTrip, freq: Freq, out: Map<string, GzmTrip>): void {
+    const base = t.stops[0].dep;
+    for (const [start, end, headway] of freq.runs) {
+      for (let at = start; at < end && this.freqTrips < MAX_FREQ_TRIPS; at += headway, this.freqTrips++) {
+        const d = at - base;
+        const tripId = this.gid(`${freq.raw}.${at}`);
+        out.set(tripId, { ...t, tripId, stops: t.stops.map((s) => ({ ...s, arr: s.arr + d, dep: s.dep + d })) });
+      }
+    }
   }
 
   async finish(zipBytes: number, t0: number): Promise<GzmFeed> {
@@ -533,6 +600,8 @@ class FeedBuilder {
     const chains = new Map<string, GzmTrip[]>();
     const shapeTrip = new Map<string, GzmTrip>();
     const used = new Set<string>();
+    /* per stop: calls flagged on request minus the others; > 0 = mostly a request stop ("na żądanie") */
+    const request = new Map<string, number>();
     for (const t of trips.values()) {
       let list = tripsByLine.get(t.line);
       if (!list) tripsByLine.set(t.line, (list = []));
@@ -544,7 +613,10 @@ class FeedBuilder {
         chain.push(t);
       }
       if (t.shapeId && !shapeTrip.has(t.shapeId)) shapeTrip.set(t.shapeId, t);
-      for (const s of t.stops) used.add(s.stopId);
+      t.stops.forEach((s, i) => {
+        used.add(s.stopId);
+        request.set(s.stopId, (request.get(s.stopId) ?? 0) + (t.flags[i] & (PICKUP_ON_REQUEST | DROP_OFF_ON_REQUEST) ? 1 : -1));
+      });
     }
     for (const chain of chains.values()) {
       chain.sort((a, b) => a.stops[0].dep - b.stops[0].dep);
@@ -561,6 +633,7 @@ class FeedBuilder {
       lon: s.lon,
       operator: "GZM",
       operators: ["GZM"],
+      ...((request.get(s.id) ?? 0) > 0 ? { onRequest: true } : {}),
     }));
     const stopsBody = JSON.stringify({ count: wire.length, stops: wire });
 
@@ -589,6 +662,8 @@ class FeedBuilder {
       trips,
     });
     return {
+      slug: this.slug,
+      area: feedArea(stops.values()),
       version: this.info.version,
       startDate: this.info.start,
       endDate: this.info.end,
@@ -607,10 +682,34 @@ class FeedBuilder {
   }
 }
 
-/** Streams a GTFS zip from disk into a GzmFeed. Throws on a broken zip or a feed without trips. */
-export async function parseGzmZip(file: string): Promise<GzmFeed> {
+/** The stops' extent + 0.05 deg. A stop > 1.5 deg from the median is a misplaced one (Bolesławiec keeps
+ *  8 at lat 25), not the network: skipped. */
+export function feedArea(stops: Iterable<{ lat: number; lon: number }>): FeedArea {
+  const lats: number[] = [];
+  const lons: number[] = [];
+  for (const s of stops) {
+    lats.push(s.lat);
+    lons.push(s.lon);
+  }
+  const median = (a: number[]): number => a.slice().sort((x, y) => x - y)[a.length >> 1] ?? 0;
+  const mLat = median(lats);
+  const mLon = median(lons);
+  const box = { latMin: Infinity, latMax: -Infinity, lonMin: Infinity, lonMax: -Infinity };
+  for (let i = 0; i < lats.length; i++) {
+    if (Math.abs(lats[i] - mLat) > 1.5 || Math.abs(lons[i] - mLon) > 1.5) continue;
+    box.latMin = Math.min(box.latMin, lats[i]);
+    box.latMax = Math.max(box.latMax, lats[i]);
+    box.lonMin = Math.min(box.lonMin, lons[i]);
+    box.lonMax = Math.max(box.lonMax, lons[i]);
+  }
+  const r4 = (v: number): number => Math.round(v * 1e4) / 1e4;
+  return { latMin: r4(box.latMin - 0.05), latMax: r4(box.latMax + 0.05), lonMin: r4(box.lonMin - 0.05), lonMax: r4(box.lonMax + 0.05) };
+}
+
+/** Streams a GTFS zip from disk into a GzmFeed whose ids carry `<slug>:`. Throws on a broken zip or a feed without trips. */
+export async function parseGzmZip(file: string, slug = "gzm"): Promise<GzmFeed> {
   const t0 = performance.now();
-  const b = new FeedBuilder();
+  const b = new FeedBuilder(slug);
   let error: unknown = null;
   let unzipped = 0;
   const unzip = new Unzip((entry) => {
@@ -725,6 +824,7 @@ function checkedDayAt(ms: number): string {
 }
 
 interface FeedGlobal extends RefreshState {
+  slug: string;
   feed: GzmFeed | null;
   timer: NodeJS.Timeout | null;
   running: Promise<void> | null;
@@ -734,27 +834,37 @@ interface FeedGlobal extends RefreshState {
 }
 
 const KEY = Symbol.for("kb-gtfs.gzm-feed");
-type G = typeof globalThis & { [KEY]?: FeedGlobal };
+type G = typeof globalThis & { [KEY]?: Map<string, FeedGlobal> };
 
-function state(): FeedGlobal {
-  return ((globalThis as G)[KEY] ??= {
-    feed: null,
-    hasFeed: false,
-    checkedDay: "",
-    retryAt: 0,
-    timer: null,
-    running: null,
-    lastError: null,
-    downloads: 0,
-    downloadBytes: 0,
-  });
+/** one state per zbiorkom slug, created on first use (bounded by the registry), dropped by stopGzmFeed */
+function states(): Map<string, FeedGlobal> {
+  return ((globalThis as G)[KEY] ??= new Map());
+}
+
+function state(slug: string): FeedGlobal {
+  const all = states();
+  let s = all.get(slug);
+  if (!s) {
+    s = { slug, feed: null, hasFeed: false, checkedDay: "", retryAt: 0, timer: null, running: null, lastError: null, downloads: 0, downloadBytes: 0 };
+    all.set(slug, s);
+  }
+  return s;
 }
 
 export const GZM_ZIP = path.join(config.GZM_DIR, "gtfs.zip");
 
-/** Current feed, or null while the first one loads. Never starts anything. */
-export function getGzmFeed(): GzmFeed | null {
-  return state().feed;
+/** The kept zip: GZM's stays where it was, every other city's sits beside it under its slug. */
+export function gzmZipPath(slug: string): string {
+  return slug === "gzm" ? GZM_ZIP : path.join(config.GZM_DIR, slug, "gtfs.zip");
+}
+
+function feedUrl(slug: string): string {
+  return slug === "gzm" ? config.GZM_GTFS_URL : `${config.ZB_API_URL}/${encodeURIComponent(slug)}/gtfs/default`;
+}
+
+/** A city's current feed, or null while the first one loads (or after it was dropped). Never starts anything. */
+export function getGzmFeed(slug = "gzm"): GzmFeed | null {
+  return state(slug).feed;
 }
 
 function setFeed(s: FeedGlobal, feed: GzmFeed): void {
@@ -762,32 +872,33 @@ function setFeed(s: FeedGlobal, feed: GzmFeed): void {
   s.hasFeed = true;
   log.info(
     "gzm-feed",
-    `feed ${feed.version} (${feed.startDate}..${feed.endDate}): ${feed.stops.size} stops, ${feed.trips.size} trips, ` +
+    `${s.slug}: feed ${feed.version} (${feed.startDate}..${feed.endDate}): ${feed.stops.size} stops, ${feed.trips.size} trips, ` +
       `${feed.shapes.size} shapes, built in ${feed.buildMs} ms`,
   );
 }
 
 async function refresh(s: FeedGlobal): Promise<void> {
-  if (!s.feed && fs.existsSync(GZM_ZIP)) {
+  const zip = gzmZipPath(s.slug);
+  if (!s.feed && fs.existsSync(zip)) {
     try {
-      setFeed(s, await parseGzmZip(GZM_ZIP));
-      s.checkedDay = checkedDayAt(fs.statSync(GZM_ZIP).mtimeMs);
+      setFeed(s, await parseGzmZip(zip, s.slug));
+      s.checkedDay = checkedDayAt(fs.statSync(zip).mtimeMs);
     } catch (err) {
-      log.warn("gzm-feed", `kept zip unreadable, downloading again: ${err}`);
+      log.warn("gzm-feed", `${s.slug}: kept zip unreadable, downloading again: ${err}`);
     }
   }
   if (!gzmRefreshDue(s, Date.now())) return;
   try {
-    const got = await downloadGzmZip(GZM_ZIP, {
-      url: config.GZM_GTFS_URL,
-      ifModifiedSince: s.feed ? fs.statSync(GZM_ZIP).mtime : null,
+    const got = await downloadGzmZip(zip, {
+      url: feedUrl(s.slug),
+      ifModifiedSince: s.feed ? fs.statSync(zip).mtime : null,
     });
     if (got) {
       s.downloads += 1;
       s.downloadBytes += got.bytes;
       try {
-        const feed = await parseGzmZip(got.tmp);
-        fs.renameSync(got.tmp, GZM_ZIP);
+        const feed = await parseGzmZip(got.tmp, s.slug);
+        fs.renameSync(got.tmp, zip);
         setFeed(s, feed);
       } catch (err) {
         fs.rmSync(got.tmp, { force: true });
@@ -799,18 +910,27 @@ async function refresh(s: FeedGlobal): Promise<void> {
   } catch (err) {
     s.retryAt = Date.now() + RETRY_MS;
     s.lastError = String(err);
-    log.warn("gzm-feed", `refresh failed, keeping the current feed, retry in 30 min: ${err}`);
+    log.warn("gzm-feed", `${s.slug}: refresh failed, keeping the current feed, retry in 30 min: ${err}`);
   }
 }
 
-/** Loads the kept zip and arms the refresh timer. Idempotent; resolves once the first attempt settled. */
-export function startGzmFeed(): Promise<void> {
-  const s = state();
+/** Loads a city's kept zip and arms its refresh timer. Idempotent; resolves once the first attempt settled. */
+export function startGzmFeed(slug = "gzm"): Promise<void> {
+  const s = state(slug);
   if (!s.timer) {
     s.timer = setInterval(() => void runRefresh(s), CHECK_MS);
     s.timer.unref();
   }
   return runRefresh(s);
+}
+
+/** Drops a city's feed and refresh timer (idle eviction, lib/gzm.ts); the kept zip stays for the next start. */
+export function stopGzmFeed(slug: string): void {
+  const all = states();
+  const s = all.get(slug);
+  if (!s) return;
+  if (s.timer) clearInterval(s.timer);
+  all.delete(slug);
 }
 
 function runRefresh(s: FeedGlobal): Promise<void> {
@@ -819,8 +939,8 @@ function runRefresh(s: FeedGlobal): Promise<void> {
   }));
 }
 
-export function gzmFeedHealth(): Record<string, unknown> {
-  const s = state();
+export function gzmFeedHealth(slug = "gzm"): Record<string, unknown> {
+  const s = state(slug);
   const f = s.feed;
   return {
     version: f?.version ?? null,

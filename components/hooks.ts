@@ -16,8 +16,9 @@ const cachedFetcher = <T>(url: string): Promise<T> => fetchJSON<T>(url);
 const STOPS_SAVE_MS = 10 * 60_000;
 let stopsSavedAt = 0;
 async function stopsFetcher(url: string): Promise<StopsResponse> {
-  // one city per page load, so the shared save throttle never mixes the two lists
-  const key = url.includes("city=gzm") ? "stops-gzm" : "stops";
+  // one city per page load, so the shared save throttle never mixes two lists
+  const slug = /[?&]city=([a-z]+)/i.exec(url)?.[1];
+  const key = slug ? `stops-${slug.toLowerCase()}` : "stops";
   try {
     const body = await fetchJSON<StopsResponse>(url);
     if (!body.partial && Date.now() - stopsSavedAt > STOPS_SAVE_MS) {
@@ -32,11 +33,21 @@ async function stopsFetcher(url: string): Promise<StopsResponse> {
   }
 }
 
+/** Poll pace before the first answer and while the server has had no good upstream poll yet (process start, a
+ *  zbiorkom city's first visit); the 1.5 s dedupe makes anything shorter ~2 s anyway. */
+const WARMING_MS = 2000;
+
 /** Live vehicle positions, polled every 4 s (GZM: 5 s, ~0.7 MB a poll), never HTTP-cached. */
 export function useVehicles() {
   const city = useContext(CityContext);
+  // stable identity: SWR restarts its timer whenever this option changes. Bounded: an upstream that keeps failing
+  // drops back to the normal pace after 3 attempts
+  const refreshInterval = useCallback(
+    (d?: VehiclesResponse) => (!d || (!d.timestamp && d.scan_count < 3) ? WARMING_MS : CITY[city].vehiclesRefreshMs),
+    [city],
+  );
   return useSWR<VehiclesResponse>(cityUrl("/api/vehicles", city), vehiclesFetcher, {
-    refreshInterval: CITY[city].vehiclesRefreshMs,
+    refreshInterval,
     dedupingInterval: 1500,
     keepPreviousData: true,
     revalidateOnFocus: true,
@@ -91,6 +102,8 @@ export interface GeoPos {
   lat: number;
   lon: number;
   accuracy: number;
+  /** degrees clockwise from north, only while moving (the API gives NaN/null standing still) */
+  heading?: number;
 }
 
 export type GeoStatus = "idle" | "locating" | "active" | "denied" | "error";
@@ -120,7 +133,13 @@ export function useGeolocation() {
     setStatus("locating");
     watchId.current = navigator.geolocation.watchPosition(
       (p) => {
-        setPos({ lat: p.coords.latitude, lon: p.coords.longitude, accuracy: p.coords.accuracy });
+        const h = p.coords.heading;
+        setPos({
+          lat: p.coords.latitude,
+          lon: p.coords.longitude,
+          accuracy: p.coords.accuracy,
+          heading: h != null && Number.isFinite(h) ? h : undefined,
+        });
         setStatus("active");
       },
       (err) => {

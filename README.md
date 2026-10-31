@@ -4,7 +4,7 @@
 
 # Unimaps
 
-A live public transport map for Bielsko-Biała and Metropolia GZM.
+A live public transport map for Bielsko-Biała, Metropolia GZM and over 50 other Polish cities.
 
 </div>
 
@@ -41,10 +41,14 @@ and no database.
 | City | Operators | Sources |
 |---|---|---|
 | Bielsko-Biała | Komunikacja Beskidzka (KB), MZK Bielsko-Biała | KiedyPrzyjedzie (KB), OnTime (MZK), stops of both merged into one list |
-| Metropolia GZM | ZTM: buses, trams, trolleybuses | zbiorkom.live GTFS and positions, SDIP overlay every 5 s |
+| Metropolia GZM | ZTM: buses, trams, trolleybuses | GTFS and positions, SDIP overlay every 5 s |
+| 53 other cities (`lib/shared/cities.ts`: Warsaw, Kraków, Łódź, Wrocław, Poznań, Tricity, Szczecin, Lublin, …) | the local operator of each | GTFS and positions |
 
-On first visit the map asks for a city and remembers it. `?city=gzm` opens GZM.
-The two cities are isolated: a GZM failure never touches Bielsko-Biała data.
+On first visit the map asks for a city and remembers it. `?city=<slug>` opens a city (`gzm`, `warsaw`, `krakow`, …).
+The cities are isolated: a GZM or other-city failure never touches Bielsko-Biała data. The other cities are
+loaded on first request and only while watched: at most `KB_ZB_RESIDENT` timetables stay in memory, each
+dropped after `KB_ZB_IDLE_MIN` minutes without a request; their positions are polled only while a page asks.
+They have no fleet history, SDIP overlay, announcements or bike layer.
 
 ## Run
 
@@ -89,16 +93,18 @@ Checks: `npm run typecheck`, `npm run lint`, `npm test`.
 | `/api/connections?from=&to=` | Journey planner; `from=` / `to=geo:LAT,LON` starts or ends at every stop within `walk` metres (200 to 1500, default 800); `time=HH:MM&arriveBy=true` makes `time` the latest arrival |
 | `/api/geocode?q=` | Street, address and place search within the city (Photon, OpenStreetMap) |
 | `/api/push` | Web push for departure alerts: `GET` the VAPID key, `POST {subscription, alert}`, `DELETE {subscription, key}` (`KB_PUSH=0` = 404) |
+| `/api/push/news` | Web push for new announcements: `POST` / `DELETE {subscription, city}` |
 | `/api/lines` | Line catalogue |
 | `/api/line?name=` | One line's stop patterns and per-stop departures for a day (`op=KB\|MZK`, `date=YYYY-MM-DD`) |
 | `/api/shapes?ids=` | Stored road geometry, immutable-cached |
 | `/api/fleet`, `/api/fleet/:side`, `/api/fleet/timeline` | Fleet and brigades |
-| `/api/announcements` | KB service announcements |
+| `/api/announcements` | Service announcements: KB + MZK, or the ZTM news page for `?city=gzm` |
+| `/api/bikes?city=gzm` | Metrorower stations with the bikes available now (nextbike GBFS, 60 s memo, ETag + gzip) |
 | `/api/health` | Status, scan counters, feed age, shape store |
 
-List endpoints take `?city=gzm`; without it they answer for Bielsko-Biała.
-GZM ids carry a `gzm:` prefix (`gzm:<stop_id>`, `gzm:<trip_id>`,
-`gzm:<operator>_<fleet>`). While the GZM feed loads, its endpoints answer 503
+List endpoints take `?city=<slug>` (`gzm`, `warsaw`, …); without it they answer for Bielsko-Biała.
+Ids of those cities carry the slug as prefix (`gzm:<stop_id>`, `gzm:<trip_id>`,
+`gzm:<operator>_<fleet>`; `warsaw:<stop_id>`, `warsaw:<type>_<vehicle id>`). While a feed loads, its endpoints answer 503
 with `Retry-After: 10`.
 
 ## Configuration
@@ -115,6 +121,12 @@ All settings are optional `KB_*` environment variables, read once at start.
 | `KB_GPS_DELAY` | `1` | `0` keeps upstream's raw KB delay |
 | `KB_GZM` | `1` | `0` switches Metropolia GZM off |
 | `KB_GZM_SDIP` | `1` | `0` disables the SDIP position overlay |
+| `KB_GZM_NEWS_URL` | `https://rj.transportgzm.pl/v2/news/` | ZTM news page scraped as GZM announcements, `off` disables |
+| `KB_GZM_GBFS_URL` | `https://gbfs.nextbike.net/maps/gbfs/v2/nextbike_zz` | Metrorower GBFS root for the bike-stations layer, `off` disables |
+| `KB_ZB` | `1` | `0` switches the other cities off (404) |
+| `KB_ZB_API_URL` | `https://api.zbiorkom.live/api6-open` | feed API root of the other cities (`<slug>/gtfs/default`, `<slug>/positions/<bbox>`) |
+| `KB_ZB_RESIDENT` | `2` | how many of those cities keep their timetable in memory at once (100-230 MB heap each, LRU) |
+| `KB_ZB_IDLE_MIN` | `30` | minutes without a request after which a city's timetable is dropped |
 
 Generated state lives in `output/` (Docker volume `kb-output`): the static
 GTFS feed, road shapes, learned stop directions and fleet history. Delete a
@@ -140,9 +152,14 @@ comes from:
 
 - Komunikacja Beskidzka: [komunikacjabeskidzka.kiedyprzyjedzie.pl](https://komunikacjabeskidzka.kiedyprzyjedzie.pl)
 - MZK Bielsko-Biała: [rozklady.bielsko.pl](https://rozklady.bielsko.pl)
-- Metropolia GZM: ZTM / Metropolia GZM (CC BY), via [zbiorkom.live](https://zbiorkom.live), plus SDIP
+- Metropolia GZM: ZTM / Metropolia GZM (CC BY), plus SDIP
+- Other cities: each operator's GTFS and vehicle positions (`output/gzm/<slug>/gtfs.zip`)
 - Map: © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors, tiles by [OpenFreeMap](https://openfreemap.org)
 - Road routing: [OSRM](https://project-osrm.org)
+
+`/prywatnosc` (Polish) states what the app handles: the IP only in memory for
+rate limiting, coordinates only for a journey search, a push subscription only
+while one of its alerts is pending, everything else in the browser.
 
 ## License
 

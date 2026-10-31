@@ -14,6 +14,7 @@ import {
   LeafIcon,
   LightningIcon,
   MagnifyingGlassIcon,
+  MapPinIcon,
   MoonIcon,
   PathIcon,
   PersonSimpleWalkIcon,
@@ -23,7 +24,8 @@ import {
   XIcon,
 } from "@/components/icons";
 import { LineBadge } from "@/components/ui";
-import { CityContext, withCity } from "@/lib/client/city";
+import { geocode, HttpError, type GeoHit } from "@/lib/client/api";
+import { CITY, CityContext, withCity } from "@/lib/client/city";
 import { useFavorites } from "@/lib/client/favorites";
 import { delayTxt, displayStopName, normalizeText, wozPlural } from "@/lib/client/format";
 import { formatDistance, haversineMeters } from "@/lib/client/geo";
@@ -53,6 +55,8 @@ export interface TopBarSearchProps {
   onClearView: () => void;
   onOpenNearby: () => void;
   onOpenConnections?: () => void;
+  /** an address or place from /api/geocode; absent = no address search */
+  onPickPlace?: (g: GeoHit) => void;
   /** Pass-through handle to allow parent / sibling buttons to focus search */
   searchRef?: React.RefObject<TopBarSearchHandle | null>;
   /** Notifies parent when dropdown opens/closes (e.g. to close settings menu) */
@@ -75,6 +79,7 @@ type Item =
   | { kind: "veh"; v: Vehicle }
   | { kind: "fleet"; f: FleetVehicleSummary; liveVeh?: Vehicle }
   | { kind: "stop"; s: Stop; fav: boolean; dist: number | null }
+  | { kind: "addr"; g: GeoHit; dist: number | null }
   | { kind: "action"; a: ActionDef };
 
 interface Section {
@@ -88,9 +93,11 @@ const itemKey = (it: Item): string =>
   : it.kind === "line" ? `l-${it.l.id}`
   : it.kind === "veh" ? `v-${it.v.id}`
   : it.kind === "fleet" ? `f-${it.f.sideNumber}`
+  : it.kind === "addr" ? `p-${it.g.lat},${it.g.lon}`
   : `s-${it.s.id}`;
 
-const CAP = { lines: 4, vehs: 5, fleet: 5, actions: 3, stops: 6 } as const;
+const CAP = { lines: 4, vehs: 5, fleet: 5, actions: 3, stops: 6, addr: 4 } as const;
+const NO_ADDR: GeoHit[] = [];
 
 /* ---------- glyphs ---------- */
 
@@ -229,6 +236,7 @@ function TopBarSearch({
   onClearView,
   onOpenNearby,
   onOpenConnections,
+  onPickPlace,
   searchRef,
   onDropdownChange,
   onShowToast: _onShowToast,
@@ -240,12 +248,39 @@ function TopBarSearch({
   const vehicles = useMemo(() => vehData?.vehicles ?? [], [vehData]);
   const lines = useMemo(() => linesData?.lines ?? [], [linesData]);
   const city = useContext(CityContext);
-  // the depot fleet list is MZK Bielsko-Biała's: nothing to search in GZM
-  const allFleet = useMemo(() => (city === "gzm" ? [] : getAllFleetVehicles()), [city]);
+  // "GZM" on the wire = any zbiorkom city; its label is the page's city
+  const opLabel = (op: keyof typeof OPERATOR_LABEL): string => (op === "GZM" ? CITY[city].name : OPERATOR_LABEL[op]);
+  // the depot fleet list is MZK Bielsko-Biała's: nothing to search outside BB
+  const allFleet = useMemo(() => (city !== "bb" ? [] : getAllFleetVehicles()), [city]);
 
   const [query, setQuery] = useState("");
   const [isFocused, setIsFocused] = useState(false);
   const [hi, setHi] = useState(0);
+
+  // address search (/api/geocode), one request per typing pause like ConnectionsModal; a failure
+  // lists no addresses, a 404 (search off) stops asking for the page's life. Pure numbers are lines.
+  const addrQuery = onPickPlace ? query.replace(/\s+/g, " ").trim() : "";
+  const [addr, setAddr] = useState<{ q: string; hits: GeoHit[] } | null>(null);
+  const geocoderOff = useRef(false);
+  useEffect(() => {
+    if (addrQuery.length < 3 || /^#|^\d+$/.test(addrQuery) || geocoderOff.current) return;
+    const ac = new AbortController();
+    const t = setTimeout(() => {
+      geocode(addrQuery, city, ac.signal).then(
+        (hits) => setAddr({ q: addrQuery, hits }),
+        (err: unknown) => {
+          if (ac.signal.aborted) return;
+          if (err instanceof HttpError && err.status === 404) geocoderOff.current = true;
+          setAddr({ q: addrQuery, hits: [] });
+        },
+      );
+    }, 350);
+    return () => {
+      clearTimeout(t);
+      ac.abort();
+    };
+  }, [addrQuery, city]);
+  const addrHits = addr && addr.q === addrQuery ? addr.hits : NO_ADDR;
 
   const inputRef = useRef<HTMLInputElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -316,7 +351,7 @@ function TopBarSearch({
   // Live vehicles count per line
   const liveByLine = useMemo(() => {
     const m = new Map<string, number>();
-    for (const v of vehicles) if (v.line) m.set(v.line, (m.get(v.line) ?? 0) + 1);
+    for (const v of vehicles) if (v.line && !v.agency) m.set(v.line, (m.get(v.line) ?? 0) + 1);
     return m;
   }, [vehicles]);
 
@@ -531,6 +566,13 @@ function TopBarSearch({
       });
     }
 
+    // Photon's order is its relevance: listed after stops that contain the query
+    const addrItems: Item[] = addrHits.slice(0, CAP.addr).map((g) => ({
+      kind: "addr",
+      g,
+      dist: geoPos ? haversineMeters(geoPos.lat, geoPos.lon, g.lat, g.lon) : null,
+    }));
+
     const finish = (hits: Scored[], cap: number, dedupeByName = false): { items: Item[]; best: number } => {
       hits.sort(
         (a, b) => a.rank - b.rank || a.dist - b.dist || a.label.localeCompare(b.label, "pl"),
@@ -555,13 +597,14 @@ function TopBarSearch({
       { title: "Pojazdy na żywo", ...finish(vehHits, CAP.vehs) },
       { title: "Tabor MZK", ...finish(fleetHits, CAP.fleet) },
       { title: "Przystanki", ...finish(stopHits, CAP.stops, true) },
+      { title: "Adresy i miejsca", items: addrItems, best: 3.5 },
       { title: "Akcje", ...finish(actionHits, CAP.actions) },
     ]
       .filter((g) => g.items.length > 0)
       .sort((a, b) => a.best - b.best);
 
     return groups;
-  }, [query, lines, liveByLine, lineFilter, vehicles, allFleet, liveSideNumbers, actions, stopIndex, favSet, geoPos]);
+  }, [query, lines, liveByLine, lineFilter, vehicles, allFleet, liveSideNumbers, actions, stopIndex, favSet, geoPos, addrHits]);
 
   // Flat array of items for keyboard navigation index
   const flatItems = useMemo(() => sections.flatMap((s) => s.items), [sections]);
@@ -591,12 +634,15 @@ function TopBarSearch({
       } else if (it.kind === "line") {
         onOpenLine(it.l);
         setIsFocused(false);
+      } else if (it.kind === "addr") {
+        onPickPlace?.(it.g);
+        setIsFocused(false);
       } else if (it.kind === "action") {
         it.a.run();
         setIsFocused(false);
       }
     },
-    [onPickStop, onPickVehicle, onOpenLine],
+    [onPickStop, onPickVehicle, onOpenLine, onPickPlace],
   );
 
   // Keyboard navigation on input
@@ -645,7 +691,7 @@ function TopBarSearch({
           aria-activedescendant={showDropdown && flatItems.length > 0 ? optionId(hiIdx) : undefined}
           aria-autocomplete="list"
           aria-label="Szukaj przystanku, linii lub taboru"
-          placeholder="Szukaj przystanku, linii lub taboru (#230, Solaris)…"
+          placeholder="Przystanek, linia, pojazd…"
           autoComplete="off"
           spellCheck={false}
           value={query}
@@ -721,7 +767,7 @@ function TopBarSearch({
                                 <>
                                   <StopGlyph operator={it.s.operator} station={it.s.isStation} />
                                   <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
-                                    <span className="sr-only">{OPERATOR_LABEL[it.s.operator ?? "KB"]}: </span>
+                                    <span className="sr-only">{opLabel(it.s.operator ?? "KB")}: </span>
                                     <span className="truncate font-medium text-text">{displayStopName(it.s.name)}</span>
                                     {it.s.symbol && (
                                       <span className="shrink-0 text-[11.5px] tabular-nums text-text-faint">{it.s.symbol}</span>
@@ -744,7 +790,7 @@ function TopBarSearch({
                                       {it.l.terminus ? `→ ${displayStopName(it.l.terminus)}` : `Linia ${it.l.name}`}
                                     </span>
                                     <span className="mt-0.5 block truncate text-[11.5px] tabular-nums text-text-faint">
-                                      {OPERATOR_LABEL[it.l.operator || "KB"]} ·{" "}
+                                      {opLabel(it.l.operator || "KB")} ·{" "}
                                       {it.live > 0 ? `${it.live} ${wozPlural(it.live)} na trasie` : "brak wozów na trasie"}
                                       {it.active && " · filtr aktywny"}
                                     </span>
@@ -775,7 +821,7 @@ function TopBarSearch({
                                         aria-hidden
                                       />
                                       <span className="truncate">
-                                        {OPERATOR_LABEL[it.v.operator || "KB"]} ·{" "}
+                                        {opLabel(it.v.operator || "KB")} ·{" "}
                                         {it.v.not_started
                                           ? "czeka na odjazd"
                                           : `na żywo${it.v.delay != null ? ` · ${delayTxt(it.v.delay)}` : ""}`}
@@ -806,6 +852,25 @@ function TopBarSearch({
                                       <FuelTag fuel={it.f.fuelType} />
                                     </span>
                                   </span>
+                                </>
+                              )}
+
+                              {it.kind === "addr" && (
+                                <>
+                                  <Glyph>
+                                    <MapPinIcon />
+                                  </Glyph>
+                                  <span className="min-w-0 flex-1">
+                                    <span className="block truncate font-medium text-text">{it.g.name}</span>
+                                    {it.g.detail && (
+                                      <span className="mt-0.5 block truncate text-[11.5px] text-text-faint">{it.g.detail}</span>
+                                    )}
+                                  </span>
+                                  {it.dist != null && (
+                                    <span className="shrink-0 text-[11.5px] tabular-nums text-text-faint">
+                                      {formatDistance(it.dist)}
+                                    </span>
+                                  )}
                                 </>
                               )}
 

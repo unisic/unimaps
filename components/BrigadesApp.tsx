@@ -205,7 +205,7 @@ function PageFrame({
         {body}
         {city === "gzm" ? (
           <footer className="mt-10 border-t border-hairline pt-4 text-[12px] leading-relaxed text-text-faint">
-            Dane na żywo: ZTM / Metropolia GZM (CC BY), zbiorkom.live. Kursy, opóźnienia i kilometry zbieramy od rana, gdy
+            Dane na żywo: ZTM / Metropolia GZM (CC BY). Kursy, opóźnienia i kilometry zbieramy od rana, gdy
             pojazd jest w trasie. Brygady i następny kurs pochodzą z rozkładu GZM, kilometry z długości kursów w rozkładzie.
           </footer>
         ) : (

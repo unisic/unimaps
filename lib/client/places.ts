@@ -8,7 +8,7 @@
  */
 import { useSyncExternalStore } from "react";
 
-import type { City } from "@/lib/client/city";
+import { cityKey, type City } from "@/lib/client/city";
 
 export type Place = { designator: string } | { lat: number; lon: number; label: string };
 export type PlaceSlot = "home" | "work";
@@ -24,7 +24,7 @@ export interface Places {
 
 const MAX_ROUTES = 10;
 const EMPTY: Places = { routes: [] };
-const keyOf = (city: City) => (city === "gzm" ? "kb:places:gzm" : "kb:places");
+const keyOf = (city: City) => cityKey("kb:places", city);
 
 function isPlace(v: unknown): v is Place {
   if (!v || typeof v !== "object") return false;
