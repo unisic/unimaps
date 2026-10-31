@@ -27,14 +27,15 @@ import * as config from "./config";
 import { bearing, metersBetween, nearestWithin } from "./geo";
 import { getGzmFeed, gzmFeedHealth, serviceDayBase, startGzmFeed, stopGzmFeed, warsawClock, type FeedArea, type GzmFeed, type GzmTrip } from "./gzm-feed";
 import { feedGzmFleet, type GzmFleetSource } from "./gzm-fleet";
+import { focusShapeMatch, requestShapeMatch } from "./gzm-match";
 import { isRecord } from "./kb-api";
 import { stepArrivals } from "./kb-progress";
 import { log } from "./logger";
 import { interruptibleSleep, vehicleToJson } from "./poller";
-import { estimateFixAt, kbAheadM, kbDistAlong, nextSpeed, vehicleExtras } from "./route-info";
+import { estimateFixAt, kbAheadM, kbDistAlong, nextSpeed, schedSpeed, vehicleExtras } from "./route-info";
 import { findConnections, offsetDate, stopEvents, type ConnectionItinerary, type RouteQuery } from "./router";
 import type { ShapePayload } from "./shape-store";
-import { pointAt, projectOnPolyline, tangentBearing } from "./shared/polyline";
+import { pointAt, projectOnPolyline, tangentBearing, type LatLonBox } from "./shared/polyline";
 import { gzmRowKey, hhmm, preSortRows } from "./shared/departures";
 import { gzmStopKey } from "./shared/gzm-stop-key";
 import type { VehiclePos, VehiclesResponse } from "./types";
@@ -42,7 +43,7 @@ import type { VehiclePos, VehiclesResponse } from "./types";
 /* ---------------- zbiorkom records ---------------- */
 
 export interface ZbCall {
-  /** GTFS stop_sequence (0-based, = index in GzmTrip.stops) */
+  /** GTFS stop_sequence (0-based, = call index in GzmTrip) */
   seq: number;
   /** scheduled departure, epoch secs */
   dep: number;
@@ -182,8 +183,7 @@ const MATCH_SLACK_SEC = 30;
 
 function fits(trip: GzmTrip, base: number, calls: readonly ZbCall[], slack = 0): boolean {
   for (const c of calls) {
-    const st = trip.stops[c.seq];
-    if (!st || st.seq !== c.seq || Math.abs(base + st.dep - c.dep) > slack) return false;
+    if (trip.seqs[c.seq] !== c.seq || Math.abs(base + trip.dep[c.seq] - c.dep) > slack) return false;
   }
   return true;
 }
@@ -232,13 +232,13 @@ export interface SchedAt {
 }
 
 /** The timetable position of a trip at service-day secs `t`; null before its first departure or from its last arrival. */
-export function schedulePosition(stops: readonly GzmTrip["stops"][number][], t: number): SchedAt | null {
-  const last = stops.length - 1;
-  if (last < 1 || t < stops[0].dep || t >= stops[last].arr) return null;
+export function schedulePosition({ arr, dep }: Pick<GzmTrip, "arr" | "dep">, t: number): SchedAt | null {
+  const last = dep.length - 1;
+  if (last < 1 || t < dep[0] || t >= arr[last]) return null;
   let i = 0;
-  while (stops[i + 1].arr <= t) i++;
-  if (t < stops[i].dep) return { i, f: 0, next: i };
-  return { i, f: (t - stops[i].dep) / (stops[i + 1].arr - stops[i].dep), next: i + 1 };
+  while (arr[i + 1] <= t) i++;
+  if (t < dep[i]) return { i, f: 0, next: i };
+  return { i, f: (t - dep[i]) / (arr[i + 1] - dep[i]), next: i + 1 };
 }
 
 /* ---------------- live state ---------------- */
@@ -253,7 +253,7 @@ interface Track {
   trip: GzmTrip | null;
   date: string;
   base: number;
-  /** index in trip.stops of the next call */
+  /** call index in trip of the next call */
   next: number;
   notStarted: boolean;
   /** fix time of zbiorkom's position (pos may carry SDIP's newer one) */
@@ -305,6 +305,14 @@ const SDIP_GAP_SEC = 15;
 const SDIP_PAUSE_MS = 300_000;
 const CONN_MEMO = 256;
 const CONN_MEMO_MS = 60_000;
+/** a tapped vehicle opens at zoom 16 (~0.6 x 1.2 km on a phone): its road match starts with this much around it */
+const FOCUS_M = 800;
+
+function around(lat: number, lon: number, m: number): LatLonBox {
+  const dLat = m / 111_320;
+  const dLon = dLat / Math.cos(lat * (Math.PI / 180));
+  return { s: lat - dLat, w: lon - dLon, n: lat + dLat, e: lon + dLon };
+}
 
 /** ms until 3 s past the next 20 s grid point, never under 1 s. */
 export function nextPollDelay(nowMs: number): number {
@@ -629,7 +637,6 @@ export class GzmLive {
       if (!trip || !feed) continue;
       const geom = pos.shapeKey ? feed.shapes.geometry(pos.shapeKey) : null;
       const n = trip.next;
-      const nFirst = n?.stops[0];
       out.push({
         side: rec.key,
         label: rec.label,
@@ -639,7 +646,7 @@ export class GzmLive {
         brigade: rec.brigade ?? (trip.brigade || null),
         tripId: trip.tripId.slice(this.prefix.length),
         headsign: pos.headsign,
-        stops: trip.stops.map((s, i) => ({ id: s.stopId, name: feed.stops.get(s.stopId)?.name ?? "", dep: s.dep, distM: geom?.stops[i] ?? null })),
+        stops: trip.stopIds.map((id, i) => ({ id, name: feed.stops.get(id)?.name ?? "", dep: trip.dep[i], distM: geom?.stops[i] ?? null })),
         servedIdx: t.next > 0 ? t.next - 1 : null,
         nextIdx: t.next,
         reachedM: pos.distM ?? null,
@@ -651,8 +658,8 @@ export class GzmLive {
         bearing: pos.bearing,
         fixAt: pos.fixAt ?? null,
         nextTrip:
-          n && nFirst
-            ? { line: n.line, headsign: n.headsign, firstStopName: feed.stops.get(nFirst.stopId)?.name ?? "", firstStopId: nFirst.stopId, dep: nFirst.dep }
+          n && n.stopIds.length
+            ? { line: n.line, headsign: n.headsign, firstStopName: feed.stops.get(n.stopIds[0])?.name ?? "", firstStopId: n.stopIds[0], dep: n.dep[0] }
             : null,
       });
     }
@@ -689,9 +696,9 @@ export class GzmLive {
     let next = rec.upcoming[0]?.seq ?? 0;
     let layover = false;
     if (match && feed) {
-      const last = match.trip.stops.length - 1;
+      const last = match.trip.stopIds.length - 1;
       const u = rec.upcoming;
-      const end = feed.stops.get(match.trip.stops[last].stopId);
+      const end = feed.stops.get(match.trip.stopIds[last]);
       const atEnd = end !== undefined && metersBetween(lat, lon, end.lat, end.lon) <= AT_STOP_M;
       // the trip is done once the bus stands at its last stop or that stop is behind it: zbiorkom keeps listing it
       // (delay frozen or growing with the clock) or lists nothing; the brigade's next trip is what the vehicle serves now
@@ -703,9 +710,9 @@ export class GzmLive {
         next = 0;
       } else if (stuck) trip = null;
     }
-    if (trip && next >= trip.stops.length) trip = null;
+    if (trip && next >= trip.stopIds.length) trip = null;
 
-    const stopAt = (i: number) => (trip && feed ? feed.stops.get(trip.stops[i]?.stopId ?? "") : undefined);
+    const stopAt = (i: number) => (trip && feed ? feed.stops.get(trip.stopIds[i] ?? "") : undefined);
     const nextStop = stopAt(next);
     const first = stopAt(0);
     const notStarted =
@@ -718,11 +725,13 @@ export class GzmLive {
       (prevStop !== undefined && metersBetween(lat, lon, prevStop.lat, prevStop.lon) <= AT_STOP_M);
 
     const step = p ? metersBetween(p.lat, p.lon, lat, lon) : 0;
-    const heading =
-      fix.bearing ??
-      (p && step >= 8 ? bearing(p.lat, p.lon, lat, lon) : null) ??
-      p?.bearing ??
-      (nextStop ? bearing(lat, lon, nextStop.lat, nextStop.lon) : null);
+    const moved = p && step >= 8 ? bearing(p.lat, p.lon, lat, lon) : null;
+    // SDIP's bearing can flip while a bus stands and stick there: a clear move the other way overrules it
+    const told =
+      fix.bearing !== null && moved !== null && step >= 20 && Math.abs(((fix.bearing - moved + 540) % 360) - 180) > 90
+        ? null
+        : fix.bearing;
+    const heading = told ?? moved ?? p?.bearing ?? (nextStop ? bearing(lat, lon, nextStop.lat, nextStop.lon) : null);
 
     const vt = Number(rec.type);
     const pos: VehiclePos = {
@@ -779,7 +788,7 @@ export class GzmLive {
     for (const trip of this.sched.trips) {
       if (live.has(trip.line)) continue;
       for (const { date, base } of days) {
-        const at = trip.dates.has(date) ? schedulePosition(trip.stops, nowS - base) : null;
+        const at = trip.dates.has(date) ? schedulePosition(trip, nowS - base) : null;
         const t = at && this.scheduledTrack(feed, trip, date, base, at, nowS);
         if (t) out.push(t);
       }
@@ -789,14 +798,14 @@ export class GzmLive {
 
   private scheduledTrack(feed: GzmFeed, trip: GzmTrip, date: string, base: number, at: SchedAt, nowS: number): SchedTrack | null {
     const { i, f, next } = at;
-    const s = trip.stops;
-    const a = feed.stops.get(s[i].stopId);
-    const b = feed.stops.get(s[i + 1].stopId);
+    const s = trip.stopIds;
+    const a = feed.stops.get(s[i]);
+    const b = feed.stops.get(s[i + 1]);
     const geom = trip.shapeId ? feed.shapes.geometry(trip.shapeId) : null;
     const g = geom && geom.stops.length === s.length ? geom : null;
     const c0 = g?.stops[i];
     const c1 = g?.stops[i + 1];
-    const legS = s[i + 1].arr - s[i].dep;
+    const legS = trip.arr[i + 1] - trip.dep[i];
     let lat: number;
     let lon: number;
     let heading: number | null;
@@ -814,7 +823,7 @@ export class GzmLive {
       legM = metersBetween(a.lat, a.lon, b.lat, b.lon);
     } else return null;
     const key = `${SCHED_ROUTE_TYPE}_S${createHash("sha1").update(`${trip.tripId}|${date}`).digest("base64url").slice(0, 10)}`;
-    const nextStop = feed.stops.get(s[next].stopId);
+    const nextStop = feed.stops.get(s[next]);
     const headsign = trip.stopHeadsigns?.[next] ?? trip.headsign;
     const pos: VehiclePos = {
       execId: `${this.prefix}${key}`,
@@ -860,7 +869,7 @@ export class GzmLive {
     try {
       const geom = trip.shapeId ? feed.shapes.geometry(trip.shapeId) : null;
       // the shape's stop chainage comes from one trip of that shape; a trip with other calls gets no shape
-      pos.shapeKey = geom && geom.stops.length === trip.stops.length ? trip.shapeId : null;
+      pos.shapeKey = geom && geom.stops.length === trip.stopIds.length ? trip.shapeId : null;
       const p = prev?.pos;
       if (geom && pos.shapeKey) {
         const hint = p && p.tripId === pos.tripId && p.distRev === geom.rev && p.distM != null ? p.distM : undefined;
@@ -869,6 +878,7 @@ export class GzmLive {
         if (d !== null) {
           pos.distM = d;
           pos.distRev = geom.rev;
+          pos.schedSpeed = schedSpeed(geom.stops, trip.dep, d);
         }
       }
       if (!p || pos.fixAt === undefined) return;
@@ -945,10 +955,10 @@ export class GzmLive {
       const tr = live ? this.byTrip.get(`${trip.tripId}|${e.serviceDate}`) : undefined;
       if (tr && tr.next > e.pos) continue;
       const b = base(e.serviceDate);
-      const plan = b + trip.stops[e.pos].dep;
+      const plan = b + trip.dep[e.pos];
       let eta: number | null = null;
       let delay: number | null = null;
-      if (tr?.notStarted) eta = plan + Math.max(0, nowS - (b + trip.stops[0].dep));
+      if (tr?.notStarted) eta = plan + Math.max(0, nowS - (b + trip.dep[0]));
       else if (tr && tr.pos.delay !== null) {
         delay = tr.pos.delay;
         eta = plan + delay;
@@ -972,8 +982,8 @@ export class GzmLive {
         at_stop: false,
         canceled: false,
         trip_index: e.pos,
-        row_key: gzmRowKey(trip.tripId.slice(this.prefix.length), trip.stops[e.pos].seq),
-        ...(all ? { pole: post.get(trip.stops[e.pos].stopId) || null } : {}),
+        row_key: gzmRowKey(trip.tripId.slice(this.prefix.length), trip.seqs[e.pos]),
+        ...(all ? { pole: post.get(trip.stopIds[e.pos]) || null } : {}),
       });
     }
     return { rows: preSortRows(rows, nowS).slice(0, BOARD_ROWS), server_ts: nowS, ...(group.length > 1 ? { poles: group.length } : {}) };
@@ -1005,13 +1015,35 @@ export class GzmLive {
    * Flat like the MZK branch of /api/trip: the trip body with the shape ref beside `times`, not the
    * trip_execution envelope.
    */
-  trip(tripId: string): Record<string, unknown> | null | "unknown" {
+  trip(tripId: string, open = false): Record<string, unknown> | null | "unknown" {
     const feed = this.getFeed();
     if (!feed) return null;
     const trip = feed.trips.get(tripId);
     if (!trip) return "unknown";
+    const matching = open && this.matchShape(feed, trip);
     const { trip: body, shape, shape_id, shape_status } = tripJson(feed, trip, null);
-    return { ...(body as Record<string, unknown>), shape, shape_id, shape_status };
+    return { ...(body as Record<string, unknown>), shape, shape_id, shape_status, ...(matching ? { shape_matching: true } : {}) };
+  }
+
+  /**
+   * Road-match the shape of an opened trip: GZM buses and trolleybuses (lib/gzm-match.ts), the part in `focus`
+   * first; true while the match runs.
+   */
+  private matchShape(feed: GzmFeed, trip: GzmTrip, focus: LatLonBox | null = null): boolean {
+    if (this.slug !== "gzm" || !trip.shapeId || !feed.shapes.unmatched(trip.shapeId)) return false;
+    const type = feed.lines.find((l) => l.id === trip.routeId)?.type;
+    if (type !== "3" && type !== "11") return false;
+    const refs = trip.stopIds.map((id): [number, number] | null => {
+      const st = feed.stops.get(id);
+      return st ? [st.lat, st.lon] : null;
+    });
+    return requestShapeMatch(feed.shapes, trip.shapeId, refs, focus);
+  }
+
+  /** Point the running road matches of shapes `ids` (wire ids) at what the rider sees. */
+  focusMatch(ids: readonly string[], box: LatLonBox): void {
+    const feed = this.slug === "gzm" ? this.getFeed() : null;
+    if (feed) for (const id of ids) focusShapeMatch(feed.shapes, id.replace(/\.[0-9a-f]{6}$/, ""), box);
   }
 
   /** The feed in use (null while it loads). */
@@ -1069,9 +1101,11 @@ export class GzmLive {
     if (!execId.startsWith(this.prefix) || !this.fresh(this.now() / 1000)) return null;
     const tr = this.tracks.get(execId.slice(this.prefix.length));
     if (!tr?.trip || !tr.feed) return null;
+    const matching = this.matchShape(tr.feed, tr.trip, around(tr.pos.lat, tr.pos.lon, FOCUS_M));
     const delay = tr.notStarted ? null : tr.pos.delay;
     return {
       ...tripJson(tr.feed, tr.trip, delay !== null ? { from: tr.next, diff: delay } : null),
+      ...(matching ? { shape_matching: true } : {}),
       vehicle: { lat: tr.pos.lat, lon: tr.pos.lon, ...(tr.pos.bearing !== null ? { bearing: tr.pos.bearing } : {}) },
       vehicle_trip_index: tr.next,
       ...(tr.pos.arrivals ? { arrived: tr.pos.arrivals.arrived } : {}),
@@ -1129,11 +1163,11 @@ function tripJson(feed: GzmFeed, trip: GzmTrip, est: { from: number; diff: numbe
   const shapeId = trip.shapeId ? feed.shapes.wireId(trip.shapeId) : null;
   return {
     trip: {
-      times: trip.stops.map((s, i) => ({
-        stop_name: feed.stops.get(s.stopId)?.name ?? "",
+      times: trip.stopIds.map((id, i) => ({
+        stop_name: feed.stops.get(id)?.name ?? "",
         designator: null,
-        place_id: s.stopId,
-        departure_time: clock(s.dep),
+        place_id: id,
+        departure_time: clock(trip.dep[i]),
         index: i,
         platform: null,
         ...(est && i >= est.from ? { estimate: { time_diff: est.diff } } : {}),

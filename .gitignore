@@ -31,3 +31,4 @@ yarn-error.log*
 # python legacy
 __pycache__/
 *.pyc
+/dist/

@@ -98,9 +98,10 @@ export function kbAheadM(gapS: number): number {
  * Metres along the shape for a KB fix. Out-and-back / loop patterns run on twin stops and overlapping
  * roads, and upstream's vti freezes for minutes whenever a pole is passed outside its geofence, so
  * the answer is built from what a bus cannot do, in this order:
- *  1. continuity: it moves forward from where it was last poll — [hint-60, hint+aheadM]. This keeps
- *     the return leg on the return leg while vti is stale (the vti window below would accept the
- *     outbound twin, same road, <=60 m);
+ *  1. continuity: it moves forward from where it was last poll, [hint-60, hint+aheadM], and a fit
+ *     more than 15 m behind the hint yields to one ahead of it within 15 m of fit. This keeps the
+ *     return leg on the return leg while vti is stale (the vti window below would accept the
+ *     outbound twin, same road, <=60 m) and turns a U-turn forward instead of walking it back;
  *  2. upstream's window between the last reached stop (vti) and the next one (cold start / lost);
  *  3. a strict whole-line search; null when the fix is off-route.
  */
@@ -115,7 +116,14 @@ export function kbDistAlong(
 ): number | null {
   const maxOff = geom.src === "straight" ? 150 : 60;
   if (hint !== undefined && Number.isFinite(hint)) {
-    const c = projectOnPolyline(geom.pl, lat, lon, hint - 60, hint + (opts.aheadM ?? 500), { hint });
+    const hi = hint + (opts.aheadM ?? 500);
+    let c = projectOnPolyline(geom.pl, lat, lon, hint - 60, hi, { hint });
+    // behind by more than jitter while a twin leg ahead fits about as well (a U-turn, an out-and-back on one road):
+    // the bus is on the leg ahead. The closest-to-hint tie-break alone walks it back up to 60 m per poll.
+    if (c && c.s < hint - 15) {
+      const f = projectOnPolyline(geom.pl, lat, lon, hint, hi);
+      if (f && f.d <= Math.min(maxOff, c.d + 15)) c = f;
+    }
     if (c && c.d <= maxOff) return round1(c.s);
   }
   if (vti !== null && vti >= 0) {
@@ -127,6 +135,47 @@ export function kbDistAlong(
   }
   const p = projectOnPolyline(geom.pl, lat, lon, 0, Infinity, { hint });
   return p && p.d <= 40 ? round1(p.s) : null;
+}
+
+/** Scheduled runs shorter than this are widened: timetable times are whole minutes, so one short leg reads as
+ *  0 s or twice its real length. */
+const SCHED_MIN_S = 120;
+
+/**
+ * Timetable pace (m/s) at chainage `d`: chainage over scheduled time between the timed stops either side of it,
+ * widened a stop at a time (forward first) until the run spans SCHED_MIN_S. `times` are seconds, aligned with
+ * `stops`; a drop of more than 12 h is the next day. null outside the trip or when the timetable says nothing.
+ * O(stops of the trip).
+ */
+export function schedSpeed(stops: ArrayLike<number | null>, times: ArrayLike<number | null>, d: number): number | null {
+  const n = Math.min(stops.length, times.length);
+  const ok = (k: number) => stops[k] != null && times[k] != null;
+  let i = -1;
+  let j = -1;
+  for (let k = 0; k < n && j < 0; k++) {
+    if (!ok(k)) continue;
+    if (stops[k]! <= d) i = k;
+    else j = k;
+  }
+  if (i < 0 || j < 0) return null;
+  const span = () => {
+    const dt = times[j]! - times[i]!;
+    return dt < -43200 ? dt + 86400 : dt;
+  };
+  while (span() < SCHED_MIN_S) {
+    let k = j + 1;
+    while (k < n && !ok(k)) k++;
+    if (k < n) {
+      j = k;
+      continue;
+    }
+    k = i - 1;
+    while (k >= 0 && !ok(k)) k--;
+    if (k < 0) return null;
+    i = k;
+  }
+  const v = (stops[j]! - stops[i]!) / span();
+  return v > 0 && v <= 30 ? v : null;
 }
 
 /**
@@ -144,9 +193,12 @@ export function vehicleExtras(v: VehiclePos, shapes: { wireId(key: string): stri
     if (v.schedTripId) out.sched_trip_id = v.schedTripId;
     if (v.agency) out.agency = v.agency;
     if (v.scheduled) out.scheduled = true;
+    // a course not begun is not on its shape yet (a layover, the run from the depot): no along-route motion
+    if (v.notStarted) return out;
     if (v.speed != null && Number.isFinite(v.speed) && v.speedAt != null && nowEpoch - v.speedAt <= 90) {
       out.speed = Math.round(v.speed * 10) / 10;
     }
+    if (v.schedSpeed != null && Number.isFinite(v.schedSpeed)) out.sched_speed = Math.round(v.schedSpeed * 10) / 10;
     if (shapes && v.shapeKey) {
       const id = shapes.wireId(v.shapeKey);
       if (id) {

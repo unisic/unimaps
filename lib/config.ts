@@ -118,7 +118,7 @@ export const OSRM_URL: string | null = (() => {
   const v = envStr("KB_OSRM_URL", "https://router.project-osrm.org/route/v1/driving").trim();
   return v.toLowerCase() === "off" ? null : v;
 })();
-const PUBLIC_OSRM = OSRM_URL !== null && /(^|\/\/)router\.project-osrm\.org\b/.test(OSRM_URL);
+export const PUBLIC_OSRM = OSRM_URL !== null && /(^|\/\/)router\.project-osrm\.org\b/.test(OSRM_URL);
 /** Minimum spacing between OSRM requests (clamped to ≥1000 ms on the public demo host). */
 export const OSRM_MIN_INTERVAL_MS = Math.max(PUBLIC_OSRM ? 1000 : 0, envInt("KB_OSRM_MIN_INTERVAL_MS", 1100, 250));
 export const OSRM_USER_AGENT = envStr("KB_OSRM_USER_AGENT", USER_AGENT);

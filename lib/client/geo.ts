@@ -1,5 +1,3 @@
-"use client";
-
 /** Distance helpers for the command palette's "nearest stops" features. */
 import type { Stop } from "@/lib/client/types";
 

@@ -18,9 +18,10 @@ import { Unzip, UnzipInflate } from "fflate";
 
 import * as config from "./config";
 import { col, DROP_OFF_ON_REQUEST, parseCsvLine, PICKUP_ON_REQUEST, pickupFlags } from "./gtfs-csv";
+import { matchedPoints, pruneMatched, rawKey } from "./gzm-match";
 import { log } from "./logger";
-import { buildRouterIndex, type RouterIndex } from "./router";
-import { finalizeShape, type ShapeGeometry, type ShapePayload, type ShapeStatus } from "./shape-store";
+import { buildRouterIndex, callColumns, type CallPool, type RouterIndex, type TripEntry, type TripStopEntry } from "./router";
+import { finalizeShape, type ShapeGeometry, type ShapePayload, type ShapeSrc, type ShapeStatus } from "./shape-store";
 import { gzmStopKey } from "./shared/gzm-stop-key";
 import { decodePolyline, preparePolyline, type LatLng } from "./shared/polyline";
 import type { WireStop } from "./types";
@@ -34,15 +35,8 @@ export interface GzmStop {
   lon: number;
 }
 
-/** Same fields as the router's TripStopEntry; secs since the service day's origin (may exceed 24 h). */
-export interface GzmTripStop {
-  stopId: string;
-  seq: number;
-  arr: number;
-  dep: number;
-}
-
-export interface GzmTrip {
+/** Calls as the router keeps them (`callColumns`): secs since the service day's origin (may exceed 24 h). */
+export interface GzmTrip extends Pick<TripEntry, "stopIds" | "seqs" | "arr" | "dep"> {
   /** `gzm:<trip_id>` */
   tripId: string;
   serviceId: string;
@@ -50,8 +44,6 @@ export interface GzmTrip {
   /** rider-facing line (route_short_name, e.g. "1N"; trip_short_name is empty in this feed) */
   line: string;
   headsign: string;
-  /** in stop_sequence order */
-  stops: GzmTripStop[];
   /** filled by the router */
   nums: Int32Array;
   pattern: string;
@@ -61,7 +53,7 @@ export interface GzmTrip {
   shapeId: string | null;
   brigade: string;
   dir: number;
-  /** per call: gtfs-csv NO_PICKUP | NO_DROP_OFF | *_ON_REQUEST */
+  /** per call: gtfs-csv NO_PICKUP | NO_DROP_OFF | *_ON_REQUEST; shared by every trip with the same flags */
   flags: Uint8Array;
   /** per call stop_headsign, null where the trip headsign applies; null when the trip has none */
   stopHeadsigns: ReadonlyArray<string | null> | null;
@@ -116,6 +108,8 @@ interface GzmShapeEntry {
   len: number;
   stops: Array<number | null>;
   rev: string;
+  /** snapped to the roads by OSRM (lib/gzm-match.ts): rawKey of the zbiorkom polyline */
+  raw?: string;
 }
 
 // ponytail: ~10 KB per prepared shape, so <= 12 MB; the live fleet touches ~800 shapes at peak
@@ -124,33 +118,81 @@ const GEOM_LRU = 1200;
 /** The feed's road shapes, served like ShapeStore's (same wire ids, same /api/shapes payload). */
 export class GzmShapes {
   private readonly geom = new Map<string, ShapeGeometry>();
+  /** matches in progress, by shape key: the matched part of the route on the raw rest; gone with the full match */
+  private readonly partial = new Map<string, GzmShapeEntry>();
 
-  constructor(private readonly entries: ReadonlyMap<string, GzmShapeEntry>) {}
+  constructor(private readonly entries: Map<string, GzmShapeEntry>) {}
 
   get size(): number {
     return this.entries.size;
   }
 
-  geometry(key: string): ShapeGeometry | null {
+  /** The geometry served for shape `key`: a partial match in progress over the feed's own. */
+  private current(key: string): { e: GzmShapeEntry; src: ShapeSrc } | null {
+    const p = this.partial.get(key);
+    if (p) return { e: p, src: "partial" };
     const e = this.entries.get(key);
-    if (!e) return null;
+    return e ? { e, src: e.raw ? "osrm" : "gtfs" } : null;
+  }
+
+  geometry(key: string): ShapeGeometry | null {
+    const c = this.current(key);
+    if (!c) return null;
     const hit = this.geom.get(key);
     if (hit) {
       this.geom.delete(key);
       this.geom.set(key, hit);
       return hit;
     }
-    const pl = preparePolyline(decodePolyline(e.poly));
+    const pl = preparePolyline(decodePolyline(c.e.poly));
     if (!pl) return null;
-    const g: ShapeGeometry = { pl, stops: e.stops, rev: e.rev, src: "gtfs" };
+    const g: ShapeGeometry = { pl, stops: c.e.stops, rev: c.e.rev, src: c.src };
     this.geom.set(key, g);
     if (this.geom.size > GEOM_LRU) this.geom.delete(this.geom.keys().next().value!);
     return g;
   }
 
-  wireId(key: string): string | null {
+  /** A shape still on its raw zbiorkom geometry. */
+  unmatched(key: string): Readonly<GzmShapeEntry> | null {
     const e = this.entries.get(key);
-    return e ? `${key}.${e.rev}` : null;
+    return e && !e.raw ? e : null;
+  }
+
+  /** rawKey of every shape's zbiorkom polyline, matched or not. */
+  rawKeys(): Set<string> {
+    const out = new Set<string>();
+    for (const e of this.entries.values()) out.add(e.raw ?? rawKey(e.poly));
+    return out;
+  }
+
+  /**
+   * Swap in the road-matched geometry of shape `key` while it is still at raw rev `rev`; a `partial` one
+   * (part of the route matched) is served until the full match replaces it.
+   */
+  upgrade(
+    key: string,
+    rev: string,
+    pts: readonly LatLng[],
+    refs: ReadonlyArray<readonly [number, number] | null>,
+    partial = false,
+  ): boolean {
+    const e = this.entries.get(key);
+    if (!e || e.raw || e.rev !== rev || refs.length !== e.stops.length) return false;
+    const m = finalizeShape(pts, refs, partial ? "partial" : "osrm");
+    if (!m) return false;
+    const next = { poly: m.poly, len: m.len, stops: m.stops, rev: m.rev };
+    if (partial) this.partial.set(key, next);
+    else {
+      this.entries.set(key, { ...next, raw: rawKey(e.poly) });
+      this.partial.delete(key);
+    }
+    this.geom.delete(key);
+    return true;
+  }
+
+  wireId(key: string): string | null {
+    const c = this.current(key);
+    return c ? `${key}.${c.e.rev}` : null;
   }
 
   status(key: string | null | undefined): ShapeStatus {
@@ -164,14 +206,15 @@ export class GzmShapes {
     for (const id of ids) {
       const dot = id.lastIndexOf(".");
       const key = dot > 0 && /\.[0-9a-f]{6}$/.test(id) ? id.slice(0, dot) : id;
-      const e = this.entries.get(key);
-      if (!e) {
+      const c = this.current(key);
+      if (!c) {
         missing.push(id);
         exact = false;
         continue;
       }
+      const e = c.e;
       if (key === id || id.slice(dot + 1) !== e.rev) exact = false;
-      shapes[id] = { id: `${key}.${e.rev}`, src: "gtfs", poly: e.poly, len: e.len, stops: e.stops };
+      shapes[id] = { id: `${key}.${e.rev}`, src: c.src, poly: e.poly, len: e.len, stops: e.stops };
     }
     return { shapes, missing, exact };
   }
@@ -252,7 +295,7 @@ function csvSink(open: (hdr: string[]) => RowFn | null): (data: Uint8Array, fina
 }
 
 interface TimesAcc {
-  stops: GzmTripStop[];
+  stops: TripStopEntry[];
   flags: number[];
   /** [row index, stop_headsign] */
   hs: Array<[number, string]> | null;
@@ -532,6 +575,9 @@ class FeedBuilder {
   private buildTrips(): Map<string, GzmTrip> {
     const dates = this.serviceDates();
     const trips = new Map<string, GzmTrip>();
+    // stopIds / seqs and flags shared by every trip with the same ones (2026-10-31: 3062 and 1995 for 38799 trips)
+    const pool: CallPool = new Map();
+    const flagPool = new Map<string, Uint8Array>();
     for (const [tripId, acc] of this.times) {
       const row = this.tripRows.get(tripId);
       const n = acc.stops.length;
@@ -551,20 +597,23 @@ class FeedBuilder {
         for (const [r, h] of acc.hs) if (h !== row.headsign) stopHeadsigns[pos ? pos[r] : r] = h;
         if (stopHeadsigns.every((h) => h === null)) stopHeadsigns = null;
       }
+      const own = Uint8Array.from({ length: n }, (_, i) => acc.flags[order ? order[i] : i]);
+      const fk = own.join();
+      const flags = flagPool.get(fk) ?? (flagPool.set(fk, own), own);
       const trip: GzmTrip = {
         tripId,
         serviceId: row.serviceId,
         routeId: row.routeId,
         line: this.routes.get(row.routeId)?.name || row.routeId,
         headsign: row.headsign,
-        stops: order ? order.map((i) => acc.stops[i]) : acc.stops,
+        ...callColumns(order ? order.map((i) => acc.stops[i]) : acc.stops, pool),
         nums: new Int32Array(0),
         pattern: "",
         dates: dates.get(row.serviceId) ?? EMPTY_DATES,
         shapeId: row.shapeId,
         brigade: row.brigade,
         dir: row.dir,
-        flags: Uint8Array.from({ length: n }, (_, i) => acc.flags[order ? order[i] : i]),
+        flags,
         stopHeadsigns,
         next: null,
       };
@@ -580,12 +629,13 @@ class FeedBuilder {
    *  start_time + k * headway_secs < end_time is a trip of its own (`<trip_id>.<start secs>`). Both exact_times
    *  kinds get exact times: a headway-based run shows its nominal departures. */
   private expand(t: GzmTrip, freq: Freq, out: Map<string, GzmTrip>): void {
-    const base = t.stops[0].dep;
+    const base = t.dep[0];
     for (const [start, end, headway] of freq.runs) {
       for (let at = start; at < end && this.freqTrips < MAX_FREQ_TRIPS; at += headway, this.freqTrips++) {
         const d = at - base;
         const tripId = this.gid(`${freq.raw}.${at}`);
-        out.set(tripId, { ...t, tripId, stops: t.stops.map((s) => ({ ...s, arr: s.arr + d, dep: s.dep + d })) });
+        const dep = t.dep.map((v) => v + d);
+        out.set(tripId, { ...t, tripId, arr: t.arr === t.dep ? dep : t.arr.map((v) => v + d), dep });
       }
     }
   }
@@ -613,13 +663,13 @@ class FeedBuilder {
         chain.push(t);
       }
       if (t.shapeId && !shapeTrip.has(t.shapeId)) shapeTrip.set(t.shapeId, t);
-      t.stops.forEach((s, i) => {
-        used.add(s.stopId);
-        request.set(s.stopId, (request.get(s.stopId) ?? 0) + (t.flags[i] & (PICKUP_ON_REQUEST | DROP_OFF_ON_REQUEST) ? 1 : -1));
+      t.stopIds.forEach((id, i) => {
+        used.add(id);
+        request.set(id, (request.get(id) ?? 0) + (t.flags[i] & (PICKUP_ON_REQUEST | DROP_OFF_ON_REQUEST) ? 1 : -1));
       });
     }
     for (const chain of chains.values()) {
-      chain.sort((a, b) => a.stops[0].dep - b.stops[0].dep);
+      chain.sort((a, b) => a.dep[0] - b.dep[0]);
       for (let i = 1; i < chain.length; i++) chain[i - 1].next = chain[i];
     }
 
@@ -639,6 +689,8 @@ class FeedBuilder {
 
     // one stop pattern per shape in this feed, so the first trip's stops place every trip's stops
     const shapeEntries = new Map<string, GzmShapeEntry>();
+    // road matching (lib/gzm-match.ts) covers GZM only, keyed by the zbiorkom shape's rev
+    const gzm = this.slug === "gzm";
     let built = 0;
     for (const [key, flat] of this.shapePts) {
       const trip = shapeTrip.get(key);
@@ -646,12 +698,16 @@ class FeedBuilder {
       const idx = Array.from({ length: flat.length / 3 }, (_, i) => i);
       if (idx.some((i) => i > 0 && flat[i * 3] <= flat[(i - 1) * 3])) idx.sort((a, b) => flat[a * 3] - flat[b * 3]);
       const pts: LatLng[] = idx.map((i) => [flat[i * 3 + 1], flat[i * 3 + 2]]);
-      const refs = trip.stops.map((s): [number, number] | null => {
-        const st = stops.get(s.stopId);
+      const refs = trip.stopIds.map((id): [number, number] | null => {
+        const st = stops.get(id);
         return st ? [st.lat, st.lon] : null;
       });
       const e = finalizeShape(pts, refs, "gtfs");
-      if (e) shapeEntries.set(key, { poly: e.poly, len: e.len, stops: e.stops, rev: e.rev });
+      if (e) {
+        const road = gzm ? matchedPoints(e.poly) : null;
+        const m = road ? finalizeShape(road, refs, "osrm") : null;
+        shapeEntries.set(key, m ? { poly: m.poly, len: m.len, stops: m.stops, rev: m.rev, raw: rawKey(e.poly) } : { poly: e.poly, len: e.len, stops: e.stops, rev: e.rev });
+      }
       if (++built % 200 === 0) await pause();
     }
     this.shapePts.clear();
@@ -870,6 +926,7 @@ export function getGzmFeed(slug = "gzm"): GzmFeed | null {
 function setFeed(s: FeedGlobal, feed: GzmFeed): void {
   s.feed = feed;
   s.hasFeed = true;
+  if (s.slug === "gzm") pruneMatched(feed.shapes);
   log.info(
     "gzm-feed",
     `${s.slug}: feed ${feed.version} (${feed.startDate}..${feed.endDate}): ${feed.stops.size} stops, ${feed.trips.size} trips, ` +

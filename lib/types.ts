@@ -136,6 +136,8 @@ export interface VehiclePos {
   speed?: number | null;
   /** epoch secs of the last speed sample */
   speedAt?: number;
+  /** timetable pace m/s around distM (schedSpeed in lib/route-info.ts) */
+  schedSpeed?: number | null;
   /** displacement (m) of the latest distinct fix vs its predecessor */
   moveDs?: number;
   /* ---- GPS progress (lib/kb-progress.ts; KB only) ---- */
@@ -188,6 +190,8 @@ export interface VehicleJson {
   next_stop_seq?: number;
   /** cruise speed m/s */
   speed?: number;
+  /** timetable pace m/s along `shape` around `dist_m` (dwell included) */
+  sched_speed?: number;
   /* ---- GPS progress (only while upstream's stop index is stale; see lib/kb-progress.ts) ---- */
   /** "gps" | "gps-held": `delay` is the schedule deviation at the GPS position, not upstream's estimate;
    *  "unknown": upstream's estimate is known wrong and the bus can't be placed, `delay` is null */

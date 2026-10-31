@@ -103,9 +103,9 @@ before(async () => {
     signalsRegistered: true,
     lastStartFailAt: 0,
   };
-  departuresGet = (await import("../app/api/stop/[designator]/departures/route")).GET as RouteGet;
-  tripExecutionGet = (await import("../app/api/trip_execution/route")).GET;
-  tripStaticGet = (await import("../app/api/trip/[tripId]/route")).GET as RouteGet;
+  departuresGet = (await import("../server/api/stop/[designator]/departures/route")).GET as RouteGet;
+  tripExecutionGet = (await import("../server/api/trip_execution/route")).GET;
+  tripStaticGet = (await import("../server/api/trip/[tripId]/route")).GET as RouteGet;
 });
 
 after(() => {

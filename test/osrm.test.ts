@@ -10,8 +10,13 @@ import {
   classifyOsrmResponse,
   absurdLegs,
   implausibleLegs,
+  matchChunk,
   mergeChunkGeometries,
+  osrmMatchBase,
+  osrmMatchUrl,
   osrmRouteUrl,
+  paceRequest,
+  plausibleMatch,
   routeChunk,
   routeWaypoints,
   waypointBearings,
@@ -257,5 +262,83 @@ describe("routeWaypoints", () => {
     const r = await routeChunk(wps, opts(fetchImpl, { n: 0 }), waypointBearings(wps));
     assert.ok(r.ok);
     assert.deepEqual(r.legs.map(Math.round), [100, 100, 100]);
+  });
+});
+
+describe("OSRM map matching", () => {
+  const trace = Array.from({ length: 25 }, (_, i) => P(i * 100, (i % 2) * 8));
+  const matchOpts = (fetchImpl: typeof fetch): OsrmClientOpts => ({ ...opts(fetchImpl, { n: 0 }), base: "https://osrm.test/match/v1/driving" });
+  /** answers like /match: the chunk snapped onto the y = 0 road */
+  const snapped = (coords: LatLng[]) => {
+    const road = coords.map(([, lon]): LatLng => [LAT0, lon]);
+    return {
+      status: 200,
+      body: {
+        code: "Ok",
+        matchings: [{ geometry: encodePolyline(road), legs: road.slice(1).map(() => ({ distance: 100 })) }],
+      },
+    };
+  };
+
+  it("match base and url: /route/ becomes /match/, one radius per point", () => {
+    assert.equal(osrmMatchBase("https://router.project-osrm.org/route/v1/driving"), "https://router.project-osrm.org/match/v1/driving");
+    assert.equal(osrmMatchBase("https://osrm.example/v1/driving"), null);
+    const url = new URL(osrmMatchUrl("https://osrm.test/match/v1/driving/", [P(0, 0), P(100, 0)]));
+    assert.equal(url.pathname.split("/").at(-1)!.split(";").length, 2);
+    assert.equal(url.searchParams.get("radiuses"), "25;25");
+    assert.equal(url.searchParams.get("gaps"), "ignore");
+  });
+
+  it("plausibleMatch rejects a detour around the block and a far-off match", () => {
+    const line = [P(0, 0), P(500, 0)];
+    assert.equal(plausibleMatch([P(0, 5), P(500, 5)], line), true);
+    assert.equal(plausibleMatch([P(0, 0), P(0, 55), P(250, 55), P(250, -55), P(500, -55), P(500, 0)], line), false);
+    assert.equal(plausibleMatch([P(0, 80), P(500, 80)], line), false);
+  });
+
+  it("snaps a chunk onto the road; chunks of `size` share a point", async () => {
+    const chunks = chunkWaypoints(trace, 10);
+    assert.ok(chunks.every((c) => c.length <= 10));
+    assert.deepEqual(chunks[1][0], chunks[0].at(-1));
+    const { fetchImpl, calls } = fakeOsrm(snapped);
+    const r = await matchChunk(chunks[0], matchOpts(fetchImpl));
+    assert.ok(r.ok);
+    assert.equal(r.kept, false);
+    assert.equal(calls.length, 1);
+    assert.ok(r.pts.every((p) => Math.abs(p[0] - LAT0) < 1e-9));
+    assert.deepEqual(r.pts[0], [LAT0, trace[0][1]]);
+  });
+
+  it("a chunk matched implausibly or in pieces keeps its own points", async () => {
+    const chunk = chunkWaypoints(trace, 10)[0];
+    const far = fakeOsrm((coords) => ({ status: 200, body: { code: "Ok", matchings: [{ geometry: encodePolyline(coords.map(([, lon]): LatLng => [LAT0 + 0.01, lon])), legs: coords.slice(1).map(() => ({ distance: 100 })) }] } }));
+    const none = fakeOsrm(() => ({ status: 200, body: { code: "NoMatch", message: "no match" } }));
+    for (const { fetchImpl } of [far, none]) {
+      const r = await matchChunk(chunk, matchOpts(fetchImpl));
+      assert.ok(r.ok);
+      assert.equal(r.kept, true);
+      assert.deepEqual(r.pts, chunk, "a kept chunk keeps the trace's own zigzag");
+    }
+  });
+
+  it("a hard failure is reported, not kept", async () => {
+    const { fetchImpl, calls } = fakeOsrm(() => ({ status: 429, body: { message: "slow down" }, headers: { "retry-after": "30" } }));
+    const r = await matchChunk(chunkWaypoints(trace, 10)[0], matchOpts(fetchImpl));
+    assert.equal(r.ok, false);
+    assert.equal(calls.length, 1);
+    if (!r.ok) assert.equal(r.kind, "ratelimited");
+  });
+
+  it("paceRequest spaces callers that share one pace", async () => {
+    const pace = { nextSlot: 0 };
+    const slept: number[] = [];
+    const sleep = async (ms: number) => {
+      slept.push(ms);
+    };
+    await paceRequest(pace, 1000, 5000, sleep);
+    await paceRequest(pace, 1000, 5200, sleep);
+    await paceRequest(pace, 1000, 9000, sleep);
+    assert.deepEqual(slept, [800]);
+    assert.equal(pace.nextSlot, 10_000);
   });
 });

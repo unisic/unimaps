@@ -1,5 +1,3 @@
-"use client";
-
 /**
  * "Zainstaluj aplikację": Chromium's deferred `beforeinstallprompt` (Android, desktop) or, on iOS,
  * the Share-sheet instructions. iOS matters most: Safari exposes `Notification` (so "Powiadom mnie"
@@ -8,7 +6,7 @@
  * the root bundle) because Chrome fires `beforeinstallprompt` once, soon after load, before the map
  * tree's chunk mounts.
  */
-import { useSyncExternalStore } from "react";
+import { external } from "@/lib/client/external";
 
 export type InstallKind = "prompt" | "ios" | null;
 
@@ -71,14 +69,13 @@ function subscribe(fn: () => void): () => void {
   };
 }
 
-/** Outside React (TripView's alert toast). */
+/** Outside a reactive read (TripView's alert toast). */
 export function currentInstallKind(): InstallKind {
   return typeof window === "undefined" ? null : getSnapshot();
 }
 
-export function useInstall(): InstallKind {
-  return useSyncExternalStore(subscribe, getSnapshot, () => null);
-}
+/** Reactive install kind (`.current`). */
+export const install = external(subscribe, currentInstallKind);
 
 /** Opens Chromium's install dialog; the deferred event is single-use, so the row hides at once. */
 export async function promptInstall(): Promise<void> {

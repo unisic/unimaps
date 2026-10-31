@@ -11,11 +11,11 @@ import { resolveSmoothMotion } from "../lib/client/smoothMotion";
 import { encodePolyline } from "../lib/shared/polyline";
 
 describe("resolveSmoothMotion", () => {
-  it("an early feature: on only after an explicit opt-in", () => {
+  it("on by default; only an explicit switch-off turns it off", () => {
     assert.equal(resolveSmoothMotion("1"), true);
     assert.equal(resolveSmoothMotion("0"), false);
-    assert.equal(resolveSmoothMotion(null), false);
-    assert.equal(resolveSmoothMotion("garbage"), false);
+    assert.equal(resolveSmoothMotion(null), true);
+    assert.equal(resolveSmoothMotion("garbage"), true);
   });
 });
 

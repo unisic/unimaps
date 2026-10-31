@@ -1,7 +1,15 @@
 @import "tailwindcss";
 
+@font-face {
+  font-family: "Geist";
+  src: url("./fonts/Geist-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
 @theme {
-  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+  --font-sans: "Geist", ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
 
   /* ---- surfaces (Material-3-like dark neutrals) ---- */
   --color-bg: #0d1013;
@@ -240,13 +248,6 @@ body {
 .veh-mode .veh-poles { fill: none; stroke: currentColor; stroke-width: 16; stroke-linecap: round; }
 
 .veh-line { display: block; }
-/* "+N": the pill stands for a stack of vehicles that would cover each other */
-.veh-more {
-  margin-left: 2px; padding: 2px 4px; border-radius: 999px;
-  background: rgba(255, 255, 255, 0.28);
-  font-size: 10.5px;
-}
-
 .leaflet-marker-icon.veh-marker:hover .veh-pill,
 .leaflet-marker-icon.veh-marker:focus-visible .veh-pill {
   transform: translate(-50%, -50%) scale(1.08);
@@ -419,16 +420,6 @@ body {
   border-radius: 14px;
   padding: 6px 12px 6px 6px;
 }
-/* list of a vehicle stack (VehicleLayer): the tooltip card's surface */
-.leaflet-popup.kb-popup .leaflet-popup-content-wrapper {
-  background: var(--color-surface);
-  color: var(--color-text);
-  border: 1px solid var(--color-hairline);
-  border-radius: 14px;
-  box-shadow: var(--shadow-float);
-}
-.leaflet-popup.kb-popup .leaflet-popup-content { margin: 4px; }
-.leaflet-popup.kb-popup .leaflet-popup-tip { background: var(--color-surface); }
 .leaflet-tooltip-top.kb-tooltip::before { border-top-color: var(--color-surface); }
 .leaflet-tooltip-bottom.kb-tooltip::before { border-bottom-color: var(--color-surface); }
 .leaflet-tooltip-left.kb-tooltip::before { border-left-color: var(--color-surface); }

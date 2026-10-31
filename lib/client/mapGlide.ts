@@ -1,5 +1,3 @@
-"use client";
-
 import L from "leaflet";
 import { easeSpring, glideSeconds, prefersReducedMotion } from "@/lib/client/motion";
 
@@ -184,6 +182,12 @@ export function glideTo(map: L.Map, target: L.LatLngExpression, zoom: number, at
   }
   if (screens > FLY_SCREENS) {
     m.flyTo(end, zoom, { duration: 0.8 });
+    // after flyTo's own _stop; a cut fly owes the zoomend its zoomstart promised, like a cut zoom
+    const fly = { cut: () => m.fire("zoomend") };
+    running.set(m, fly);
+    m.once("zoomend", () => {
+      if (running.get(m) === fly) running.delete(m);
+    });
     return;
   }
   const dz = zoom - m.getZoom();
@@ -217,4 +221,84 @@ export function glideTo(map: L.Map, target: L.LatLngExpression, zoom: number, at
     m.fire("moveend");
   };
   m._flyToFrame = requestAnimationFrame(pan);
+}
+
+/** The lock's own frame pans: no user move, so MapApp keeps marker CSS glides running. */
+const locking = new WeakSet<L.Map>();
+/** Farther off its spot than this many px the lock glides there (a new focus, a zoom, the start). */
+const LOCK_JUMP = 48;
+/** A gap this small (rounding) closes at once. */
+const LOCK_EXACT = 2;
+/** While the lock pans, moveend (URL, stop/vehicle culling, route clipping) runs at most this often. */
+const LOCK_MOVEEND_MS = 500;
+
+const chebyshev = (p: L.Point) => Math.max(Math.abs(p.x), Math.abs(p.y));
+
+export function isLockMove(map: L.Map): boolean {
+  return locking.has(map);
+}
+
+/**
+ * Keep `target()` drawn at container point `at()` on every frame: the map pane shifts with the
+ * marker by whole pixels (markers sit on rounded layer points), so the bus stays put and the map
+ * moves under it. A far spot is reached with glideTo; the lock rests while a glide or a zoom
+ * runs. Returns the stop function.
+ */
+export function lockOn(map: L.Map, target: () => L.LatLng | null, at: () => L.Point): () => void {
+  const pane = map.getPanes().mapPane;
+  let zooming = false;
+  let dirty = false;
+  let lastEnd = 0;
+  const zoomStart = () => (zooming = true);
+  const zoomEnd = () => (zooming = false);
+  // the target's rounded layer point last frame: its own motion is followed at once, the rest
+  // (a new focus point, what a glide left over) closes over a few frames
+  let prev: L.Point | null = null;
+  const frame = (now: number) => {
+    raf = requestAnimationFrame(frame);
+    if (zooming || running.has(map)) {
+      prev = null;
+      return;
+    }
+    const ll = target();
+    if (!ll) {
+      prev = null;
+      return;
+    }
+    const lp = map.latLngToLayerPoint(ll).round();
+    const pos = L.DomUtil.getPosition(pane);
+    const want = at().round().subtract(lp);
+    if (chebyshev(want.subtract(pos)) > LOCK_JUMP) {
+      prev = null;
+      glideTo(map, ll, map.getZoom(), at());
+      return;
+    }
+    // a pixel-origin reset (setView) shifts every layer point: no motion to follow then
+    const moved = prev && chebyshev(prev.subtract(lp)) <= LOCK_JUMP ? prev.subtract(lp) : L.point(0, 0);
+    prev = lp;
+    const rest = want.subtract(pos).subtract(moved);
+    const step = moved.add(chebyshev(rest) <= LOCK_EXACT ? rest : rest.multiplyBy(0.25).round());
+    if (step.x || step.y) {
+      L.DomUtil.setPosition(pane, pos.add(step));
+      locking.add(map);
+      try {
+        map.fire("move");
+      } finally {
+        locking.delete(map);
+      }
+      dirty = true;
+    }
+    if (dirty && now - lastEnd >= LOCK_MOVEEND_MS) {
+      lastEnd = now;
+      dirty = false;
+      map.fire("moveend");
+    }
+  };
+  let raf = requestAnimationFrame(frame);
+  map.on("zoomstart", zoomStart).on("zoomend", zoomEnd);
+  return () => {
+    cancelAnimationFrame(raf);
+    map.off("zoomstart", zoomStart).off("zoomend", zoomEnd);
+    if (dirty) map.fire("moveend");
+  };
 }

@@ -1,10 +1,10 @@
 import "./support/tmp-output"; // first: redirects KB_OUTPUT_DIR before lib/config is evaluated
 import assert from "node:assert/strict";
 import { beforeEach, describe, it } from "node:test";
-import { GET as getStops } from "../app/api/stops/route";
-import { GET as getDepartures } from "../app/api/stop/[designator]/departures/route";
-import { GET as getTimetable } from "../app/api/stop/[designator]/timetable/route";
-import { GET as getHealth } from "../app/api/health/route";
+import { GET as getStops } from "../server/api/stops/route";
+import { GET as getDepartures } from "../server/api/stop/[designator]/departures/route";
+import { GET as getTimetable } from "../server/api/stop/[designator]/timetable/route";
+import { GET as getHealth } from "../server/api/health/route";
 import { MzkStopDirs } from "../lib/mzk-stop-dirs";
 import type { Stop } from "../lib/types";
 import { departuresBoardCache } from "../lib/departures-board-cache";

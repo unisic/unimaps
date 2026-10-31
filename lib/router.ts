@@ -121,6 +121,7 @@ interface StopEntry {
   lon: number;
 }
 
+/** One stop_times row while a feed loads; a loaded trip keeps its calls as columns (`callColumns`). */
 export interface TripStopEntry {
   stopId: string;
   seq: number;
@@ -134,14 +135,19 @@ export interface TripEntry {
   routeId: string;
   line: string;
   headsign: string;
-  stops: TripStopEntry[];
+  /** per call in stop_sequence order; one array for every trip with the same calls, never mutated */
+  stopIds: readonly string[];
+  seqs: Int32Array;
+  /** per call, secs from the service day's midnight, non-decreasing; one array when every call's arr equals its dep */
+  arr: Int32Array;
+  dep: Int32Array;
   /** MZK only: the OnTime day types the course runs on (KB trips use serviceId + calendar.txt) */
   dayTypes?: Set<string>;
   /** GZM only: the Warsaw dates the trip runs on (checked before dayTypes and calendar.txt; empty = never) */
   dates?: ReadonlySet<string>;
-  /** GZM only: per call gtfs-csv pickup bits; NO_PICKUP / NO_DROP_OFF calls are not boarded / alighted */
+  /** GZM only: per call gtfs-csv pickup bits; NO_PICKUP / NO_DROP_OFF calls are not boarded / alighted (shared, never mutated) */
   flags?: Uint8Array;
-  /** stop numbers (RouterIndex.stopIds) in stop order; trips with the same `pattern` share RAPTOR routes */
+  /** stop numbers (RouterIndex.stopIds) in stop order, shared like stopIds; trips with the same `pattern` share RAPTOR routes */
   nums: Int32Array;
   pattern: string;
 }
@@ -325,6 +331,20 @@ function sameCalls(a: TripStopEntry[], b: TripStopEntry[]): boolean {
   return a.length === b.length && a.every((s, i) => s.stopId === b[i].stopId && s.dep === b[i].dep);
 }
 
+/** stopIds / seqs by calls while one feed loads (GZM 2026-10-31: 3062 for 38799 trips) */
+export type CallPool = Map<string, Pick<TripEntry, "stopIds" | "seqs">>;
+
+/** A trip's calls as columns: sorted by seq, times non-decreasing (`monotonic`), stopIds / seqs shared through `pool`. */
+export function callColumns(calls: TripStopEntry[], pool: CallPool): Pick<TripEntry, "stopIds" | "seqs" | "arr" | "dep"> {
+  calls.sort((a, b) => a.seq - b.seq);
+  monotonic(calls);
+  const key = calls.map((c) => `${c.stopId}\u0000${c.seq}`).join("\u0000");
+  let shared = pool.get(key);
+  if (!shared) pool.set(key, (shared = { stopIds: calls.map((c) => c.stopId), seqs: Int32Array.from(calls, (c) => c.seq) }));
+  const dep = Int32Array.from(calls, (c) => c.dep);
+  return { ...shared, arr: calls.every((c) => c.arr === c.dep) ? dep : Int32Array.from(calls, (c) => c.arr), dep };
+}
+
 function loadIndex(): RouterIndex | null {
   const dir = config.GTFS_DIR;
   let stopsTxt: string;
@@ -370,7 +390,8 @@ function loadIndex(): RouterIndex | null {
     for (const [sym, [name, lat, lon]] of Object.entries(mzk.stops)) addStop(`mzk:${sym}`, name, lat, lon);
   }
 
-  const trips = new Map<string, TripEntry>();
+  // raw calls while loading: the MZK variants compare them (`sameCalls`), then they become columns
+  const trips = new Map<string, Omit<TripEntry, "stopIds" | "seqs" | "arr" | "dep"> & { stops: TripStopEntry[] }>();
   const tripLines = splitLines(tripsTxt);
   const tripHdr = parseCsvLine(tripLines[0]);
   const iTripId = col(tripHdr, "trip_id");
@@ -475,7 +496,10 @@ function loadIndex(): RouterIndex | null {
   }
 
   const mzkDayTypes = new Map(Object.entries(mzk?.calendar ?? {}));
-  return buildRouterIndex({ stops: stopInputs, trips, services, mzkDayTypes });
+  const pool: CallPool = new Map();
+  const loaded = new Map<string, TripEntry>();
+  for (const [key, { stops, ...trip }] of trips) loaded.set(key, { ...trip, ...callColumns(stops, pool) });
+  return buildRouterIndex({ stops: stopInputs, trips: loaded, services, mzkDayTypes });
 }
 
 /** The calls a trip can't be boarded / alighted at (a first call's NO_DROP_OFF and a last call's NO_PICKUP block nothing). */
@@ -493,8 +517,8 @@ function blockFlags(trip: TripEntry): Uint8Array | null {
 }
 
 /**
- * Pole maps, stop numbers, trip patterns and walking transfers over the given stops and trips. Sorts, wraps and
- * numbers every trip in place (`stops`, `nums`, `pattern`).
+ * Pole maps, stop numbers, trip patterns and walking transfers over the given stops and trips (calls from
+ * `callColumns`). Numbers every trip in place (`nums`, `pattern`).
  */
 export function buildRouterIndex(input: RouterInput): RouterIndex {
   const stops = new Map<string, StopEntry>();
@@ -532,12 +556,16 @@ export function buildRouterIndex(input: RouterInput): RouterIndex {
     }
     return n;
   };
+  // trips with the same calls share one stopIds, so one nums; equal patterns are one string
+  const numsOf = new Map<readonly string[], Int32Array>();
+  const patterns = new Map<string, string>();
   for (const trip of trips.values()) {
-    trip.stops.sort((a, b) => a.seq - b.seq);
-    monotonic(trip.stops);
-    trip.nums = Int32Array.from(trip.stops, (s) => num(s.stopId));
+    let nums = numsOf.get(trip.stopIds);
+    if (!nums) numsOf.set(trip.stopIds, (nums = Int32Array.from(trip.stopIds, num)));
+    trip.nums = nums;
     const blocks = blockFlags(trip);
-    trip.pattern = blocks ? `${trip.nums.join(",")}|${blocks.join("")}` : trip.nums.join(",");
+    const key = blocks ? `${nums.join(",")}|${blocks.join("")}` : nums.join(",");
+    trip.pattern = patterns.get(key) ?? (patterns.set(key, key), key);
   }
 
   // walking transfers: poles bucketed on a grid of WALK_MAX_M cells, each pole's list in stop-number order
@@ -726,15 +754,17 @@ function buildLegStops(
   baseDepSecs: number,
 ): ConnectionLegStop[] {
   const result: ConnectionLegStop[] = [];
-  const tripDep0 = trip.stops[startIdx].dep;
+  const tripDep0 = trip.dep[startIdx];
   for (let s = startIdx; s <= endIdx; s++) {
-    const ts = trip.stops[s];
-    const sEntry = idx.stops.get(ts.stopId);
-    const offsetArr = s === startIdx ? 0 : (ts.arr < tripDep0 ? ts.arr + 86400 : ts.arr) - tripDep0;
-    const offsetDep = (ts.dep < tripDep0 ? ts.dep + 86400 : ts.dep) - tripDep0;
+    const stopId = trip.stopIds[s];
+    const sEntry = idx.stops.get(stopId);
+    const arr = trip.arr[s];
+    const dep = trip.dep[s];
+    const offsetArr = s === startIdx ? 0 : (arr < tripDep0 ? arr + 86400 : arr) - tripDep0;
+    const offsetDep = (dep < tripDep0 ? dep + 86400 : dep) - tripDep0;
     result.push({
-      stopId: ts.stopId,
-      stopName: sEntry?.name || ts.stopId,
+      stopId,
+      stopName: sEntry?.name || stopId,
       arrivalTime: formatHHMM(baseDepSecs + offsetArr),
       departureTime: formatHHMM(baseDepSecs + offsetDep),
       lat: sEntry?.lat,
@@ -750,10 +780,10 @@ interface Instance {
 }
 
 function overtakes(a: Instance, b: Instance): boolean {
-  const x = a.trip.stops;
-  const y = b.trip.stops;
-  for (let p = 0; p < x.length; p++) {
-    if (x[p].dep + a.off < y[p].dep + b.off || x[p].arr + a.off < y[p].arr + b.off) return true;
+  const x = a.trip;
+  const y = b.trip;
+  for (let p = 0; p < x.dep.length; p++) {
+    if (x.dep[p] + a.off < y.dep[p] + b.off || x.arr[p] + a.off < y.arr[p] + b.off) return true;
   }
   return false;
 }
@@ -770,8 +800,8 @@ function dayTable(idx: RouterIndex, date: string): DayTable {
     const d = offsetDate(date, o);
     const wd = weekdayMonday0(d);
     for (const trip of idx.trips.values()) {
-      const n = trip.stops.length;
-      if (n < 2 || (o < 0 && trip.stops[n - 1].arr < 86400) || !isTripActiveOnDay(trip, wd, d, idx)) continue;
+      const n = trip.arr.length;
+      if (n < 2 || (o < 0 && trip.arr[n - 1] < 86400) || !isTripActiveOnDay(trip, wd, d, idx)) continue;
       let g = groups.get(trip.pattern);
       if (!g) groups.set(trip.pattern, (g = []));
       g.push({ trip, off: o * 86400 });
@@ -780,7 +810,7 @@ function dayTable(idx: RouterIndex, date: string): DayTable {
   const routes: Route[] = [];
   const at: number[][] = idx.stopIds.map(() => []);
   for (const g of groups.values()) {
-    g.sort((a, b) => a.trip.stops[0].dep + a.off - (b.trip.stops[0].dep + b.off));
+    g.sort((a, b) => a.trip.dep[0] + a.off - (b.trip.dep[0] + b.off));
     const split: Instance[][] = [];
     for (const inst of g) {
       const fit = split.find((s) => !overtakes(inst, s[s.length - 1]));
@@ -792,12 +822,12 @@ function dayTable(idx: RouterIndex, date: string): DayTable {
       const len = seq.length;
       const arr = new Int32Array(s.length * len);
       const dep = new Int32Array(s.length * len);
-      s.forEach(({ trip, off }, t) =>
-        trip.stops.forEach((st, p) => {
-          arr[t * len + p] = st.arr + off;
-          dep[t * len + p] = st.dep + off;
-        }),
-      );
+      s.forEach(({ trip, off }, t) => {
+        for (let p = 0; p < len; p++) {
+          arr[t * len + p] = trip.arr[p] + off;
+          dep[t * len + p] = trip.dep[p] + off;
+        }
+      });
       const r = routes.length;
       routes.push({ stops: seq, trips: s.map((x) => x.trip), arr, dep, flags: blockFlags(s[0].trip) });
       for (let p = 0; p < len; p++) at[seq[p]].push(r, p);
@@ -812,7 +842,7 @@ function dayTable(idx: RouterIndex, date: string): DayTable {
 
 export interface StopEvent {
   trip: TripEntry;
-  /** call index in trip.stops */
+  /** call index in trip */
   pos: number;
   /** secs from `date`'s midnight, like every router time */
   arr: number;
@@ -841,7 +871,7 @@ export function stopEvents(idx: RouterIndex, poleIds: Iterable<string>, date: st
         const dep = route.dep[t * len + p];
         if (dep < from || dep >= to) continue;
         const trip = route.trips[t];
-        const serviceDate = offsetDate(date, Math.round((dep - trip.stops[p].dep) / 86400));
+        const serviceDate = offsetDate(date, Math.round((dep - trip.dep[p]) / 86400));
         out.push({ trip, pos: p, arr: route.arr[t * len + p], dep, serviceDate });
       }
     }
@@ -870,7 +900,7 @@ export function lineTimetable(line: string, operator: "KB" | "MZK" | "GZM", date
   const keep = (id: string): boolean => (operator === "GZM" ? true : operator === "MZK" ? id.startsWith("mzk:") : !/^(mzk|gzm):/.test(id));
   const groups = new Map<string, TripEntry[]>();
   for (const trip of idx.trips.values()) {
-    if (trip.line !== line || trip.stops.length < 2) continue;
+    if (trip.line !== line || trip.stopIds.length < 2) continue;
     if (!keep(trip.tripId)) continue;
     if (!isTripActiveOnDay(trip, wd, date, idx)) continue;
     const key = trip.nums.join(",");
@@ -882,15 +912,15 @@ export function lineTimetable(line: string, operator: "KB" | "MZK" | "GZM", date
     .sort((a, b) => b.length - a.length)
     .slice(0, MAX_VARIANTS)
     .map((trips) => {
-      trips.sort((a, b) => a.stops[0].dep - b.stops[0].dep);
+      trips.sort((a, b) => a.dep[0] - b.dep[0]);
       return {
         tripId: trips[0].tripId,
         headsign: trips[0].headsign,
-        stops: trips[0].stops.map(({ stopId }) => {
+        stops: trips[0].stopIds.map((stopId) => {
           const e = idx.stops.get(stopId);
           return { id: stopId, name: e?.name || stopId, lat: e?.lat, lon: e?.lon };
         }),
-        times: trips.map((t) => t.stops.map((st) => Math.round(st.dep / 60))),
+        times: trips.map((t) => Array.from(t.dep, (dep) => Math.round(dep / 60))),
       };
     });
 }
@@ -921,7 +951,7 @@ function adjustTable(table: DayTable, date: string, query: RouteQuery): DayTable
         keep ??= Array.from({ length: t }, (_, i) => i);
         continue;
       }
-      const off = route.dep[t * len] - trip.stops[0].dep;
+      const off = route.dep[t * len] - trip.dep[0];
       const delay = live ? live(trip.tripId, dates[1 + off / 86400]) : undefined;
       if (delay !== undefined) {
         keep ??= Array.from({ length: t }, (_, i) => i);
@@ -1215,8 +1245,8 @@ function toItinerary(
     const delay = route.delays?.[t];
     const dep = route.dep[t * len + board] - (delay ?? 0);
     const arr = route.arr[t * len + alight] - (delay ?? 0);
-    const fromId = trip.stops[board].stopId;
-    const toId = trip.stops[alight].stopId;
+    const fromId = trip.stopIds[board];
+    const toId = trip.stopIds[alight];
     return {
       line: trip.line,
       tripId: trip.tripId,

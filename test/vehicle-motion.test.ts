@@ -8,6 +8,7 @@ import { describe, it } from "node:test";
 import {
   createMotionStore,
   makeMotionShape,
+  softCap,
   travel,
   type MotionInput,
   type MotionSample,
@@ -65,7 +66,45 @@ describe("travel", () => {
   });
 });
 
+describe("softCap", () => {
+  it("is the identity short of the braking zone, then bends smoothly onto the cap", () => {
+    assert.equal(softCap(10, 100, 20), 10);
+    assert.equal(softCap(80, 100, 20), 80);
+    assert.equal(softCap(120, 100, 20), 100);
+    assert.equal(softCap(500, 100, 20), 100);
+    let prev = softCap(0, 100, 20);
+    for (let d = 0.01; d <= 150; d += 0.01) {
+      const v = softCap(d, 100, 20);
+      assert.ok(v >= prev - 1e-9 && v - prev < 0.0101 && v <= 100, `at ${d}: ${prev} -> ${v}`);
+      prev = v;
+    }
+  });
+
+  it("a cap inside the braking zone or behind the fix still holds", () => {
+    assert.equal(softCap(50, 3, 20), 3);
+    assert.equal(softCap(50, 0, 20), 0);
+    assert.equal(softCap(50, -5, 20), 0);
+  });
+});
+
 describe("prediction", () => {
+  it("without a cruise speed the timetable pace stands in", () => {
+    const m = createMotionStore();
+    m.setShape(road());
+    m.ingest([V(200, { sched_speed: 10, fix_at: 0 })], 0, 0);
+    at(m, 0);
+    const p = at(m, 5_000);
+    assert.ok(Math.abs(p - 250) < 0.5, `got ${p}`);
+  });
+
+  it("with both, the predicted pace blends cruise and timetable", () => {
+    const m = createMotionStore({ schedW: 0.5 });
+    m.setShape(road());
+    m.ingest([V(200, { speed: 8, sched_speed: 12, fix_at: 0 })], 0, 0);
+    at(m, 0);
+    assert.ok(Math.abs(m.inspect("bus")!.vPred - (0.5 * 0.95 * 8 + 0.5 * 12)) < 1e-9);
+  });
+
   it("without a speed it never extrapolates", () => {
     const m = createMotionStore();
     m.setShape(road());
@@ -130,6 +169,26 @@ describe("correction", () => {
     }
   });
 
+  it("brakes into a halted target instead of stopping on contact", () => {
+    const m = createMotionStore();
+    m.setShape(road());
+    m.ingest([V(300, { speed: 10, fix_at: 0 })], 0, 0);
+    for (let t = 0; t <= 2_000; t += 16) at(m, t);
+    // the fix is 180 m on: the marker catches up while the target settles at the stop cap
+    m.ingest([V(480, { speed: 10, fix_at: 2 })], 2_000, 2_000);
+    let ps = at(m, 2_016);
+    let pv: number | null = null;
+    for (let t = 2_032; t < 30_000; t += 16) {
+      const s = at(m, t);
+      const v = (s - ps) / 0.016;
+      // halting on contact from catch-up pace is a few hundred m/s² in one frame
+      if (pv !== null) assert.ok((pv - v) / 0.016 < 10, `decel ${((pv - v) / 0.016).toFixed(1)} m/s² at ${t}`);
+      pv = v;
+      ps = s;
+    }
+    assert.ok(Math.abs(ps - 492) < 0.5, `got ${ps}`);
+  });
+
   it("ahead: slows/waits, never drives backwards", () => {
     const m = createMotionStore();
     m.setShape(road());
@@ -154,15 +213,21 @@ describe("correction", () => {
     assert.ok(Math.abs(at(m, 4_000) - 900) < 1);
   });
 
-  it("a ghost (no new fix for long) settles back onto the last fix", () => {
+  it("a ghost (no new fix for long) stops where it is, never drives back", () => {
     const m = createMotionStore();
     m.setShape(road());
     m.ingest([V(100, { speed: 10, fix_at: 0 })], 0, 0);
     let t = 0;
     for (; t < 30_000; t += 100) at(m, t);
-    assert.ok(at(m, t) > 200);
-    for (; t < 90_000; t += 100) at(m, t);
-    assert.ok(Math.abs(at(m, t) - 100) < 5, `got ${at(m, t)}`);
+    const stopped = at(m, t);
+    assert.ok(stopped > 200);
+    let prev = stopped;
+    for (; t < 90_000; t += 100) {
+      const p = at(m, t);
+      assert.ok(p >= prev - 1e-6, `moved backwards by ${prev - p} at ${t}`);
+      prev = p;
+    }
+    assert.ok(Math.abs(prev - stopped) < 60, `got ${prev}`);
   });
 });
 
@@ -188,6 +253,22 @@ describe("straight fallback (no road shape)", () => {
     m.ingest([back(400, 10)], 10_000, 10_000);
     at(m, 10_000);
     assert.ok(Math.abs(at(m, 20_000) - 400) < 1);
+  });
+
+  it("a fix behind the extrapolated marker, with no speed to go on: waits, never drives back", () => {
+    const m = createMotionStore();
+    const fix = (s: number, fixAt: number, speed?: number) => V(s, { shape: undefined, dist_m: undefined, speed, fix_at: fixAt });
+    m.ingest([fix(300, 0, 10)], 0, 0);
+    m.ingest([fix(400, 10, 10)], 10_000, 10_000);
+    for (let t = 10_000; t <= 20_000; t += 250) at(m, t);
+    m.ingest([fix(420, 20)], 20_000, 20_000);
+    let prev = at(m, 20_000);
+    assert.ok(prev > 440, `extrapolated to ${prev}`);
+    for (let t = 20_250; t <= 40_000; t += 250) {
+      const x = at(m, t);
+      assert.ok(x >= prev - 0.01, `${t}: ${prev} -> ${x}`);
+      prev = x;
+    }
   });
 });
 

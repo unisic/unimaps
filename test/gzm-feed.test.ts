@@ -2,6 +2,7 @@
  * GZM static feed: streamed zip parse (dates, flags, stop headsigns, brigade chains, shapes), the GTFS service-day
  * origin across both DST switches, the refresh schedule and the capped download.
  */
+import "./support/tmp-output"; // first: KB_OUTPUT_DIR (stored road matches) -> a throw-away dir
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -12,6 +13,8 @@ import { strToU8, zipSync } from "fflate";
 
 import { NO_DROP_OFF, NO_PICKUP, PICKUP_ON_REQUEST } from "../lib/gtfs-csv";
 import { downloadGzmZip, gzmRefreshDue, parseGzmZip, serviceDayBase, warsawClock, type GzmFeed } from "../lib/gzm-feed";
+import { focusShapeMatch, matchedPoints, rawKey, requestShapeMatch } from "../lib/gzm-match";
+import { encodePolyline, type LatLng } from "../lib/shared/polyline";
 
 const DIR = fs.mkdtempSync(path.join(os.tmpdir(), "kb-gzm-feed-"));
 after(() => fs.rmSync(DIR, { recursive: true, force: true }));
@@ -116,14 +119,14 @@ describe("parseGzmZip", () => {
     const t1 = f.trips.get("gzm:t1")!;
     assert.deepEqual(Array.from(t1.flags), [NO_DROP_OFF, PICKUP_ON_REQUEST, NO_PICKUP]);
     assert.deepEqual(t1.stopHeadsigns, [null, "Sosnowiec przez Rynek", null]);
-    assert.deepEqual(t1.stops[1], { stopId: "gzm:b", seq: 2, arr: 8 * 3600 + 300, dep: 8 * 3600 + 360 });
+    assert.deepEqual([t1.stopIds[1], t1.seqs[1], t1.arr[1], t1.dep[1]], ["gzm:b", 2, 8 * 3600 + 300, 8 * 3600 + 360]);
 
     const t2 = f.trips.get("gzm:t2")!;
-    assert.deepEqual(t2.stops.map((s) => s.stopId), ["gzm:c", "gzm:a"], "sorted by stop_sequence");
+    assert.deepEqual(t2.stopIds, ["gzm:c", "gzm:a"], "sorted by stop_sequence");
     assert.deepEqual(t2.stopHeadsigns, [null, "Katowice Rynek"], "a stop headsign equal to the trip's is dropped");
 
     assert.equal(f.trips.get("gzm:t0")?.stopHeadsigns, null);
-    assert.equal(f.trips.get("gzm:t3")?.stops[0].dep, 25 * 3600 + 600);
+    assert.equal(f.trips.get("gzm:t3")?.dep[0], 25 * 3600 + 600);
   });
 
   it("chains a brigade's trips of one route and service by first departure", async () => {
@@ -157,13 +160,13 @@ describe("parseGzmZip", () => {
       ["gzm:f1.21600", "gzm:f1.22200", "gzm:f1.22800", "gzm:f1.23400"],
     );
     assert.deepEqual(
-      runs[1].stops.map((s) => [s.arr, s.dep]),
+      Array.from(runs[1].dep, (dep, i) => [runs[1].arr[i], dep]),
       [
         [22200, 22200],
         [22440, 22500],
       ],
     );
-    assert.equal(f.trips.get("gzm:t1")?.stops[0].dep, 8 * 3600);
+    assert.equal(f.trips.get("gzm:t1")?.dep[0], 8 * 3600);
   });
 
   it("serves shapes with rev-stamped wire ids", async () => {
@@ -186,6 +189,140 @@ describe("parseGzmZip", () => {
     assert.deepEqual(bare.missing, ["gzm:nope.abcdef"]);
     assert.equal(bare.shapes["gzm:sh1"].id, id);
     assert.equal(f.shapes.lookup(["gzm:sh1.000000"]).exact, false, "stale rev");
+  });
+
+  it("upgrade swaps in a road-matched shape once, under a new wire id", async () => {
+    const f = await parseGzmZip(writeZip("upgrade.zip", FILES));
+    const raw = f.shapes.unmatched("gzm:sh1")!.rev;
+    const poly = f.shapes.unmatched("gzm:sh1")!.poly;
+    const refs: Array<[number, number]> = [
+      [50.259, 19.022],
+      [50.26, 19.01],
+      [50.277, 19.13],
+    ];
+    const road: Array<[number, number]> = [[50.259, 19.022], [50.2597, 19.016], [50.26, 19.01], [50.27, 19.07], [50.277, 19.13]];
+    assert.equal(f.shapes.upgrade("gzm:sh1", "000000", road, refs), false, "stale raw rev");
+    assert.equal(f.shapes.upgrade("gzm:sh1", raw, road, refs.slice(1)), false, "stops of another trip");
+    const before = f.shapes.wireId("gzm:sh1");
+    assert.equal(f.shapes.upgrade("gzm:sh1", raw, road, refs), true);
+    assert.notEqual(f.shapes.wireId("gzm:sh1"), before);
+    assert.equal(f.shapes.geometry("gzm:sh1")!.src, "osrm");
+    assert.equal(f.shapes.unmatched("gzm:sh1"), null);
+    assert.ok(f.shapes.rawKeys().has(rawKey(poly)), "the raw geometry's key stays known");
+    assert.equal(f.shapes.upgrade("gzm:sh1", raw, road, refs), false, "already matched");
+    assert.equal(f.shapes.lookup([before!]).exact, false, "the old wire id still resolves, to the new shape");
+  });
+
+  it("one OSRM match serves every shape with the same geometry", async () => {
+    const twins = {
+      ...FILES,
+      "trips.txt": FILES["trips.txt"].replace("t0,Sosnowiec,0,sh1,", "t0,Sosnowiec,0,sh2,"),
+      "shapes.txt": `${FILES["shapes.txt"]}\nsh2,50.2590,19.0220,1\nsh2,50.2600,19.0100,2\nsh2,50.2770,19.1300,3`,
+    };
+    const f = await parseGzmZip(writeZip("twins.zip", twins));
+    const poly = f.shapes.unmatched("gzm:sh1")!.poly;
+    assert.equal(f.shapes.unmatched("gzm:sh2")!.poly, poly);
+    const calls: string[] = [];
+    const realFetch = globalThis.fetch;
+    // answers like /match: every trace point is on the road
+    globalThis.fetch = (async (url: string | URL) => {
+      calls.push(String(url));
+      const pts = new URL(String(url)).pathname.split("/").at(-1)!.split(";").map((c): LatLng => {
+        const [lon, lat] = c.split(",").map(Number);
+        return [lat, lon];
+      });
+      const body = { code: "Ok", matchings: [{ geometry: encodePolyline(pts), legs: pts.slice(1).map(() => ({ distance: 1 })) }] };
+      return new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    try {
+      const a: [number, number] = [50.259, 19.022];
+      const b: [number, number] = [50.26, 19.01];
+      const c: [number, number] = [50.277, 19.13];
+      assert.equal(requestShapeMatch(f.shapes, "gzm:sh1", [a, b, c]), true);
+      assert.equal(requestShapeMatch(f.shapes, "gzm:sh2", [a, c]), true, "joins the running match");
+      for (let i = 0; i < 150 && (f.shapes.unmatched("gzm:sh1") || f.shapes.unmatched("gzm:sh2")); i++) {
+        await new Promise((r) => setTimeout(r, 20));
+      }
+      assert.equal(calls.length, 1);
+      assert.equal(f.shapes.geometry("gzm:sh1")!.src, "osrm");
+      assert.equal(f.shapes.geometry("gzm:sh2")!.src, "osrm");
+      assert.ok(matchedPoints(poly));
+      assert.equal(requestShapeMatch(f.shapes, "gzm:sh1", [a, b, c]), false, "nothing left to match");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  it("the part of the route in view is matched first and served before the rest", async () => {
+    // 28 points zigzagging 44 m: Douglas-Peucker keeps all, three chunks of 10 on the public host
+    const zig = Array.from({ length: 28 }, (_, i) => `sh1,${(50.259 + (i % 2) * 0.0004).toFixed(4)},${(19.022 + i * 0.0015).toFixed(4)},${i + 1}`);
+    const f = await parseGzmZip(writeZip("focus.zip", { ...FILES, "shapes.txt": ["shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence", ...zig].join("\n") }));
+    const rawId = f.shapes.wireId("gzm:sh1");
+    const seen: Array<{ lon: number; src: string | undefined; id: string | null }> = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: string | URL) => {
+      const pts = new URL(String(url)).pathname.split("/").at(-1)!.split(";").map((c): LatLng => {
+        const [lon, lat] = c.split(",").map(Number);
+        return [lat, lon];
+      });
+      seen.push({ lon: pts[0][1], src: f.shapes.geometry("gzm:sh1")?.src, id: f.shapes.wireId("gzm:sh1") });
+      const body = { code: "Ok", matchings: [{ geometry: encodePolyline(pts), legs: pts.slice(1).map(() => ({ distance: 1 })) }] };
+      return new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    try {
+      const refs: Array<[number, number]> = [[50.259, 19.022], [50.26, 19.01], [50.277, 19.13]];
+      assert.equal(requestShapeMatch(f.shapes, "gzm:sh1", refs), true);
+      // the last chunk only (points 22-27); the pick waits for the pace, so this focus counts from the first request
+      focusShapeMatch(f.shapes, "gzm:sh1", { s: 50.258, w: 19.054, n: 50.26, e: 19.064 });
+      for (let i = 0; i < 300 && f.shapes.unmatched("gzm:sh1"); i++) await new Promise((r) => setTimeout(r, 20));
+      assert.equal(seen.length, 3);
+      assert.ok(seen[0].lon > 19.048, "the chunk in view goes first");
+      assert.deepEqual(seen.map((x) => x.src), ["gtfs", "partial", "partial"], "published as partial before the rest");
+      const partialId = seen[1].id!;
+      assert.notEqual(partialId, rawId);
+      assert.equal(f.shapes.geometry("gzm:sh1")!.src, "osrm");
+      assert.notEqual(f.shapes.wireId("gzm:sh1"), partialId);
+      const stale = f.shapes.lookup([partialId]);
+      assert.equal(stale.exact, false, "the partial id resolves to the full match");
+      assert.equal(stale.shapes[partialId].src, "osrm");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  it("a newly opened route goes before the rest of an older match", async () => {
+    // sh1: 28 points zigzagging 44 m, three chunks; sh2: one chunk, far north
+    const zig = Array.from({ length: 28 }, (_, i) => `sh1,${(50.239 + (i % 2) * 0.0004).toFixed(4)},${(19.022 + i * 0.0015).toFixed(4)},${i + 1}`);
+    const files = {
+      ...FILES,
+      "trips.txt": FILES["trips.txt"].replace("t0,Sosnowiec,0,sh1,", "t0,Sosnowiec,0,sh2,"),
+      "shapes.txt": ["shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence", ...zig, "sh2,50.3000,19.1000,1", "sh2,50.3010,19.1100,2"].join("\n"),
+    };
+    const f = await parseGzmZip(writeZip("preempt.zip", files));
+    const calls: string[] = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: string | URL) => {
+      const pts = new URL(String(url)).pathname.split("/").at(-1)!.split(";").map((c): LatLng => {
+        const [lon, lat] = c.split(",").map(Number);
+        return [lat, lon];
+      });
+      calls.push(pts[0][0] > 50.29 ? "sh2" : "sh1");
+      const body = { code: "Ok", matchings: [{ geometry: encodePolyline(pts), legs: pts.slice(1).map(() => ({ distance: 1 })) }] };
+      return new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    try {
+      assert.equal(requestShapeMatch(f.shapes, "gzm:sh1", [[50.239, 19.022], [50.2394, 19.04], [50.2394, 19.0625]]), true);
+      for (let i = 0; i < 150 && !calls.length; i++) await new Promise((r) => setTimeout(r, 20));
+      assert.equal(requestShapeMatch(f.shapes, "gzm:sh2", [[50.3, 19.1], [50.301, 19.11]]), true);
+      for (let i = 0; i < 300 && (f.shapes.unmatched("gzm:sh1") || f.shapes.unmatched("gzm:sh2")); i++) {
+        await new Promise((r) => setTimeout(r, 20));
+      }
+      assert.deepEqual(calls, ["sh1", "sh2", "sh1", "sh1"], "sh2 waits one request, not the whole sh1 match");
+      assert.equal(f.shapes.geometry("gzm:sh1")!.src, "osrm");
+      assert.equal(f.shapes.geometry("gzm:sh2")!.src, "osrm");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
   });
 
   it("rejects a zip without trips and a file that is no zip", async () => {

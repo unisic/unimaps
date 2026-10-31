@@ -1,21 +1,19 @@
-"use client";
-
 /**
  * "Płynny ruch pojazdów" preference — a per-browser on/off switch for the
- * vehicle dead-reckoning animation. Module-level useSyncExternalStore store
+ * vehicle dead-reckoning animation. Module-level external store
  * (same pattern as favorites.ts) so only the settings switch and the animator
  * react to it — MapApp never re-renders on toggle.
  *
- * Stored as "1"/"0" under kb:smoothMotion; absent = off (an early feature,
- * opt-in only).
+ * Stored as "1"/"0" under kb:smoothMotion; absent = on (the default since the
+ * engine stopped reversing buses); an explicit "0" still wins.
  */
-import { useCallback, useSyncExternalStore } from "react";
+import { external } from "@/lib/client/external";
 
 const KEY = "kb:smoothMotion";
 
-/** Pure resolution of the stored value: on only after an explicit opt-in. */
+/** Pure resolution of the stored value: on unless explicitly switched off. */
 export function resolveSmoothMotion(stored: string | null): boolean {
-  return stored === "1";
+  return stored !== "0";
 }
 
 function readStored(): string | null {
@@ -73,8 +71,5 @@ export function subscribeSmoothMotion(fn: () => void): () => void {
   };
 }
 
-export function useSmoothMotion(): [boolean, (on: boolean) => void] {
-  const on = useSyncExternalStore(subscribeSmoothMotion, getSmoothMotion, () => false);
-  const set = useCallback((v: boolean) => setSmoothMotion(v), []);
-  return [on, set];
-}
+/** Reactive switch state (`.current`); write with setSmoothMotion. */
+export const smoothMotion = external(subscribeSmoothMotion, getSmoothMotion);

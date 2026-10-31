@@ -12,9 +12,6 @@ on:
 permissions:
   contents: read
 
-env:
-  NEXT_TELEMETRY_DISABLED: 1
-
 jobs:
   check:
     if: github.event_name != 'schedule'

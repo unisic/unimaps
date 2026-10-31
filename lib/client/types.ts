@@ -44,6 +44,8 @@ export interface Vehicle {
   next_stop_seq?: number;
   /** cruise speed, m/s */
   speed?: number;
+  /** timetable pace m/s along `shape` around `dist_m` (dwell included) */
+  sched_speed?: number;
   /** present only while upstream's stop index is stale: `delay` is then the schedule deviation at the GPS
    *  position ("gps"/"gps-held") or withheld ("unknown") */
   delay_src?: "gps" | "gps-held" | "unknown";
@@ -216,6 +218,8 @@ export interface Trip {
   /** stored road geometry id (GET /api/shapes) */
   shape_id?: string;
   shape_status?: ShapeStatus;
+  /** the server is snapping this shape to the roads: a newer revision of shape_id follows (GZM) */
+  shape_matching?: boolean;
 }
 
 /** road: stored shape available · pending: being routed · none: no road geometry */
@@ -228,6 +232,7 @@ export interface TripExecutionResponse {
   shape?: LatLng[];
   shape_id?: string;
   shape_status?: ShapeStatus;
+  shape_matching?: boolean;
   /** KB: recorded arrival epoch secs per trip.times position (null = unknown / not reached) */
   arrived?: (number | null)[];
 }
@@ -303,7 +308,7 @@ export interface TripView {
   /** stored road-shape id `routed` came from (null = browser routing / straight) */
   shapeId?: string | null;
   /** the server's shape reference for this trip (kept so a rebuild can reuse it) */
-  routeHint?: { id?: string; status?: ShapeStatus } | null;
+  routeHint?: { id?: string; status?: ShapeStatus; matching?: boolean } | null;
   /** live trips: recorded arrival per rawTimes position, Warsaw secs since midnight (arrivedSecs) */
   arrived?: (number | null)[] | null;
 }

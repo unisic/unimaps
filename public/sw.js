@@ -6,7 +6,7 @@
  *    its own offline copies in "kb-offline", which activate leaves alone);
  *  - cross-origin requests (map tiles, OSRM) pass through untouched;
  *  - pre-caches app shell and icons on install for immediate offline readiness;
- *  - hashed build assets (/_next/static) are cache-first;
+ *  - hashed build assets (/assets) are cache-first;
  *  - non-hashed icons / manifest are stale-while-revalidate (a changed file
  *    reaches installed PWAs on the next load);
  *  - navigations are network-first, cached per path ("/", "/brygady") with
@@ -50,7 +50,7 @@ self.addEventListener("install", (event) => {
 
 /* No skipWaiting on install: a new SW waits until the page approves it via the
  * SKIP_WAITING message (PwaRegister's update toast). Auto-activating would swap
- * hashed /_next chunks under a running SPA and break lazy chunk loads. */
+ * hashed /assets chunks under a running SPA and break lazy chunk loads. */
 self.addEventListener("message", (event) => {
   if (event.data && event.data.type === "SKIP_WAITING") self.skipWaiting();
 });
@@ -104,7 +104,7 @@ self.addEventListener("fetch", (event) => {
   if (url.pathname.startsWith("/api/")) return;
 
   // immutable build assets: cache-first
-  if (url.pathname.startsWith("/_next/static/")) {
+  if (url.pathname.startsWith("/assets/")) {
     event.respondWith(
       (async () => {
         const cache = await caches.open(CACHE);

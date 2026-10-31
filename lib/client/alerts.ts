@@ -1,5 +1,3 @@
-"use client";
-
 /**
  * "Powiadom mnie": a notification when a departure is N minutes away. A module-level store (the
  * lib/client/favorites.ts pattern) persisted in localStorage, plus one watcher per stop with alerts.
@@ -10,10 +8,9 @@
  * (lib/push-alerts.ts), which fires it with the app closed; both fire under one tag, the later
  * notification replaces the earlier one.
  */
-import { useSyncExternalStore } from "react";
-
 import { fetchJSON } from "@/lib/client/api";
 import { cityKey, cityOfId, type City } from "@/lib/client/city";
+import { external } from "@/lib/client/external";
 import { nowSecs } from "@/lib/client/format";
 import { createLivePoll, type LivePoll } from "@/lib/client/live-poll";
 import type { DeparturesResponse } from "@/lib/client/types";
@@ -101,9 +98,8 @@ function subscribe(fn: () => void): () => void {
   return () => subs.delete(fn);
 }
 
-export function useAlerts(): readonly Alert[] {
-  return useSyncExternalStore(subscribe, getSnapshot, () => EMPTY);
-}
+/** Reactive alert list (`.current`). */
+export const alerts = external(subscribe, getSnapshot);
 
 /** Adds (or re-times) the alert for one departure; false when MAX_ALERTS other ones are set in this city. */
 export function addAlert(a: Alert): boolean {

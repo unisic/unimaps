@@ -1,12 +1,10 @@
-"use client";
-
 /**
  * Saved places (Dom, Praca) and saved routes of the connection search, per
  * city: a module-level localStorage store like favorites.ts. A place is a stop
  * (designator) or a point (an address, or where the rider stood when saving);
  * it never leaves the browser except as the search's own `from=geo:` / `to=geo:` point.
  */
-import { useSyncExternalStore } from "react";
+import { external } from "@/lib/client/external";
 
 import { cityKey, type City } from "@/lib/client/city";
 
@@ -113,6 +111,7 @@ export function toggleRoute(city: City, route: SavedRoute): void {
   mutate(city, { ...cur, routes });
 }
 
-export function usePlaces(city: City): Places {
-  return useSyncExternalStore(subscribe, () => getSnapshot(city), () => EMPTY);
+/** Reactive saved places of `city` (`.current`). */
+export function placesOf(city: City): { readonly current: Places } {
+  return external(subscribe, () => getSnapshot(city));
 }

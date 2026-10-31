@@ -12,10 +12,21 @@ import manifestFn from "../app/manifest";
 const read = (p: string) => fs.readFileSync(path.resolve(process.cwd(), p), "utf-8");
 
 describe("Brygady section: PWA & mobile UX", () => {
-  const app = read("components/BrigadesApp.tsx");
-  const sheet = read("components/brygady/VehicleSheet.tsx");
-  const list = read("components/brygady/FleetList.tsx");
-  const charts = read("components/brygady/charts.tsx");
+  const app = read("components/BrigadesApp.svelte");
+  const sheet = ["VehicleSheet.svelte", "Block.svelte"].map((f) => read(`components/brygady/${f}`)).join("\n");
+  const list = read("components/brygady/FleetList.svelte");
+  const charts = [
+    "charts.ts",
+    "PunctualityTimeline.svelte",
+    "CourseGantt.svelte",
+    "CourseDelayColumns.svelte",
+    "BarList.svelte",
+    "DelayLegend.svelte",
+    "TwoPartLegend.svelte",
+    "GanttLegend.svelte",
+  ]
+    .map((f) => read(`components/brygady/${f}`))
+    .join("\n");
   const manifest = manifestFn();
 
   it("has a home-screen shortcut", () => {
@@ -52,18 +63,18 @@ describe("Brygady section: PWA & mobile UX", () => {
 
   it("shares a vehicle with the native share sheet (clipboard fallback lives in ShareButton)", () => {
     assert.ok(sheet.includes("<ShareButton"));
-    const ui = read("components/ui.tsx");
+    const ui = read("components/ui/ShareButton.svelte");
     assert.ok(ui.includes("navigator.share") && ui.includes("navigator.clipboard.writeText"));
   });
 
   it("keeps controls accessible: real buttons, labelled search, ARIA tabs and disclosures", () => {
-    assert.ok(list.includes('type="search"') && list.includes('className="sr-only"'), "labelled search field");
+    assert.ok(list.includes('type="search"') && list.includes('class="sr-only"'), "labelled search field");
     assert.ok(app.includes('role="tablist"') && app.includes('role="tab"') && app.includes("aria-selected"));
     assert.ok(sheet.includes("aria-expanded={open}") && sheet.includes("aria-controls={panelId}"));
     assert.ok(sheet.includes('role="progressbar"'));
     assert.ok(charts.includes("<title") || charts.includes("aria-label"), "charts carry an accessible name");
     // the sheet backdrop is the one exception: aria-hidden, Escape and the close button cover it
-    assert.ok(!/<div(?![^>]*aria-hidden)[^>]*onClick=/.test(app + sheet + list), "clickable divs: use <button>");
+    assert.ok(!/<div(?![^>]*aria-hidden)[^>]*onclick=/.test(app + sheet + list), "clickable divs: use <button>");
   });
 
   it("uses no emoji as icons and no em dash in UI copy", () => {
@@ -72,7 +83,7 @@ describe("Brygady section: PWA & mobile UX", () => {
       ["VehicleSheet", sheet],
       ["FleetList", list],
       ["charts", charts],
-      ["FleetStatsView", read("components/brygady/FleetStatsView.tsx")],
+      ["FleetStatsView", read("components/brygady/FleetStatsView.svelte")],
     ] as const) {
       assert.ok(!/\p{Extended_Pictographic}/u.test(src), `${name}: emoji found`);
       const copy = src.replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, "");

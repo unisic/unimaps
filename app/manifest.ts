@@ -1,6 +1,5 @@
-import type { MetadataRoute } from "next";
-
-export default function manifest(): MetadataRoute.Manifest {
+/** The web app manifest; vite.config.ts serves and emits it as /manifest.webmanifest. */
+export default function manifest() {
   return {
     name: "Unimaps: komunikacja miejska na żywo",
     short_name: "Unimaps",

@@ -1,5 +1,3 @@
-"use client";
-
 /**
  * Service announcements ("Utrudnienia") — a module-level store modeled on
  * lib/client/favorites.ts, so the TopBar badge and the sheet stay in sync
@@ -8,7 +6,7 @@
  * Unread state = upstream's set `hash` vs the last seen hash in localStorage.
  * One city per page load (lib/client/city.ts): the first subscriber fixes it.
  */
-import { useSyncExternalStore } from "react";
+import { external } from "@/lib/client/external";
 
 import { fetchJSON } from "./api";
 import { cityKey, cityUrl, type City } from "./city";
@@ -47,7 +45,7 @@ function loadSeen(): string | null {
   }
 }
 
-/* snapshot keeps a stable reference between changes (useSyncExternalStore
+/* snapshot keeps a stable reference between changes (an external store
    contract) — replaced only here */
 function emit(next: Partial<AnnouncementsSnapshot>): void {
   snapshot = { ...snapshot, ...next };
@@ -133,29 +131,26 @@ function subscribe(fn: () => void, c: City): () => void {
   };
 }
 
-/* one stable subscribe per city: useSyncExternalStore resubscribes when the function identity changes */
-const SUBSCRIBE = new Map<City, (fn: () => void) => () => void>();
-function subscriber(c: City): (fn: () => void) => () => void {
-  let f = SUBSCRIBE.get(c);
-  if (!f) SUBSCRIBE.set(c, (f = (fn) => subscribe(fn, c)));
-  return f;
-}
-
-export function useAnnouncements(c: City): {
-  status: AnnouncementsStatus;
-  items: readonly Announcement[];
-  unseen: boolean;
+/** Reactive announcements of `c` (the page's city): polling runs while something reads it. */
+export function announcementsOf(c: City): {
+  readonly status: AnnouncementsStatus;
+  readonly items: readonly Announcement[];
+  readonly unseen: boolean;
   refresh: () => void;
   markSeen: () => void;
 } {
-  const snap = useSyncExternalStore(subscriber(c), getAnnouncementsSnapshot, () => INITIAL);
-  const unseen =
-    snap.status === "ready" && snap.items.length > 0 && snap.hash !== null && snap.hash !== snap.seenHash;
-  // module-level functions → stable identities, memo()-safe without useCallback
+  const store = external((fn) => subscribe(fn, c), getAnnouncementsSnapshot);
   return {
-    status: snap.status,
-    items: snap.items,
-    unseen,
+    get status() {
+      return store.current.status;
+    },
+    get items() {
+      return store.current.items;
+    },
+    get unseen() {
+      const snap = store.current;
+      return snap.status === "ready" && snap.items.length > 0 && snap.hash !== null && snap.hash !== snap.seenHash;
+    },
     refresh,
     markSeen: markAnnouncementsSeen,
   };

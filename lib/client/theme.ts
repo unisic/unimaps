@@ -1,11 +1,9 @@
-"use client";
-
 /**
  * "Motyw" preference: system (nothing stored), light or dark under kb:theme. The inline script in
- * app/layout.tsx applies it before first paint and follows system changes; this store only backs
+ * app/head.ts applies it before first paint and follows system changes; this store only backs
  * the settings switch and re-applies on a change (same resolution as that script).
  */
-import { useSyncExternalStore } from "react";
+import { external } from "@/lib/client/external";
 
 export type ThemePref = "system" | "light" | "dark";
 
@@ -48,6 +46,4 @@ function subscribe(fn: () => void): () => void {
   return () => subs.delete(fn);
 }
 
-export function useThemePref(): ThemePref {
-  return useSyncExternalStore(subscribe, getThemePref, () => "system");
-}
+export const themePref = external(subscribe, getThemePref);

@@ -15,9 +15,9 @@ fleet at once: every running vehicle with its delay, stop departure boards,
 trip timelines on road geometry and a journey planner. It also publishes a
 GTFS feed and a GTFS-Realtime feed.
 
-Unimaps runs as one Node.js process: Next.js 16 serves the map, the JSON API and
-the feeds, and the pollers run in the same process. No separate scraper daemon
-and no database.
+Unimaps runs as one Node.js process: a plain `node:http` server serves the map
+(a static Svelte 5 build), the JSON API and the feeds, and the pollers run in
+the same process. No separate scraper daemon and no database.
 
 ## Features
 
@@ -32,8 +32,8 @@ and no database.
 - Line view: every stop pattern a line runs today, with each stop's departures
 - Light and dark theme, following the system setting by default
 - Fleet and brigade view at `/brygady`
-- Optional smooth motion that dead-reckons buses along their route between
-  fixes, an installable PWA, and a `Ctrl+K` search for stops, lines and
+- Smooth motion (on by default, switchable) that dead-reckons buses along
+  their route between fixes, an installable PWA, and a `Ctrl+K` search for stops, lines and
   vehicles
 
 ## Cities
@@ -64,8 +64,8 @@ npm run dev          # map + pollers on http://localhost:8080
 Production:
 
 ```bash
-npm run build
-npm start            # standalone server on port 8080
+npm run build        # static frontend in out/ + dist/server.mjs (one file, no node_modules needed)
+npm start            # node dist/server.mjs on port 8080 (PORT, HOST)
 ```
 
 Docker:
@@ -125,7 +125,7 @@ All settings are optional `KB_*` environment variables, read once at start.
 | `KB_GZM_GBFS_URL` | `https://gbfs.nextbike.net/maps/gbfs/v2/nextbike_zz` | Metrorower GBFS root for the bike-stations layer, `off` disables |
 | `KB_ZB` | `1` | `0` switches the other cities off (404) |
 | `KB_ZB_API_URL` | `https://api.zbiorkom.live/api6-open` | feed API root of the other cities (`<slug>/gtfs/default`, `<slug>/positions/<bbox>`) |
-| `KB_ZB_RESIDENT` | `2` | how many of those cities keep their timetable in memory at once (100-230 MB heap each, LRU) |
+| `KB_ZB_RESIDENT` | `2` | how many of those cities keep their timetable in memory at once (25-60 MB each, LRU) |
 | `KB_ZB_IDLE_MIN` | `30` | minutes without a request after which a city's timetable is dropped |
 
 Generated state lives in `output/` (Docker volume `kb-output`): the static

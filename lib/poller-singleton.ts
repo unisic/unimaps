@@ -14,6 +14,7 @@ import { log } from "./logger";
 import { createMergedStopsCache, type MergedView } from "./merged-stops";
 import { MzkApi } from "./mzk-api";
 import { MZK_STALE_SEC, MzkPoller } from "./mzk-poller";
+import { OSRM_PACE } from "./osrm";
 import { LivePoller, vehicleToJson } from "./poller";
 import { vehicleExtras } from "./route-info";
 import { rawTripId, readGtfsPatternSeeds } from "./shape-patterns";
@@ -89,6 +90,7 @@ function getShapeStore(mzkApi: MzkApi): ShapeStore {
         osrmBase: config.OSRM_URL,
         userAgent: config.OSRM_USER_AGENT,
         minIntervalMs: config.OSRM_MIN_INTERVAL_MS,
+        pace: OSRM_PACE,
         maxAgeDays: config.SHAPES_MAX_AGE_DAYS,
         file: config.SHAPES_FILE,
         mzkFetch: (id) => mzkApi.fetchTheoreticalCourse(id),
