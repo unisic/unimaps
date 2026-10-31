@@ -17,14 +17,16 @@ describe("zbiorkom city registry", () => {
     assert.equal(new Set(ZB_SLUGS).size, ZB_SLUGS.length);
   });
 
-  it("a city colour carries the pill's white line number at WCAG AA (4.5:1)", () => {
+  it("a city or line colour carries the pill's white line number at WCAG AA (4.5:1)", () => {
     const lin = (v: number) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
     for (const s of ZB_SLUGS) {
-      const { color: hex }: ZbCity = ZB_CITIES[s];
-      if (!hex) continue;
-      assert.match(hex, /^#[0-9a-f]{6}$/, s);
-      const [r, g, b] = [1, 3, 5].map((i) => lin(parseInt(hex.slice(i, i + 2), 16) / 255));
-      assert.ok(1.05 / (0.2126 * r + 0.7152 * g + 0.0722 * b + 0.05) >= 4.5, s);
+      const { color, lineColors }: ZbCity = ZB_CITIES[s];
+      for (const hex of [color, ...Object.values(lineColors ?? {})]) {
+        if (!hex) continue;
+        assert.match(hex, /^#[0-9a-f]{6}$/, s);
+        const [r, g, b] = [1, 3, 5].map((i) => lin(parseInt(hex.slice(i, i + 2), 16) / 255));
+        assert.ok(1.05 / (0.2126 * r + 0.7152 * g + 0.0722 * b + 0.05) >= 4.5, s);
+      }
     }
   });
 

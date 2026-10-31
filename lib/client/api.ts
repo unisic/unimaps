@@ -255,7 +255,11 @@ export interface GetConnectionsOptions {
   dayLabel?: string;
   directOnly?: boolean;
   minTransfer?: number;
-  sortBy?: "departure" | "duration" | "arrival";
+  sortBy?: "departure" | "duration" | "arrival" | "transfers" | "walk";
+  /** line names never ridden */
+  avoid?: readonly string[];
+  /** GTFS route types never ridden (zbiorkom cities) */
+  avoidTypes?: readonly string[];
   limit?: number;
   /** walk radius of a search from or to a point (`geo:`), metres */
   walk?: number;
@@ -300,6 +304,8 @@ export async function getConnections(
     if (optionsOrTime.directOnly) p.set("direct", "true");
     if (optionsOrTime.minTransfer != null) p.set("minTransfer", String(optionsOrTime.minTransfer));
     if (optionsOrTime.sortBy) p.set("sortBy", optionsOrTime.sortBy);
+    if (optionsOrTime.avoid?.length) p.set("avoid", optionsOrTime.avoid.join(","));
+    if (optionsOrTime.avoidTypes?.length) p.set("avoidTypes", optionsOrTime.avoidTypes.join(","));
     if (optionsOrTime.limit != null) p.set("limit", String(optionsOrTime.limit));
     if (optionsOrTime.walk != null) p.set("walk", String(optionsOrTime.walk));
     if (optionsOrTime.arriveBy) p.set("arriveBy", "true");

@@ -4,7 +4,7 @@ import { memo, useEffect, useRef, useState } from "react";
 import { useMap } from "react-leaflet";
 import L from "leaflet";
 import { vehiclesClock } from "@/lib/client/api";
-import { fleetMarkers } from "@/lib/client/fleetMarkers";
+import { fleetMarkers, stackPills } from "@/lib/client/fleetMarkers";
 import { delayClass, delayTxt, displayStopName, transitMode, vehColor } from "@/lib/client/format";
 import { makeVehicleIcon } from "@/lib/client/leafletIcons";
 import type { Vehicle } from "@/lib/client/types";
@@ -26,6 +26,8 @@ interface MarkerView {
   marker: L.Marker | L.CircleMarker;
   iconKey: string;
   dot: boolean;
+  /** the other vehicles this pill stands for (they would cover each other) */
+  stack: string[];
 }
 
 /** a dense fleet zoomed in mounts pills only this far around the viewport (StopsLayer's margin) */
@@ -72,6 +74,29 @@ function buildVehicleTooltip(v: Vehicle | undefined): HTMLElement {
   }
   root.append(badge, body);
   return root;
+}
+
+/** A stack's vehicles as tooltip cards to pick from: one pill stands for all of them. */
+function openStack(map: L.Map, at: L.LatLng, ids: string[], anim: VehicleAnimator, pick: (v: Vehicle) => void): void {
+  const root = document.createElement("div");
+  root.className = "flex max-h-[50vh] flex-col overflow-y-auto";
+  for (const id of ids) {
+    const v = anim.latest(id);
+    if (!v) continue;
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "rounded-[10px] p-1.5 pr-3 text-left hover:bg-tint/5";
+    row.append(buildVehicleTooltip(v));
+    row.addEventListener("click", () => {
+      map.closePopup();
+      pick(v);
+    });
+    root.append(row);
+  }
+  L.popup({ className: "kb-popup", closeButton: false, offset: [0, -6], maxWidth: 340, autoPanPadding: [16, 16] })
+    .setLatLng(at)
+    .setContent(root)
+    .openOn(map);
 }
 
 /**
@@ -162,7 +187,22 @@ function VehicleLayer({
       e: b.getEast(),
     });
 
-    const want = new Set(list.map((v) => v.id));
+    // pills that would cover each other draw as one "+N" pill (screen px, at the drawn positions); ponytail: regrouped
+    // per poll / moveend only, so a leader driving off a stack carries its "+N" until the next poll
+    const stacks = dots
+      ? null
+      : stackPills(
+          [...list]
+            .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+            .map((v) => {
+              const d = anim.displayed(v.id);
+              const p = map.latLngToContainerPoint(d ? [d.lat, d.lon] : [v.lat, v.lon]);
+              return { id: v.id, x: p.x, y: p.y };
+            }),
+        );
+    const drawn = stacks ? list.filter((v) => stacks.has(v.id)) : list;
+
+    const want = new Set(drawn.map((v) => v.id));
     for (const [id, view] of views) {
       if (want.has(id) && view.dot === dots) continue;
       anim.removeView(id);
@@ -170,13 +210,14 @@ function VehicleLayer({
       views.delete(id);
     }
 
-    for (const v of list) {
+    for (const v of drawn) {
+      const stack = stacks?.get(v.id) ?? [];
       const color = vehColor(v);
       // heading is applied by the animator, never part of the icon key —
       // rebuilding the DivIcon replays its pop animation and kills the glide
       const hasHeading = anim.headingKnown(v.id) || v.bearing != null;
       const mode = transitMode(v.operator, v.vehicle_type);
-      const key = dots ? color : `${v.line}|${color}|${v.operator ?? ""}|${mode}|${hasHeading ? 1 : 0}|${v.scheduled ? 1 : 0}`;
+      const key = dots ? color : `${v.line}|${color}|${v.operator ?? ""}|${mode}|${hasHeading ? 1 : 0}|${v.scheduled ? 1 : 0}|${stack.length}`;
       const existing = views.get(v.id);
       if (!existing) {
         const d = anim.displayed(v.id);
@@ -193,7 +234,7 @@ function VehicleLayer({
               bubblingMouseEvents: false, // like a marker: a tap on a dot is not a map click
             })
           : L.marker(at, {
-              icon: makeVehicleIcon(v.line, color, heading, v.operator, mode, v.scheduled),
+              icon: makeVehicleIcon(v.line, color, heading, v.operator, mode, v.scheduled, stack.length),
               zIndexOffset: 100,
               keyboard: false,
             });
@@ -206,21 +247,26 @@ function VehicleLayer({
         });
         marker.on("click", () => {
           const cur = anim.latest(id);
-          if (cur) onClickRef.current(cur);
+          const more = views.get(id)?.stack ?? [];
+          if (cur && more.length) openStack(map, marker.getLatLng(), [id, ...more], anim, (p) => onClickRef.current(p));
+          else if (cur) onClickRef.current(cur);
         });
         marker.addTo(group);
-        views.set(id, { marker, iconKey: key, dot: dots });
+        views.set(id, { marker, iconKey: key, dot: dots, stack });
         anim.addView(id, id, marker, "fleet");
         continue;
       }
       if (existing.iconKey !== key) {
         if (existing.marker instanceof L.Marker) {
           const d = anim.displayed(v.id);
-          existing.marker.setIcon(makeVehicleIcon(v.line, color, hasHeading ? (d?.heading ?? v.bearing ?? 0) : null, v.operator, mode, v.scheduled));
+          existing.marker.setIcon(
+            makeVehicleIcon(v.line, color, hasHeading ? (d?.heading ?? v.bearing ?? 0) : null, v.operator, mode, v.scheduled, stack.length),
+          );
           anim.refreshViewDom(v.id);
         } else existing.marker.setStyle({ fillColor: color });
         existing.iconKey = key;
       }
+      existing.stack = stack;
       // keep an open tooltip's text (delay, headsign) current
       const tip = existing.marker.getTooltip();
       if (tip?.isOpen()) tip.update();

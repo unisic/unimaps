@@ -249,3 +249,54 @@ describe("lineTimetable", () => {
   });
 });
 
+
+describe("router options", () => {
+  const TODAY = todayLocalISO();
+  const at = (id: string, calls: Array<[string, string]>, o: Partial<TripEntry> = {}): TripEntry => ({
+    ...trip(id, calls, [TODAY]),
+    ...o,
+  });
+
+  it("boards a late bus that left on paper, keeps its timetable time on the wire", () => {
+    const idx = index([at("gzm:t1", [["gzm:a1", "10:00"], ["gzm:b", "10:10"]]), at("gzm:t2", [["gzm:a1", "10:30"], ["gzm:b", "10:40"]])]);
+    const query = q("gzm:a1", "gzm:b", secs("10:03"), TODAY);
+    assert.equal(findConnections(query, idx)[0].legs[0].tripId, "gzm:t2");
+    const live = findConnections({ ...query, live: (id, d) => (id === "gzm:t1" && d === TODAY ? 300 : undefined) }, idx)[0].legs[0];
+    assert.equal(live.tripId, "gzm:t1");
+    assert.equal(live.departureTime, "10:00");
+    assert.equal(live.delaySec, 300);
+  });
+
+  it("drops a transfer the feeder's delay breaks, ignores live data on another day", () => {
+    const idx = index([
+      at("gzm:f", [["gzm:a1", "10:00"], ["gzm:b", "10:10"]]),
+      at("gzm:n1", [["gzm:b", "10:15"], ["gzm:c", "10:25"]]),
+      at("gzm:n2", [["gzm:b", "10:45"], ["gzm:c", "10:55"]]),
+    ]);
+    const late = (day: string) => (id: string, d: string) => (id === "gzm:f" && d === day ? 600 : undefined);
+    const query = { ...q("gzm:a1", "gzm:c", secs("09:50"), TODAY), live: late(TODAY), limit: 1 };
+    assert.equal(findConnections(query, idx)[0].legs[1].tripId, "gzm:n2");
+    assert.equal(findConnections({ ...query, live: late(plusDays(TODAY, -1)) }, idx)[0].legs[1].tripId, "gzm:n1");
+  });
+
+  it("never rides an avoided line or route", () => {
+    const idx = index([
+      at("gzm:l7", [["gzm:a1", "10:00"], ["gzm:b", "10:10"]]),
+      at("gzm:l8", [["gzm:a1", "10:05"], ["gzm:b", "10:15"]], { line: "8", routeId: "tram" }),
+      at("gzm:l9", [["gzm:a1", "10:20"], ["gzm:b", "10:30"]], { line: "9" }),
+    ]);
+    const query = { ...q("gzm:a1", "gzm:b", secs("09:50"), TODAY), limit: 3 };
+    assert.deepEqual(findConnections({ ...query, avoidLines: ["7"], avoidRoutes: ["tram"] }, idx).map((c) => c.legs[0].line), ["9"]);
+  });
+
+  it("puts the fewest transfers first on the transfers profile", () => {
+    const idx = index([
+      at("gzm:x1", [["gzm:a1", "10:00"], ["gzm:b", "10:10"]]),
+      at("gzm:x2", [["gzm:b", "10:15"], ["gzm:c", "10:30"]], { line: "8" }),
+      at("gzm:d1", [["gzm:a1", "10:30"], ["gzm:b", "10:40"], ["gzm:c", "11:00"]], { line: "9" }),
+    ]);
+    const query = { ...q("gzm:a1", "gzm:c", secs("09:50"), TODAY), limit: 2 };
+    assert.deepEqual(findConnections(query, idx).map((c) => c.transfersCount), [1, 0]);
+    assert.deepEqual(findConnections({ ...query, sortBy: "transfers" as const }, idx).map((c) => c.transfersCount), [0, 1]);
+  });
+});

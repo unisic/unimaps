@@ -2,12 +2,15 @@
  * One stop's merged KB + MZK departures board, behind the 4 s micro-cache: served by
  * /api/stop/[designator]/departures and read by the web push alerts (lib/push-alerts.ts).
  */
+import { nearestWithin } from "@/lib/geo";
 import { pyTruthy } from "@/lib/kb-api";
 import { log } from "@/lib/logger";
 import { getFleetDetails } from "@/lib/mzk-fleet";
 import { isMzkNotStarted, mzkRowTiming } from "@/lib/mzk-state";
 import { getApi, getMergedStopsView, getMzkApi, getMzkPoller, getPoller } from "@/lib/poller-singleton";
 import { departuresBoardCache, type Board } from "@/lib/departures-board-cache";
+import type { MergedView } from "@/lib/merged-stops";
+import type { FormattedStop } from "@/lib/stop-merge";
 import {
   enrichKbRow,
   kbAnchorTs,
@@ -23,6 +26,47 @@ export async function stopBoard(designator: string): Promise<Board> {
   const m = getMergedStopsView().lookup(designator);
   const key = `${designator}|${m?.operator ?? ""}|${(m?.mzkSymbols ?? (m?.mzkSymbol ? [m.mzkSymbol] : [])).join(",")}`;
   return (await departuresBoardCache.get(key, () => buildBoard(designator))).value;
+}
+
+/** whole-stop board: the same-name poles this close (the widest BB pair, KOZY CENTRUM, is 435 m apart) */
+const GROUP_M = 500;
+const GROUP_MAX = 6;
+/** a BB pole's label: the compass way its buses leave (the map's stop arrow); BB names carry no post number */
+const COMPASS = ["płn.", "płn.-wsch.", "wsch.", "płd.-wsch.", "płd.", "płd.-zach.", "zach.", "płn.-zach."];
+const byNameOf = new WeakMap<MergedView, Map<string, FormattedStop[]>>();
+
+/** The merged stops sharing `designator`'s name within GROUP_M, nearest first (itself included); [] when unknown. */
+export function stopGroup(designator: string): FormattedStop[] {
+  const view = getMergedStopsView();
+  const self = view.lookup(designator);
+  if (!self) return [];
+  let byName = byNameOf.get(view);
+  if (!byName) {
+    byName = new Map();
+    for (const s of view.stops) {
+      const list = byName.get(s.name);
+      if (list) list.push(s);
+      else byName.set(s.name, [s]);
+    }
+    byNameOf.set(view, byName);
+  }
+  return nearestWithin(self, byName.get(self.name) ?? [self], GROUP_M, GROUP_MAX);
+}
+
+/** Every pole's board (each through the micro-cache) as one, each row tagged with its pole. The caller has awaited startPoller(). */
+export async function groupBoard(group: readonly FormattedStop[]): Promise<Board> {
+  const boards = await Promise.all(group.map((p) => stopBoard(p.designator)));
+  const rows = boards.flatMap((b, i) => {
+    const dirs = group[i].dirs;
+    const pole = dirs?.length === 1 ? COMPASS[Math.round(dirs[0] / 45) % 8] : null;
+    return b.rows.map((r) => ({ ...r, pole }));
+  });
+  return {
+    rows: preSortRows(rows as TimingRow[], Date.now() / 1000) as Array<Record<string, unknown>>,
+    failed: [...new Set(boards.flatMap((b) => b.failed))],
+    failedLegs: boards.reduce((n, b) => n + b.failedLegs, 0),
+    legs: boards.reduce((n, b) => n + b.legs, 0),
+  };
 }
 
 async function buildBoard(designator: string): Promise<Board> {

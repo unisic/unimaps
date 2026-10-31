@@ -691,7 +691,7 @@ function TopBarSearch({
           aria-activedescendant={showDropdown && flatItems.length > 0 ? optionId(hiIdx) : undefined}
           aria-autocomplete="list"
           aria-label="Szukaj przystanku, linii lub taboru"
-          placeholder="Szukaj przystanku, linii lub taboru (#230, Solaris)…"
+          placeholder="Przystanek, linia, pojazd…"
           autoComplete="off"
           spellCheck={false}
           value={query}

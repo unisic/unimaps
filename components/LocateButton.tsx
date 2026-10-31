@@ -6,15 +6,18 @@ import { GpsFixIcon, GpsSlashIcon } from "@/components/icons";
 
 interface Props {
   status: GeoStatus;
+  /** the map pans to every fix (a drag ends it) */
+  following: boolean;
   onLocate: () => void;
 }
 
 /**
  * Floating "locate me" control, bottom-right (above the desktop zoom control).
  * Reflects the geolocation status: spinner while acquiring, filled accent glyph
- * once the blue dot is live, crossed-out danger glyph if permission was denied.
+ * while the map follows the blue dot, outlined accent glyph when the dot is live
+ * but a drag ended following, crossed-out danger glyph if permission was denied.
  */
-function LocateButton({ status, onLocate }: Props) {
+function LocateButton({ status, following, onLocate }: Props) {
   const active = status === "active";
   const denied = status === "denied";
   const error = status === "error";
@@ -22,16 +25,16 @@ function LocateButton({ status, onLocate }: Props) {
     <button
       type="button"
       onClick={onLocate}
-      aria-label="Pokaż moją lokalizację"
-      aria-pressed={active}
+      aria-label="Śledź moją lokalizację"
+      aria-pressed={following}
       title={
         denied
           ? "Brak zgody na lokalizację. Włącz ją w ustawieniach przeglądarki"
           : error
             ? "Lokalizacja niedostępna"
-            : active
+            : following
               ? "Wyłącz lokalizację"
-              : "Moja lokalizacja"
+              : "Śledź moją lokalizację"
       }
       className={`surface tap absolute top-[calc(4.5rem+env(safe-area-inset-top,0px))] right-3 z-[1000] grid h-11 w-11 place-items-center rounded-full text-[20px] md:top-auto md:bottom-[102px] ${
         active ? "text-primary" : denied || error ? "text-danger" : "text-text-mute hover:text-text"
@@ -45,7 +48,7 @@ function LocateButton({ status, onLocate }: Props) {
       ) : denied || error ? (
         <GpsSlashIcon />
       ) : (
-        <GpsFixIcon weight={active ? "fill" : "bold"} />
+        <GpsFixIcon weight={following ? "fill" : "bold"} />
       )}
     </button>
   );

@@ -263,6 +263,10 @@ export default function MapApp() {
   /* geolocation — the blue "you are here" dot follows the user once granted */
   const geo = useGeolocation();
   const wantFlyRef = useRef(false);
+  /* "Śledź moją lokalizację": the map pans to every fix until a drag (or the button) ends it */
+  const [geoFollow, setGeoFollow] = useState(false);
+  const geoFollowing = geoFollow && geo.status === "active";
+  const userMarkerRef = useRef<L.Marker>(null);
 
   const setBaseLayer = useCallback((id: BaseLayerId) => {
     setBaseLayerState(id);
@@ -1133,24 +1137,60 @@ export default function MapApp() {
   );
 
   const handleLocate = useCallback(() => {
-    // watch already running → a second tap turns it off (stops the GPS drain)
-    if (geo.status === "active" || geo.status === "locating") {
+    // following (or still acquiring) → the tap turns the GPS off (stops the drain)
+    if (geoFollowing || geo.status === "locating") {
       wantFlyRef.current = false;
+      setGeoFollow(false);
       geo.stop();
       return;
     }
-    if (geo.pos) flyToUser(geo.pos);
-    else wantFlyRef.current = true; // fly once the first fix arrives
+    // off, or on after a drag ended following: follow, recentred by the effect below on the current or first fix
+    wantFlyRef.current = true;
+    setGeoFollow(true);
     geo.locate();
-  }, [geo, flyToUser]);
+  }, [geo, geoFollowing]);
 
-  /* first fix after a locate request → recenter exactly once */
+  /* following pauses while a sheet that placed the map is open (stop, trip, connection, address, line) */
+  const geoPanning = geoFollowing && !selectedStop && !trip && !journey && !nearbyPlace && !openLine;
+  const geoZoomingRef = useRef(false);
   useEffect(() => {
-    if (wantFlyRef.current && geo.pos) {
+    const m = mapRef.current;
+    if (!geoFollow || !m) return;
+    const stop = () => setGeoFollow(false);
+    const zoomStart = () => (geoZoomingRef.current = true);
+    const zoomEnd = () => (geoZoomingRef.current = false);
+    m.on("dragstart", stop).on("zoomstart", zoomStart).on("zoomend", zoomEnd);
+    return () => {
+      geoZoomingRef.current = false;
+      m.off("dragstart", stop).off("zoomstart", zoomStart).off("zoomend", zoomEnd);
+    };
+  }, [geoFollow]);
+
+  /* a locate request recentres once (zoom 15+); while following every later fix pans at the current zoom,
+     skipped during a pinch/wheel zoom (a glide would abort it). geoFollow is a dependency so a tap that
+     re-follows recentres at once instead of on the next fix. */
+  useEffect(() => {
+    const p = geo.pos;
+    const m = mapRef.current;
+    if (!p || !m) return;
+    if (wantFlyRef.current) {
       wantFlyRef.current = false;
-      flyToUser(geo.pos);
+      flyToUser(p);
+      return;
     }
-  }, [geo.pos, flyToUser]);
+    if (!geoPanning || geoZoomingRef.current || document.hidden) return;
+    const at = focusPoint(m, desktop, openSheetCover());
+    if (m.latLngToContainerPoint([p.lat, p.lon]).distanceTo(at) >= 2) glideTo(m, [p.lat, p.lon], m.getZoom(), at);
+  }, [geo.pos, geoFollow, geoPanning, flyToUser, desktop]);
+
+  /* the rider's heading turns the cone inside the dot in place: never a new icon per fix */
+  const userHeading = geo.pos?.heading;
+  useEffect(() => {
+    const el = userMarkerRef.current?.getElement()?.querySelector<HTMLElement>(".user-loc-head");
+    if (!el) return;
+    el.hidden = userHeading == null;
+    if (userHeading != null) el.style.transform = `rotate(${userHeading}deg)`;
+  }, [userHeading]);
 
   /* "W pobliżu" replaces whatever sheet is open; without a fix yet it locates first and the
      sheet says so until the fix lands */
@@ -1353,6 +1393,7 @@ export default function MapApp() {
                 />
               )}
               <Marker
+                ref={userMarkerRef}
                 position={[geo.pos.lat, geo.pos.lon]}
                 icon={userIcon}
                 interactive={false}
@@ -1418,7 +1459,7 @@ export default function MapApp() {
           />
         )}
 
-        <LocateButton status={geo.status} onLocate={handleLocate} />
+        <LocateButton status={geo.status} following={geoFollowing} onLocate={handleLocate} />
         <RouteButton onClick={openConnModal} />
         {geo.status === "active" && !nearbyOpen && !openLine && !trip && !journey && !liveStop && !annOpen && !cityOpen && (
           <NearbyButton onClick={openNearby} />

@@ -16,6 +16,8 @@ export interface ZbCity {
   /** vehicle pills, stops and line badges: the main colour of the operator's logo (public/logos), darkened to
    *  4.5:1 under white text; absent (no logo, or a grey one) = slate */
   color?: string;
+  /** lines in their own colour instead of `color` (the feed's route_color, same 4.5:1 rule) */
+  lineColors?: Readonly<Record<string, string>>;
 }
 
 export const ZB_CITIES = {
@@ -66,7 +68,7 @@ export const ZB_CITIES = {
   tomaszowMazowiecki: { name: "Tomaszów Mazowiecki", agency: "MZK Tomaszów Mazowiecki", center: [51.5244, 20.0215], zoom: 12, color: "#6c7a1c" },
   torun: { name: "Toruń", agency: "MZK Toruń", center: [53.0146, 18.6263], zoom: 11, color: "#1f6497" },
   tricity: { name: "Trójmiasto", agency: "ZTM Gdańsk", center: [54.3563, 18.6447], zoom: 11, color: "#e40e32" },
-  warsaw: { name: "Warszawa", agency: "Warszawski Transport Publiczny", center: [52.2077, 21.0251], zoom: 10, stopMinZoom: 15, color: "#eb131c" },
+  warsaw: { name: "Warszawa", agency: "Warszawski Transport Publiczny", center: [52.2077, 21.0251], zoom: 10, stopMinZoom: 15, color: "#eb131c", lineColors: { M1: "#4048e1", M2: "#bf0603" } },
   walbrzych: { name: "Wałbrzych", agency: "MPK Wałbrzych", center: [50.7489, 16.2388], zoom: 12 },
   wroclaw: { name: "Wrocław", agency: "MPK Wrocław", center: [51.1112, 17.0022], zoom: 11, color: "#013b7e" },
   zielonaGora: { name: "Zielona Góra", agency: "MZK Zielona Góra", center: [51.9171, 15.5517], zoom: 12, color: "#208748" },

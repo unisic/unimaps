@@ -240,6 +240,12 @@ body {
 .veh-mode .veh-poles { fill: none; stroke: currentColor; stroke-width: 16; stroke-linecap: round; }
 
 .veh-line { display: block; }
+/* "+N": the pill stands for a stack of vehicles that would cover each other */
+.veh-more {
+  margin-left: 2px; padding: 2px 4px; border-radius: 999px;
+  background: rgba(255, 255, 255, 0.28);
+  font-size: 10.5px;
+}
 
 .leaflet-marker-icon.veh-marker:hover .veh-pill,
 .leaflet-marker-icon.veh-marker:focus-visible .veh-pill {
@@ -258,6 +264,13 @@ body {
   position: absolute; inset: 0; border-radius: 999px;
   background: rgba(43, 131, 255, 0.3);
   animation: user-loc-pulse 2.2s var(--ease-out-soft) infinite;
+}
+/* heading arrow just outside the dot (moving fixes only), rotated by MapApp */
+.user-loc-head { position: absolute; inset: -8px; pointer-events: none; }
+.user-loc-head::before {
+  content: ""; position: absolute; top: 0; left: 50%; margin-left: -5px;
+  border: solid transparent; border-width: 0 5px 8px; border-bottom-color: #2b83ff;
+  filter: drop-shadow(0 0 1.5px #fff);
 }
 @keyframes user-loc-pulse {
   0% { transform: scale(0.5); opacity: 0.9; }
@@ -406,6 +419,16 @@ body {
   border-radius: 14px;
   padding: 6px 12px 6px 6px;
 }
+/* list of a vehicle stack (VehicleLayer): the tooltip card's surface */
+.leaflet-popup.kb-popup .leaflet-popup-content-wrapper {
+  background: var(--color-surface);
+  color: var(--color-text);
+  border: 1px solid var(--color-hairline);
+  border-radius: 14px;
+  box-shadow: var(--shadow-float);
+}
+.leaflet-popup.kb-popup .leaflet-popup-content { margin: 4px; }
+.leaflet-popup.kb-popup .leaflet-popup-tip { background: var(--color-surface); }
 .leaflet-tooltip-top.kb-tooltip::before { border-top-color: var(--color-surface); }
 .leaflet-tooltip-bottom.kb-tooltip::before { border-bottom-color: var(--color-surface); }
 .leaflet-tooltip-left.kb-tooltip::before { border-left-color: var(--color-surface); }

@@ -17,7 +17,7 @@ import path from "node:path";
 import { Unzip, UnzipInflate } from "fflate";
 
 import * as config from "./config";
-import { col, parseCsvLine, pickupFlags } from "./gtfs-csv";
+import { col, DROP_OFF_ON_REQUEST, parseCsvLine, PICKUP_ON_REQUEST, pickupFlags } from "./gtfs-csv";
 import { log } from "./logger";
 import { buildRouterIndex, type RouterIndex } from "./router";
 import { finalizeShape, type ShapeGeometry, type ShapePayload, type ShapeStatus } from "./shape-store";
@@ -600,6 +600,8 @@ class FeedBuilder {
     const chains = new Map<string, GzmTrip[]>();
     const shapeTrip = new Map<string, GzmTrip>();
     const used = new Set<string>();
+    /* per stop: calls flagged on request minus the others; > 0 = mostly a request stop ("na żądanie") */
+    const request = new Map<string, number>();
     for (const t of trips.values()) {
       let list = tripsByLine.get(t.line);
       if (!list) tripsByLine.set(t.line, (list = []));
@@ -611,7 +613,10 @@ class FeedBuilder {
         chain.push(t);
       }
       if (t.shapeId && !shapeTrip.has(t.shapeId)) shapeTrip.set(t.shapeId, t);
-      for (const s of t.stops) used.add(s.stopId);
+      t.stops.forEach((s, i) => {
+        used.add(s.stopId);
+        request.set(s.stopId, (request.get(s.stopId) ?? 0) + (t.flags[i] & (PICKUP_ON_REQUEST | DROP_OFF_ON_REQUEST) ? 1 : -1));
+      });
     }
     for (const chain of chains.values()) {
       chain.sort((a, b) => a.stops[0].dep - b.stops[0].dep);
@@ -628,6 +633,7 @@ class FeedBuilder {
       lon: s.lon,
       operator: "GZM",
       operators: ["GZM"],
+      ...((request.get(s.id) ?? 0) > 0 ? { onRequest: true } : {}),
     }));
     const stopsBody = JSON.stringify({ count: wire.length, stops: wire });
 

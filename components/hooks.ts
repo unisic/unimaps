@@ -102,6 +102,8 @@ export interface GeoPos {
   lat: number;
   lon: number;
   accuracy: number;
+  /** degrees clockwise from north, only while moving (the API gives NaN/null standing still) */
+  heading?: number;
 }
 
 export type GeoStatus = "idle" | "locating" | "active" | "denied" | "error";
@@ -131,7 +133,13 @@ export function useGeolocation() {
     setStatus("locating");
     watchId.current = navigator.geolocation.watchPosition(
       (p) => {
-        setPos({ lat: p.coords.latitude, lon: p.coords.longitude, accuracy: p.coords.accuracy });
+        const h = p.coords.heading;
+        setPos({
+          lat: p.coords.latitude,
+          lon: p.coords.longitude,
+          accuracy: p.coords.accuracy,
+          heading: h != null && Number.isFinite(h) ? h : undefined,
+        });
         setStatus("active");
       },
       (err) => {

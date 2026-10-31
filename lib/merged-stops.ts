@@ -13,6 +13,8 @@ import { indexMergedStops, mergeStops, type FormattedStop } from "./stop-merge";
 
 /** a bus station by name (KB and MZK classify with the same rule, see MERGE_HUB_M) */
 export const STATION_NAME_RE = /(?:^|[\s(])(?:D\.A\.?|DWORZEC\s+AUTOBUSOWY)(?:$|[\s)])/i;
+/** KB has no request-stop flag, its names end in "NŻ" ("na żądanie") instead */
+const REQUEST_NAME_RE = /\sNŻ$/iu;
 
 export function formatKbStops(stops: readonly Stop[], dirs: ReadonlyMap<string, number[]>): FormattedStop[] {
   return stops.map((s) => {
@@ -28,6 +30,7 @@ export function formatKbStops(stops: readonly Stop[], dirs: ReadonlyMap<string, 
       ...(d && d.length ? { dirs: d } : {}),
       ...(isStn ? { isStation: true } : {}),
       ...(s.showPlatforms ? { showPlatforms: true } : {}),
+      ...(REQUEST_NAME_RE.test(s.name) ? { onRequest: true } : {}),
     };
   });
 }

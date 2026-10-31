@@ -1,6 +1,6 @@
 import { badRequest, internalError, isValidDate, parseCity, warming } from "@/lib/api-helpers";
 import { getZb, startZb } from "@/lib/gzm";
-import { getMergedStopsView, getShapes, startPoller } from "@/lib/poller-singleton";
+import { bbLiveDelay, getMergedStopsView, getShapes, startPoller } from "@/lib/poller-singleton";
 import { allowRequest, clientIp, tooManyRequests } from "@/lib/rate-limit";
 import { findConnections, type ConnectionItinerary } from "@/lib/router";
 import { rawTripId } from "@/lib/shape-patterns";
@@ -15,6 +15,10 @@ const GEO_RE = /^geo:(-?\d{1,2}(?:\.\d{1,7})?),(-?\d{1,3}(?:\.\d{1,7})?)$/;
 /** how far the rider walks between a query point and a stop, metres */
 const WALK_MIN_M = 200;
 const WALK_MAX_M = 1500;
+/** `avoid=` line names / `avoidTypes=` GTFS route types, comma-separated */
+const LINE_RE = /^[\p{L}\p{N} ._-]{1,16}$/u;
+const TYPE_RE = /^\d{1,4}$/;
+const MAX_AVOID = 20;
 /** GZM's feed is far larger (~22k trips a day): charge a search more so one client can't hold the event loop */
 const GZM_COST = 20;
 
@@ -62,10 +66,19 @@ function attachLegShapes(connections: ConnectionItinerary[]): void {
   }
 }
 
+/** A comma list param, every item matching `re`; null when malformed or too long. */
+function listParam(v: string | null, re: RegExp): string[] | null {
+  if (!v) return [];
+  const items = v.split(",");
+  return items.length <= MAX_AVOID && items.every((i) => re.test(i)) ? items : null;
+}
+
 /**
- * GET /api/connections?from=<stop>|geo:LAT,LON&to=<stop>|geo:LAT,LON[&walk=METRES][&time=HH:MM[&arriveBy=true]][&date=YYYY-MM-DD][&direct=true][&minTransfer=N][&sortBy=departure|duration][&limit=N]
+ * GET /api/connections?from=<stop>|geo:LAT,LON&to=<stop>|geo:LAT,LON[&walk=METRES][&time=HH:MM[&arriveBy=true]][&date=YYYY-MM-DD][&direct=true][&minTransfer=N][&sortBy=departure|duration|arrival|transfers|walk][&avoid=LINE,...][&avoidTypes=TYPE,...][&limit=N]
  *
- * In-memory connection search between stops or points; `arriveBy` makes `time` the latest arrival.
+ * In-memory connection search between stops or points; `arriveBy` makes `time` the latest arrival. Today's
+ * search boards running buses at their live times (legs keep timetable times plus `delaySec`). `avoidTypes`
+ * (GTFS route types) applies to zbiorkom cities; BB runs buses only.
  */
 export async function GET(req: Request): Promise<Response> {
   // the search is synchronous CPU work on the event loop the pollers share
@@ -89,6 +102,10 @@ export async function GET(req: Request): Promise<Response> {
   const limitParam = url.searchParams.get("limit");
   const walkParam = url.searchParams.get("walk");
   const arriveByParam = url.searchParams.get("arriveBy");
+  const avoidLines = listParam(url.searchParams.get("avoid"), LINE_RE);
+  const avoidTypes = listParam(url.searchParams.get("avoidTypes"), TYPE_RE);
+  if (!avoidLines) return badRequest("Invalid 'avoid' parameter (comma-separated line names)");
+  if (!avoidTypes) return badRequest("Invalid 'avoidTypes' parameter (comma-separated route types)");
 
   if (!from || from.length > 100) return badRequest("Missing or invalid 'from' parameter");
   if (!to || to.length > 100) return badRequest("Missing or invalid 'to' parameter");
@@ -120,15 +137,20 @@ export async function GET(req: Request): Promise<Response> {
 
   const directOnly = directParam === "true" || directParam === "1";
   const minTransferSecs = minTransferParam ? Number.parseInt(minTransferParam, 10) * 60 : undefined;
-  const sortBy = sortByParam === "duration" || sortByParam === "arrival" || sortByParam === "departure"
-    ? sortByParam
-    : undefined;
+  const sortBy =
+    sortByParam === "duration" || sortByParam === "arrival" || sortByParam === "departure" || sortByParam === "transfers" || sortByParam === "walk"
+      ? sortByParam
+      : undefined;
+  const avoid = avoidLines.length ? avoidLines : undefined;
   const limit = limitParam ? Number.parseInt(limitParam, 10) : undefined;
 
   if (city !== "bb") {
     void startZb(city);
     try {
-      const connections = getZb(city).connections({ from, fromPoint, to, toPoint, afterSecs, arriveBy, limit, directOnly, minTransferSecs, date: date || undefined, dayLabel, sortBy });
+      const connections = getZb(city).connections(
+        { from, fromPoint, to, toPoint, afterSecs, arriveBy, limit, directOnly, minTransferSecs, date: date || undefined, dayLabel, sortBy, avoidLines: avoid },
+        avoidTypes,
+      );
       if (!connections) return warming();
       return Response.json({ count: connections.length, connections }, { headers: { "Cache-Control": "public, max-age=60" } });
     } catch (err) {
@@ -154,6 +176,8 @@ export async function GET(req: Request): Promise<Response> {
       date: date || undefined,
       dayLabel,
       sortBy,
+      avoidLines: avoid,
+      live: bbLiveDelay(),
     });
     attachLegShapes(connections);
     return Response.json(

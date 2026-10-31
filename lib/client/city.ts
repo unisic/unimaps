@@ -29,6 +29,8 @@ export interface CityConfig {
   logo: string | null;
   /** a zbiorkom city's operator colour (vehicle pills, stops, line badges); null = BB, which colours by operator */
   color: string | null;
+  /** lines drawn in their own colour (Warsaw's metro) */
+  lineColors?: Readonly<Record<string, string>>;
   vehiclesRefreshMs: number;
   /** extra data credit, plain text (no markup): rendered in the menu and in the Leaflet attribution */
   attribution: string | null;
@@ -54,6 +56,7 @@ function zbConfig(slug: ZbSlug): CityConfig {
     stopMinZoom: c.stopMinZoom ?? 14,
     logo: LOGO_SVG.has(slug) ? `/logos/${slug}.svg` : LOGO_PNG.has(slug) ? `/logos/${slug}.png` : null,
     color: c.color ?? "#475569",
+    lineColors: c.lineColors,
     // zbiorkom publishes positions on a 20 s grid and the server polls it only while a page asks
     vehiclesRefreshMs: 10_000,
     attribution: c.agency,

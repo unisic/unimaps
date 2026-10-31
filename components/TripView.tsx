@@ -19,7 +19,7 @@ import {
   TicketIcon,
   WheelchairIcon,
 } from "@/components/icons";
-import { BackIcon, CloseIcon, ErrorState, IconButton, LineBadge, ModeIcon, ShareButton } from "@/components/ui";
+import { BackIcon, CloseIcon, ErrorState, IconButton, LineBadge, ModeIcon, RequestStopTag, ShareButton } from "@/components/ui";
 import {
   ALERT_LEADS,
   MAX_ALERTS,
@@ -50,6 +50,7 @@ import {
   secsFromHHMM,
   transitMode,
   tripTimeMatchesStop,
+  withoutRequestTail,
 } from "@/lib/client/format";
 import { CITY, cityOfId } from "@/lib/client/city";
 import { findActiveStop, type ActiveStopResult } from "@/lib/client/geo";
@@ -682,18 +683,21 @@ function TripView({
 
                     {/* name */}
                     <span className="min-w-0 flex-1 self-center py-3">
-                      <span
-                        className={`block truncate text-[13.5px] ${
-                          isCurrent
-                            ? "font-semibold text-text"
-                            : passed
-                              ? "text-text-faint"
-                              : selected
-                                ? "font-semibold text-text"
-                                : "font-medium text-text"
-                        }`}
-                      >
-                        {displayStopName(t.stop_name)}
+                      <span className="flex min-w-0 items-center gap-1.5">
+                        <span
+                          className={`truncate text-[13.5px] ${
+                            isCurrent
+                              ? "font-semibold text-text"
+                              : passed
+                                ? "text-text-faint"
+                                : selected
+                                  ? "font-semibold text-text"
+                                  : "font-medium text-text"
+                          }`}
+                        >
+                          {displayStopName(coord?.onRequest ? withoutRequestTail(t.stop_name) : t.stop_name)}
+                        </span>
+                        {coord?.onRequest && <RequestStopTag dim={passed} />}
                       </span>
                       {(status || plat) && (
                         <span className="mt-0.5 block truncate text-[12px] text-text-faint">

@@ -6,9 +6,11 @@ import {
   BusIcon,
   CaretLeftIcon,
   CheckIcon,
+  HandWavingIcon,
   RssSimpleIcon,
   ShareNetworkIcon,
   StarIcon as PhStarIcon,
+  SubwayIcon,
   TramIcon,
   WarningCircleIcon,
   XIcon,
@@ -90,6 +92,21 @@ export function LiveMark() {
       <RssSimpleIcon size="1em" weight="bold" aria-hidden className="shrink-0 text-[0.75em]" />
       <span className="sr-only">na żywo, </span>
     </>
+  );
+}
+
+/** A request stop ("na żądanie"): the bus stops only when signalled, so the mark has to be seen. */
+export function RequestStopTag({ dim = false }: { dim?: boolean }) {
+  return (
+    <span
+      title="Przystanek na żądanie: pomachaj kierowcy albo naciśnij STOP"
+      className={`inline-flex shrink-0 items-center gap-1 rounded-full bg-late/15 px-1.5 py-px text-[11px] font-semibold leading-4 text-late ${
+        dim ? "opacity-60" : ""
+      }`}
+    >
+      <HandWavingIcon size="1.1em" weight="bold" aria-hidden />
+      na żądanie
+    </span>
   );
 }
 
@@ -193,9 +210,10 @@ export function SkeletonRows() {
   );
 }
 
-/** Bus, tram or trolleybus glyph at the font size (Phosphor has no trolleybus: its bus under two poles, as on the map pill). */
+/** Bus, tram, metro or trolleybus glyph at the font size (Phosphor has no trolleybus: its bus under two poles, as on the map pill). */
 export function ModeIcon({ mode, weight = "fill" }: { mode: TransitMode; weight?: "fill" | "bold" }) {
   if (mode === "tram") return <TramIcon size="1em" weight={weight} aria-hidden />;
+  if (mode === "metro") return <SubwayIcon size="1em" weight={weight} aria-hidden />;
   if (mode === "bus") return <BusIcon size="1em" weight={weight} aria-hidden />;
   return (
     <svg width="1em" height="1em" viewBox="0 0 256 256" fill="currentColor" aria-hidden>

@@ -109,6 +109,8 @@ export interface LineInfo {
   /** route_long_name — the terminus, e.g. "KANIÓW" */
   terminus: string;
   operator?: "KB" | "MZK" | "GZM";
+  /** GTFS route_type of a zbiorkom city's line: "0" tram, "1" metro, "3" bus, "11" trolleybus */
+  type?: string;
 }
 
 /** One stop pattern of a line (GET /api/line). */
@@ -165,6 +167,8 @@ export interface DepartureRow {
   side_number?: string;
   model?: string;
   features?: VehicleFeatures;
+  /** whole-stop board (?all=1): the pole the row leaves from, the post number ("02") or for BB the compass way ("płn.") */
+  pole?: string | null;
 }
 
 export interface DeparturesResponse {
@@ -173,6 +177,8 @@ export interface DeparturesResponse {
   warnings?: Array<"kb" | "mzk" | "gzm">;
   /** server clock (epoch s) when the rows were built — lets the client count down on the server's clock */
   server_ts?: number;
+  /** the stop's same-name poles nearby, when more than one: offers the whole-stop board */
+  poles?: number;
 }
 
 export interface TimetableDeparture {
@@ -331,6 +337,8 @@ export interface ConnectionLeg {
   /** stored road geometry of the leg's trip (GET /api/shapes) */
   shape_id?: string;
   operator?: "KB" | "MZK" | "GZM";
+  /** the bus's delay (s) at search time: the search boarded it at its live times, the times above are the timetable's */
+  delaySec?: number;
 }
 
 export interface ConnectionItinerary {

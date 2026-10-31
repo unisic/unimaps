@@ -54,6 +54,8 @@ export interface ConnectionLeg {
   /** stored road geometry of the leg's trip pattern (GET /api/shapes), when routed */
   shape_id?: string;
   operator?: "KB" | "MZK" | "GZM";
+  /** the trip's live delay (s) its times already include: the vehicle is running */
+  delaySec?: number;
 }
 
 export interface ConnectionItinerary {
@@ -98,7 +100,14 @@ export interface RouteQuery {
   maxTransferSecs?: number;
   date?: string;
   dayLabel?: string;
-  sortBy?: "departure" | "duration" | "arrival";
+  /** "transfers" / "walk": fewest rides / least walking first (walking transfers also cost more in the search) */
+  sortBy?: "departure" | "duration" | "arrival" | "transfers" | "walk";
+  /** rider-facing lines never ridden */
+  avoidLines?: string[];
+  /** route ids never ridden (a mode the rider avoids, resolved by the caller from its route types) */
+  avoidRoutes?: string[];
+  /** a running trip's delay (s) on its service date, undefined = timetable: today's searches use live times (no memo key) */
+  live?: (tripId: string, serviceDate: string) => number | undefined;
   /** following days searched when today's query finds nothing (default 3) */
   fallbackDays?: number;
 }
@@ -168,6 +177,8 @@ interface Route {
   dep: Int32Array;
   /** the pattern's blocking pickup bits (part of the pattern key), null when every call is open */
   flags: Uint8Array | null;
+  /** per trip, the live delay (s) already in arr/dep; undefined = timetable times */
+  delays?: (number | undefined)[];
 }
 
 interface DayTable {
@@ -884,6 +895,92 @@ export function lineTimetable(line: string, operator: "KB" | "MZK" | "GZM", date
     });
 }
 
+/**
+ * The day table without the trips of avoided lines / routes, and with running trips at their live times. A late
+ * trip stays in its route while the route stays FIFO; one that would overtake (or be overtaken by) its neighbour
+ * moves into a one-trip route of its own (boarding binary-searches a route's departures).
+ */
+// ponytail: O(trip instances of the day) per search (GZM 2026-10-31, 970 running: +~40 ms on ~230 ms); cache per live snapshot if searches pile up
+function adjustTable(table: DayTable, date: string, query: RouteQuery): DayTable {
+  const lines = query.avoidLines?.length ? new Set(query.avoidLines) : null;
+  const routeIds = query.avoidRoutes?.length ? new Set(query.avoidRoutes) : null;
+  const live = query.live ?? null;
+  if (!lines && !routeIds && !live) return table;
+  const dates = [offsetDate(date, -1), date, offsetDate(date, 1)];
+  const routes = table.routes.slice();
+  const at = table.at.slice();
+  const copied = new Set<number>();
+  for (let r = 0; r < table.routes.length; r++) {
+    const route = table.routes[r];
+    const len = route.stops.length;
+    let keep: number[] | null = null;
+    const shift: (number | undefined)[] = [];
+    for (let t = 0; t < route.trips.length; t++) {
+      const trip = route.trips[t];
+      if ((lines && lines.has(trip.line)) || (routeIds && routeIds.has(trip.routeId))) {
+        keep ??= Array.from({ length: t }, (_, i) => i);
+        continue;
+      }
+      const off = route.dep[t * len] - trip.stops[0].dep;
+      const delay = live ? live(trip.tripId, dates[1 + off / 86400]) : undefined;
+      if (delay !== undefined) {
+        keep ??= Array.from({ length: t }, (_, i) => i);
+        shift[t] = delay;
+      }
+      keep?.push(t);
+    }
+    if (!keep) continue;
+    // b runs no earlier than a at every call (timetable trips are FIFO among themselves)
+    const fifo = (a: number, b: number): boolean => {
+      const da = shift[a] ?? 0;
+      const db = shift[b] ?? 0;
+      for (let p = 0; p < len; p++) {
+        if (route.dep[b * len + p] + db < route.dep[a * len + p] + da) return false;
+        if (route.arr[b * len + p] + db < route.arr[a * len + p] + da) return false;
+      }
+      return true;
+    };
+    const stay: number[] = [];
+    const solo: number[] = [];
+    next: for (const t of keep) {
+      while (stay.length && !fifo(stay[stay.length - 1], t)) {
+        if (shift[t] !== undefined) {
+          solo.push(t);
+          continue next;
+        }
+        solo.push(stay.pop()!);
+      }
+      stay.push(t);
+    }
+    const build = (ts: readonly number[]): Route => {
+      const arr = new Int32Array(ts.length * len);
+      const dep = new Int32Array(ts.length * len);
+      ts.forEach((t, i) => {
+        for (let p = 0; p < len; p++) {
+          arr[i * len + p] = route.arr[t * len + p] + (shift[t] ?? 0);
+          dep[i * len + p] = route.dep[t * len + p] + (shift[t] ?? 0);
+        }
+      });
+      const delays = ts.some((t) => shift[t] !== undefined) ? ts.map((t) => shift[t]) : undefined;
+      return { stops: route.stops, trips: ts.map((t) => route.trips[t]), arr, dep, flags: route.flags, delays };
+    };
+    routes[r] = build(stay);
+    for (const t of solo) {
+      const nr = routes.length;
+      routes.push(build([t]));
+      for (let p = 0; p < len; p++) {
+        const st = route.stops[p];
+        if (!copied.has(st)) {
+          copied.add(st);
+          at[st] = at[st].slice();
+        }
+        at[st].push(nr, p);
+      }
+    }
+  }
+  return { routes, at };
+}
+
 interface Ride {
   route: Route;
   trip: number;
@@ -911,6 +1008,7 @@ function rangeSearch(
   change: number,
   probe: boolean,
   cap = INF,
+  walkX = 1,
 ): Ride[][] | null {
   const n = idx.stopIds.length;
   const rounds = (fill: number) => Array.from({ length: rides + 1 }, () => new Int32Array(n).fill(fill));
@@ -1064,7 +1162,7 @@ function rangeSearch(
         isArrived[s] = 0;
         const a = arr[k][s];
         relax(s, s, a + change);
-        for (const f of idx.foot[s]) relax(f.to, s, a + Math.max(change, f.secs + WALK_MARGIN_SECS));
+        for (const f of idx.foot[s]) relax(f.to, s, a + Math.max(change, f.secs * walkX + WALK_MARGIN_SECS));
       }
     }
     for (const s of marked) isMarked[s] = 0;
@@ -1113,8 +1211,10 @@ function toItinerary(
   const legs = rides.map(({ route, trip: t, board, alight, walkSecs }, i): ConnectionLeg => {
     const trip = route.trips[t];
     const len = route.stops.length;
-    const dep = route.dep[t * len + board];
-    const arr = route.arr[t * len + alight];
+    // timetable times on the wire (the client adds the bus's current delay); the search ran on the live ones
+    const delay = route.delays?.[t];
+    const dep = route.dep[t * len + board] - (delay ?? 0);
+    const arr = route.arr[t * len + alight] - (delay ?? 0);
     const fromId = trip.stops[board].stopId;
     const toId = trip.stops[alight].stopId;
     return {
@@ -1133,6 +1233,7 @@ function toItinerary(
       stopsCount: alight - board,
       stops: buildLegStops(trip, board, alight, idx, dep),
       ...(i > 0 ? { walkMins: Math.round(walkSecs / 60) } : {}),
+      ...(delay !== undefined ? { delaySec: delay } : {}),
     };
   });
 
@@ -1142,7 +1243,7 @@ function toItinerary(
   for (let i = 1; i < legs.length; i++) {
     const a = legs[i - 1];
     const b = legs[i];
-    waitSecs += b.departureSecs - a.arrivalSecs;
+    waitSecs += b.departureSecs + (b.delaySec ?? 0) - a.arrivalSecs - (a.delaySec ?? 0);
     const walk = b.walkMins ?? 0;
     walkMinutes += walk;
     if (walk === 0) transfers.push(a.toStopName);
@@ -1198,8 +1299,11 @@ function searchDay(
   isToday: boolean,
   limit: number,
 ): ConnectionItinerary[] {
-  const table = dayTable(idx, date);
+  // live times only on today's table: a fallback day's trips have not started
+  const table = adjustTable(dayTable(idx, date), date, isToday ? query : { ...query, live: undefined });
   const rides = query.directOnly ? 1 : MAX_RIDES;
+  // a walking transfer weighs three times its minutes, so a route that stays at the stop wins the close calls
+  const walkX = query.sortBy === "walk" ? 3 : 1;
   const change = Number.isFinite(query.minTransferSecs) ? query.minTransferSecs! : DEFAULT_CHANGE_SECS;
   const maxWait = query.maxTransferSecs ?? Infinity;
   const back = !!query.arriveBy;
@@ -1208,12 +1312,16 @@ function searchDay(
     const start = back ? Math.max(0, afterSecs - span) : afterSecs;
     // a probe that misses the target: forward, nothing later reaches it either; arrive-by, an earlier start still may
     const runs = back
-      ? rangeSearch(idx, table, origins, egress, start, afterSecs, rides, change, true, afterSecs + 1)
-      : rangeSearch(idx, table, origins, egress, afterSecs, afterSecs + span, rides, change, w === FIRST_WINDOW_SECS);
+      ? rangeSearch(idx, table, origins, egress, start, afterSecs, rides, change, true, afterSecs + 1, walkX)
+      : rangeSearch(idx, table, origins, egress, afterSecs, afterSecs + span, rides, change, w === FIRST_WINDOW_SECS, INF, walkX);
     if (!runs && !back) return [];
     const found = (runs ?? [])
       .map((r) => toItinerary(r, egress, idx, date, dayLabel, isToday))
-      .filter((it) => it.legs.every((l, i) => i === 0 || l.departureSecs - it.legs[i - 1].arrivalSecs <= maxWait));
+      .filter((it) =>
+        it.legs.every(
+          (l, i) => i === 0 || l.departureSecs + (l.delaySec ?? 0) - it.legs[i - 1].arrivalSecs - (it.legs[i - 1].delaySec ?? 0) <= maxWait,
+        ),
+      );
     if (found.length >= limit || span >= 86400 || (back && start === 0)) return found;
   }
 }
@@ -1255,6 +1363,10 @@ export function findConnections(query: RouteQuery, idx: RouterIndex | null = get
     a.departureSecs - b.departureSecs || a.arrivalSecs - b.arrivalSecs || a.transfersCount - b.transfersCount;
   if (query.sortBy === "duration") {
     found.sort((a, b) => a.totalDurationMins - b.totalDurationMins || byDeparture(a, b));
+  } else if (query.sortBy === "transfers") {
+    found.sort((a, b) => a.transfersCount - b.transfersCount || byDeparture(a, b));
+  } else if (query.sortBy === "walk") {
+    found.sort((a, b) => (a.walkMinutes ?? 0) - (b.walkMinutes ?? 0) || byDeparture(a, b));
   } else if (query.sortBy === "arrival") {
     found.sort((a, b) => a.arrivalSecs - b.arrivalSecs || b.departureSecs - a.departureSecs || a.transfersCount - b.transfersCount);
   } else {

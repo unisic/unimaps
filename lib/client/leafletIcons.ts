@@ -29,6 +29,8 @@ const PH_NAV_ARROW_FILL =
   "M248,121.58a15.76,15.76,0,0,1-11.29,15l-.2.06-78,21.84-21.84,78-.06.2a15.77,15.77,0,0,1-15,11.29h-.3a15.77,15.77,0,0,1-15.07-10.67L41,61.41a1,1,0,0,1-.05-.16A16,16,0,0,1,61.25,40.9l.16.05,175.92,65.26A15.78,15.78,0,0,1,248,121.58Z";
 const PH_TRAM_FILL =
   "M184,48H136V24h32a8,8,0,0,0,0-16H88a8,8,0,0,0,0,16h32V48H72A32,32,0,0,0,40,80V184a32,32,0,0,0,32,32h8L65.6,235.2a8,8,0,1,0,12.8,9.6L100,216h56l21.6,28.8a8,8,0,1,0,12.8-9.6L176,216h8a32,32,0,0,0,32-32V80A32,32,0,0,0,184,48Zm0,152H72a16,16,0,0,1-16-16V128H200v56A16,16,0,0,1,184,200ZM96,172a12,12,0,1,1-12-12A12,12,0,0,1,96,172Zm88,0a12,12,0,1,1-12-12A12,12,0,0,1,184,172Z";
+const PH_SUBWAY_FILL =
+  "M156,176V152h20v16a8,8,0,0,1-8,8Zm-16,0V152H116v24Zm36-88a8,8,0,0,0-8-8H88a8,8,0,0,0-8,8v48h96ZM152,24H104A72,72,0,0,0,32,96V208a8,8,0,0,0,8,8H76.58a4,4,0,0,0,3.58-2.21L91.06,192H88a24,24,0,0,1-24-24V88A24,24,0,0,1,88,64h80a24,24,0,0,1,24,24v80a24,24,0,0,1-24,24h-3.06l10.9,21.79a4,4,0,0,0,3.58,2.21H216a8,8,0,0,0,8-8V96A72,72,0,0,0,152,24Zm-4.94,168H108.94l-9.1,18.21a4,4,0,0,0,3.58,5.79h49.16a4,4,0,0,0,3.58-5.79ZM80,168a8,8,0,0,0,8,8h12V152H80Z";
 const PH_CARET_UP_FILL =
   "M215.39,163.06A8,8,0,0,1,208,168H48a8,8,0,0,1-5.66-13.66l80-80a8,8,0,0,1,11.32,0l80,80A8,8,0,0,1,215.39,163.06Z";
 const PH_PERSON_WALK_BOLD =
@@ -45,6 +47,7 @@ const BIKE_SVG = `<svg viewBox="0 0 256 256" aria-hidden="true"><path d="${PH_BI
 const MODE_SVG: Record<TransitMode, string> = {
   bus: `<svg class="veh-mode" viewBox="0 0 256 256" aria-hidden="true"><path d="${PH_BUS_FILL}"/></svg>`,
   tram: `<svg class="veh-mode" viewBox="0 0 256 256" aria-hidden="true"><path d="${PH_TRAM_FILL}"/></svg>`,
+  metro: `<svg class="veh-mode" viewBox="0 0 256 256" aria-hidden="true"><path d="${PH_SUBWAY_FILL}"/></svg>`,
   trolleybus:
     `<svg class="veh-mode" viewBox="0 0 256 256" aria-hidden="true"><path transform="translate(32 56) scale(0.75)" d="${PH_BUS_FILL}"/>` +
     `<path class="veh-poles" d="M108 80 76 16M148 80 116 16"/></svg>`,
@@ -52,7 +55,8 @@ const MODE_SVG: Record<TransitMode, string> = {
 const ARROW_SVG = `<svg viewBox="0 0 256 256" aria-hidden="true"><path transform="rotate(45 128 128)" d="${PH_NAV_ARROW_FILL}"/></svg>`;
 
 /**
- * Vehicle pill icon: the operator logo, or a tram / trolleybus glyph for those modes.
+ * Vehicle pill icon: the operator logo, or a tram / metro / trolleybus glyph for those modes; `more` = how many
+ * other vehicles the pill stands for (a stack whose pills would cover each other).
  * `bearing` only seeds the arrow's initial angle; after
  * that the VehicleAnimator rotates the arrow element in place. Never key an
  * icon memo on the heading: setIcon rewrites the DOM (replaying the pop
@@ -65,6 +69,7 @@ export function makeVehicleIcon(
   operator?: "KB" | "MZK" | "GZM",
   mode: TransitMode = "bus",
   scheduled = false,
+  more = 0,
 ): L.DivIcon {
   const hasHeading = bearing != null;
   const arrow = hasHeading
@@ -84,7 +89,9 @@ export function makeVehicleIcon(
       `<div class="veh-wrap"><div class="veh-pill${hasHeading ? "" : " no-heading"}" style="background:${color}">` +
       arrow +
       brandIcon +
-      `<span class="veh-line">${escapeHtml(line || "?")}</span></div></div>`,
+      `<span class="veh-line">${escapeHtml(line || "?")}</span>` +
+      (more ? `<span class="veh-more">+${more}</span>` : "") +
+      `</div></div>`,
     iconSize: [40, 40],
     iconAnchor: [20, 20],
   });
@@ -157,7 +164,8 @@ export function makeStopPingIcon(operator?: "KB" | "MZK" | "GZM" | "BOTH"): L.Di
 export function makeUserLocationIcon(): L.DivIcon {
   return L.divIcon({
     className: "user-loc-marker",
-    html: '<span class="user-loc"><span class="user-loc-pulse"></span><span class="user-loc-dot"></span></span>',
+    // the heading cone is turned in place by MapApp, never by a new icon
+    html: '<span class="user-loc"><span class="user-loc-pulse"></span><span class="user-loc-head" hidden></span><span class="user-loc-dot"></span></span>',
     iconSize: [22, 22],
     iconAnchor: [11, 11],
   });

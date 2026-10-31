@@ -24,7 +24,7 @@
 import { createHash } from "node:crypto";
 
 import * as config from "./config";
-import { bearing, metersBetween } from "./geo";
+import { bearing, metersBetween, nearestWithin } from "./geo";
 import { getGzmFeed, gzmFeedHealth, serviceDayBase, startGzmFeed, stopGzmFeed, warsawClock, type FeedArea, type GzmFeed, type GzmTrip } from "./gzm-feed";
 import { feedGzmFleet, type GzmFleetSource } from "./gzm-fleet";
 import { isRecord } from "./kb-api";
@@ -36,6 +36,7 @@ import { findConnections, offsetDate, stopEvents, type ConnectionItinerary, type
 import type { ShapePayload } from "./shape-store";
 import { pointAt, projectOnPolyline, tangentBearing } from "./shared/polyline";
 import { gzmRowKey, hhmm, preSortRows } from "./shared/departures";
+import { gzmStopKey } from "./shared/gzm-stop-key";
 import type { VehiclePos, VehiclesResponse } from "./types";
 
 /* ---------------- zbiorkom records ---------------- */
@@ -291,6 +292,9 @@ const LAYOVER_GRACE_SEC = 120;
  */
 const STUCK_SEC = 600;
 const BOARD_ROWS = 40;
+/** whole-stop board: the same-name poles this close (a few GZM names are two places km apart), nearest first */
+const GROUP_M = 600;
+const GROUP_MAX = 12;
 const SDIP_MS = 5_000;
 const SDIP_TIMEOUT_MS = 4_000;
 const SDIP_MAX_BODY = 4 * 1024 * 1024;
@@ -906,11 +910,23 @@ export class GzmLive {
     return JSON.stringify(empty);
   }
 
-  /** Board of one pole from the feed + the live join; null while the feed loads, "unknown" for a pole not in it. */
-  departures(stopId: string): { rows: Array<Record<string, unknown>>; server_ts: number } | null | "unknown" {
+  /**
+   * Board of one pole from the feed + the live join, or with `all` of its whole stop (the same-name poles, each row
+   * tagged with its post number); `poles` = the group's size when it has more than one. null while the feed
+   * loads, "unknown" for a pole not in it.
+   */
+  departures(
+    stopId: string,
+    all = false,
+  ): { rows: Array<Record<string, unknown>>; server_ts: number; poles?: number } | null | "unknown" {
     const feed = this.getFeed();
     if (!feed) return null;
-    if (!feed.stops.has(stopId)) return "unknown";
+    const self = feed.stops.get(stopId);
+    if (!self) return "unknown";
+    const named = feed.router.polesByName.get(feed.router.stops.get(stopId)?.nameKey ?? "") ?? [stopId];
+    const group = nearestWithin(self, [...named].flatMap((id) => feed.stops.get(id) ?? []), GROUP_M, GROUP_MAX);
+    // the post number: "02" of "Pszczelnik Park 02"
+    const post = new Map(all ? group.map((p) => [p.id, p.name.slice(gzmStopKey(p.name).length).trim()]) : []);
     const nowMs = this.now();
     const nowS = nowMs / 1000;
     const { date, secs } = warsawClock(nowMs);
@@ -923,7 +939,7 @@ export class GzmLive {
     };
     const rows: Array<Record<string, unknown>> = [];
     // an hour back: a late bus still departs; the row filter below drops what is gone
-    for (const e of stopEvents(feed.router, [stopId], date, secs - 3600, secs + 3 * 3600)) {
+    for (const e of stopEvents(feed.router, all ? group.map((p) => p.id) : [stopId], date, secs - 3600, secs + 3 * 3600)) {
       const trip = feed.trips.get(e.trip.tripId);
       if (!trip) continue;
       const tr = live ? this.byTrip.get(`${trip.tripId}|${e.serviceDate}`) : undefined;
@@ -957,9 +973,10 @@ export class GzmLive {
         canceled: false,
         trip_index: e.pos,
         row_key: gzmRowKey(trip.tripId.slice(this.prefix.length), trip.stops[e.pos].seq),
+        ...(all ? { pole: post.get(trip.stops[e.pos].stopId) || null } : {}),
       });
     }
-    return { rows: preSortRows(rows, nowS).slice(0, BOARD_ROWS), server_ts: nowS };
+    return { rows: preSortRows(rows, nowS).slice(0, BOARD_ROWS), server_ts: nowS, ...(group.length > 1 ? { poles: group.length } : {}) };
   }
 
   /** A pole's whole-day timetable; null while the feed loads, "unknown" for a pole not in it. */
@@ -1010,20 +1027,29 @@ export class GzmLive {
   /**
    * Connection search over the feed alone (no cross-city routing), legs tagged GZM with their shape ids;
    * null while the feed loads. A search costs 100 ms to over 1 s of the loop the pollers share (one 2026-10-28
-   * profile), so it is memoized per minute and searches only one fallback day.
+   * profile), so it is memoized per minute and searches only one fallback day. `avoidTypes` = GTFS route types
+   * never ridden; running trips board at their live times (a memo hit keeps the delays of its minute).
    */
   // ponytail: synchronous on the shared event loop; move the GZM index to worker_threads if p95 passes ~300 ms
-  connections(q: RouteQuery): ConnectionItinerary[] | null {
+  connections(q: RouteQuery, avoidTypes: readonly string[] = []): ConnectionItinerary[] | null {
     const feed = this.getFeed();
     if (!feed) return null;
     const now = this.now();
     const { date: today, secs } = warsawClock(now);
     const afterSecs = q.afterSecs ?? (!q.date || q.date === today ? secs - (secs % 60) : undefined);
-    const query: RouteQuery = { ...q, afterSecs, fromIds: [q.from], toIds: [q.to], fallbackDays: 1 };
+    const avoidRoutes = avoidTypes.length ? feed.lines.filter((l) => avoidTypes.includes(l.type)).map((l) => l.id) : undefined;
+    const query: RouteQuery = { ...q, afterSecs, fromIds: [q.from], toIds: [q.to], fallbackDays: 1, avoidRoutes };
     const key = JSON.stringify(query);
     const hit = this.connMemo.get(key);
     if (hit && hit.feed === feed && now - hit.at <= CONN_MEMO_MS) return hit.res;
-    const res = findConnections(query, feed.router);
+    const byTrip = this.byTrip;
+    const live = this.fresh(now / 1000)
+      ? (id: string, d: string) => {
+          const t = byTrip.get(`${id}|${d}`);
+          return t && !t.notStarted ? (t.pos.delay ?? undefined) : undefined;
+        }
+      : undefined;
+    const res = findConnections({ ...query, live }, feed.router);
     for (const c of res) {
       for (const leg of c.legs) {
         leg.operator = "GZM";

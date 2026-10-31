@@ -21,9 +21,11 @@ setWorkerUrl(new URL("../node_modules/maplibre-gl/dist/maplibre-gl-worker.mjs", 
 export type BasemapStatus = "loading" | "ready" | "failed";
 
 type GlMap = {
-  once(type: "idle" | "styledata" | "load" | "render", fn: () => void): unknown;
+  once(type: "idle" | "styledata" | "style.load" | "load" | "render", fn: () => void): unknown;
   on(type: "error" | "styleimagemissing" | "render", fn: (e?: { id?: string }) => void): unknown;
-  off(type: "idle" | "error" | "styledata" | "styleimagemissing" | "load" | "render", fn: (e?: { id?: string }) => void): unknown;
+  off(type: "idle" | "error" | "styledata" | "style.load" | "styleimagemissing" | "load" | "render", fn: (e?: { id?: string }) => void): unknown;
+  getStyle(): { layers: { id: string; layout?: { "text-field"?: unknown } }[] };
+  setLayoutProperty(layer: string, name: string, value: unknown): unknown;
   isStyleLoaded(): boolean;
   areTilesLoaded(): boolean;
   resize(): unknown;
@@ -58,6 +60,10 @@ const OFM_ATTRIBUTION =
   '<a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a> ' +
   '<a href="https://www.openmaptiles.org/" target="_blank" rel="noopener">&copy; OpenMapTiles</a> ' +
   'Data <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">&copy; OpenStreetMap</a>';
+
+/** OpenFreeMap labels read `coalesce(name_en, name)`: "Warsaw", "Krakow" next to Polish street names */
+const polishLabel = (e: unknown): unknown =>
+  Array.isArray(e) ? (e[0] === "get" && e[1] === "name_en" ? ["get", "name:pl"] : e.map(polishLabel)) : e;
 
 /** style JSON never arrived after this long → give up and let the caller fall back */
 const STYLE_TIMEOUT_MS = 5_000;
@@ -127,6 +133,14 @@ export default function VectorBaseLayer({
       if (gl.isStyleLoaded()) settle("ready");
     };
 
+    const onStyleLoad = () => {
+      for (const l of gl.getStyle().layers) {
+        const f = l.layout?.["text-field"];
+        if (JSON.stringify(f ?? null).includes('"name_en"')) gl.setLayoutProperty(l.id, "text-field", polishLabel(f));
+      }
+    };
+    gl.once("style.load", onStyleLoad);
+
     let styleArrived = false;
     const onStyleData = () => {
       styleArrived = true;
@@ -173,6 +187,7 @@ export default function VectorBaseLayer({
       gl.off("load", checkReady);
       gl.off("error", onErr);
       gl.off("styledata", onStyleData);
+      gl.off("style.load", onStyleLoad);
       map.removeLayer(layer);
     };
   }, [map, style, filter, onStatus]);
