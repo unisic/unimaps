@@ -1,11 +1,9 @@
-"use client";
-
 /**
  * Favorite stops — a module-level localStorage-backed store, so the StopView
  * star and the command palette stay in sync without threading props through
  * MapApp (and without re-rendering it on toggle).
  */
-import { useCallback, useMemo, useSyncExternalStore } from "react";
+import { external } from "@/lib/client/external";
 
 const KEY = "kb:favStops";
 const MAX_FAVS = 50;
@@ -74,14 +72,21 @@ export function toggleFavorite(designator: string): void {
   mutate(next);
 }
 
-export function useFavorites(): {
-  favs: readonly string[];
-  favSet: ReadonlySet<string>;
-  isFav: (designator: string) => boolean;
-  toggle: (designator: string) => void;
-} {
-  const favs = useSyncExternalStore(subscribe, getSnapshot, () => EMPTY);
-  const favSet = useMemo(() => new Set(favs), [favs]);
-  const isFav = useCallback((designator: string) => favSet.has(designator), [favSet]);
-  return { favs, favSet, isFav, toggle: toggleFavorite };
-}
+const store = external(subscribe, getSnapshot);
+let setOf: { favs: readonly string[]; set: ReadonlySet<string> } = { favs: EMPTY, set: new Set() };
+
+/** Reactive view of the favourites: reading a field inside a template or effect follows every change. */
+export const favorites = {
+  get favs(): readonly string[] {
+    return store.current;
+  },
+  get favSet(): ReadonlySet<string> {
+    const favs = store.current;
+    if (setOf.favs !== favs) setOf = { favs, set: new Set(favs) };
+    return setOf.set;
+  },
+  isFav(designator: string): boolean {
+    return this.favSet.has(designator);
+  },
+  toggle: toggleFavorite,
+};

@@ -2,6 +2,7 @@
 node_modules
 .next
 out
+dist
 build
 *.tsbuildinfo
 npm-debug.log*

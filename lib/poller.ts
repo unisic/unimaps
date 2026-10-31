@@ -10,7 +10,7 @@ import { bearing, metersBetween } from "./geo";
 import { KbApi, asRecord, isRecord, parseIntStrict, pyTruthy } from "./kb-api";
 import { stepArrivals, stepKbProgress, straightGeom, type ProgressGeom } from "./kb-progress";
 import { log } from "./logger";
-import { estimateFixAt, kbAheadM, kbDistAlong, nextSpeed, type KbShapeSink } from "./route-info";
+import { estimateFixAt, kbAheadM, kbDistAlong, nextSpeed, schedSpeed, type KbShapeSink } from "./route-info";
 import { buildKbPattern, type KbPattern } from "./shape-patterns";
 import type { Stop, VehicleJson, VehiclePos, VehiclesResponse } from "./types";
 
@@ -1026,6 +1026,9 @@ export class LivePoller {
         } else if (geom && prev) {
           pos.distM = prev.distM;
           pos.distRev = prev.distRev;
+        }
+        if (geom && pos.distM != null && geom.stops.length === times.length) {
+          pos.schedSpeed = schedSpeed(geom.stops, times.map((t) => (isRecord(t) ? hhmmToSecs(t.departure_time) : null)), pos.distM);
         }
       }
       if (!prev) return;

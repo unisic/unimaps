@@ -4,7 +4,6 @@
  * state keyed at load is safe. BB is the default everywhere: its fetch URLs, storage keys and links carry no
  * city marker; every other city adds `city=<slug>` and suffixes its storage keys with `:<slug>`.
  */
-import { createContext } from "react";
 
 import {
   isZbSlug,
@@ -99,7 +98,6 @@ export const OTHER_CITIES: readonly { id: ZbSlug; label: string }[] =
     .map((id) => ({ id, label: CITY[id].name }))
     .sort((a, b) => a.label.localeCompare(b.label, "pl"));
 
-export const CityContext = createContext<City>("bb");
 
 /** Shown instead of a generic error while the server answers 503 "Data is loading" (a city's feed still loading). */
 export const GZM_LOADING =
@@ -177,4 +175,10 @@ export function saveCity(city: City): void {
   } catch {
     /* storage blocked: the picker shows again next time */
   }
+}
+
+/* a full navigation: every store, poll and cache of the page is keyed to one city */
+export function switchCity(next: City): void {
+  saveCity(next);
+  window.location.assign(next === "bb" ? "/" : `/?city=${next}`);
 }

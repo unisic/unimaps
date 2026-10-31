@@ -4,7 +4,7 @@ import { describe, it } from "node:test";
 import { todayLocalISO } from "../lib/config";
 import { NO_DROP_OFF, NO_PICKUP } from "../lib/gtfs-csv";
 import { gzmStopKey } from "../lib/shared/gzm-stop-key";
-import { buildRouterIndex, findConnections, lineTimetable, stopEvents, type RouterStopInput, type TripEntry } from "../lib/router";
+import { buildRouterIndex, callColumns, findConnections, lineTimetable, stopEvents, type RouterStopInput, type TripEntry } from "../lib/router";
 
 // GZM-only router paths (dates, pickup flags, keyed pole groups, stopEvents) on a hand-built index;
 // the KB/MZK paths are pinned by router*.test.ts against the fixture feed.
@@ -26,7 +26,7 @@ function trip(id: string, calls: Array<[string, string]>, dates: string[], flags
     routeId: "r",
     line: "7",
     headsign: "Koniec",
-    stops: calls.map(([stopId, t], i) => ({ stopId, seq: i + 1, arr: secs(t), dep: secs(t) })),
+    ...callColumns(calls.map(([stopId, t], i) => ({ stopId, seq: i + 1, arr: secs(t), dep: secs(t) })), new Map()),
     nums: new Int32Array(0),
     pattern: "",
     dates: new Set(dates),

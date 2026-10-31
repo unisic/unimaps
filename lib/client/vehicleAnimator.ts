@@ -1,5 +1,3 @@
-"use client";
-
 /**
  * Per-map animator — the ONLY writer of live-vehicle marker positions and
  * heading arrows (fleet markers from VehicleLayer, the tracked bus from

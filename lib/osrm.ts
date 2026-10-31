@@ -5,7 +5,7 @@
  * (≤1 req/s), send an identifying User-Agent and stop on block/config errors.
  */
 import { bearing } from "./geo";
-import { decodePolyline, segMeters, type LatLng } from "./shared/polyline";
+import { decodePolyline, preparePolyline, projectOnPolyline, segMeters, type LatLng } from "./shared/polyline";
 
 /** Max waypoints per request (matches the browser fallback in lib/client/api.ts). */
 export const OSRM_CHUNK = 12;
@@ -92,13 +92,14 @@ export function classifyOsrmResponse(status: number, body: unknown, retryAfter?:
   }
   if (status === 401 || status === 403) return { ok: false, kind: "blocked", detail: `HTTP ${status}` };
   if (status === 404 || status === 414) return { ok: false, kind: "config", detail: `HTTP ${status}` };
-  if (code === "NoRoute" || code === "NoSegment") return { ok: false, kind: "unroutable", detail: code };
+  if (code === "NoRoute" || code === "NoSegment" || code === "NoMatch") return { ok: false, kind: "unroutable", detail: code };
   if (code.startsWith("Invalid") || code === "NotImplemented" || code === "TooBig") {
     return { ok: false, kind: code === "TooBig" ? "unroutable" : "config", detail: code };
   }
   if (status >= 500 || !rec) return { ok: false, kind: "unavailable", detail: `HTTP ${status}${rec ? "" : " (no JSON)"}` };
   if (status !== 200 || code !== "Ok") return { ok: false, kind: "unavailable", detail: `HTTP ${status} ${code}` };
-  const routes = Array.isArray(rec.routes) ? rec.routes : [];
+  // /match answers `matchings` (one per matched piece of the trace) where /route answers `routes`
+  const routes = Array.isArray(rec.routes) ? rec.routes : Array.isArray(rec.matchings) ? rec.matchings : [];
   const r0 = routes[0] && typeof routes[0] === "object" ? (routes[0] as Record<string, unknown>) : null;
   const geom = typeof r0?.geometry === "string" ? r0.geometry : "";
   const pts = geom ? decodePolyline(geom, 6) : [];
@@ -154,16 +155,40 @@ export interface OsrmClientOpts {
   timeoutMs?: number;
 }
 
+/** Request slots shared by every client of one OSRM server: the public demo allows ≤1 request/s in total. */
+export interface OsrmPace {
+  nextSlot: number;
+}
+
+/** The process-wide pace: the road-shape store and the GZM shape matcher draw from it. */
+export const OSRM_PACE: OsrmPace = { nextSlot: 0 };
+
+/** Wait for the next free slot of `pace`, booking it. */
+export async function paceRequest(
+  pace: OsrmPace,
+  minIntervalMs: number,
+  now: number,
+  sleep: (ms: number) => Promise<void>,
+): Promise<void> {
+  const at = Math.max(now, pace.nextSlot);
+  pace.nextSlot = at + minIntervalMs;
+  if (at > now) await sleep(at - now);
+}
+
 async function requestRoute(
   pts: readonly LatLng[],
   continueStraight: boolean,
   o: OsrmClientOpts,
   bearings?: ReadonlyArray<number | null>,
 ): Promise<OsrmOutcome> {
+  return requestOsrm(osrmRouteUrl(o.base, pts, continueStraight, bearings), o);
+}
+
+async function requestOsrm(url: string, o: OsrmClientOpts): Promise<OsrmOutcome> {
   await o.throttle();
   let res: Response;
   try {
-    res = await o.fetchImpl(osrmRouteUrl(o.base, pts, continueStraight, bearings), {
+    res = await o.fetchImpl(url, {
       headers: { "User-Agent": o.userAgent, Accept: "application/json" },
       signal: AbortSignal.timeout(o.timeoutMs ?? 15_000),
     });
@@ -259,4 +284,56 @@ export async function routeWaypoints(wps: readonly LatLng[], o: OsrmClientOpts):
     }
   }
   return { ok: true, pts: mergeChunkGeometries(parts), straightLegs, totalLegs };
+}
+
+/* ---------------------------------------------------------------- map matching */
+
+/** Max trace points per /match request on the public demo (12 answers TooBig); OSRM's own default is 100. */
+export const MATCH_CHUNK_PUBLIC = 10;
+export const MATCH_CHUNK = 100;
+/** How far OSRM may move a trace point onto a road. */
+const MATCH_RADIUS_M = 25;
+/** A matched chunk straying further than this from its trace took another road. */
+const MATCH_DEV_M = 60;
+
+/** The /match service of a /route base URL; null when the base is not a /route/v1/ one. */
+export function osrmMatchBase(routeBase: string): string | null {
+  return routeBase.includes("/route/v1/") ? routeBase.replace("/route/v1/", "/match/v1/") : null;
+}
+
+export function osrmMatchUrl(base: string, pts: readonly LatLng[]): string {
+  const coords = pts.map((p) => `${p[1].toFixed(6)},${p[0].toFixed(6)}`).join(";");
+  const radiuses = pts.map(() => MATCH_RADIUS_M).join(";");
+  return `${base.replace(/\/+$/, "")}/${coords}?overview=full&geometries=polyline6&steps=false&gaps=ignore&tidy=false&radiuses=${radiuses}`;
+}
+
+const pathM = (pts: readonly LatLng[]): number => {
+  let m = 0;
+  for (let i = 1; i < pts.length; i++) m += segMeters(pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1]);
+  return m;
+};
+
+/** A match that follows its trace: within MATCH_DEV_M of it everywhere and not much longer (no loop around a block). */
+export function plausibleMatch(matched: readonly LatLng[], trace: readonly LatLng[]): boolean {
+  const pl = preparePolyline(trace);
+  if (!pl || matched.length < 2) return false;
+  if (pathM(matched) > 1.3 * pl.length + 50) return false;
+  return matched.every((p) => (projectOnPolyline(pl, p[0], p[1])?.d ?? Infinity) <= MATCH_DEV_M);
+}
+
+export type ChunkMatch =
+  | { ok: true; pts: LatLng[]; kept: boolean }
+  | { ok: false; kind: Exclude<OsrmFailure, "unroutable">; detail: string; retryAfterSec?: number };
+
+/**
+ * Snap one chunk of a trace (at most MATCH_CHUNK / MATCH_CHUNK_PUBLIC points, see chunkWaypoints) to the roads.
+ * A chunk OSRM can't match as one piece, or matches implausibly (Siemianowice, line 27: one chunk came back
+ * 2.1 km long for a 557 m trace), keeps its own points (`kept`).
+ */
+export async function matchChunk(chunk: LatLng[], o: OsrmClientOpts): Promise<ChunkMatch> {
+  const r = await requestOsrm(osrmMatchUrl(o.base, chunk), o);
+  if (!r.ok && r.kind !== "unroutable") return { ok: false, kind: r.kind, detail: r.detail, retryAfterSec: r.retryAfterSec };
+  // one matching over every point: a split or a dropped point leaves a piece of the trace unmatched
+  if (r.ok && r.legs.length === chunk.length - 1 && plausibleMatch(r.pts, chunk)) return { ok: true, pts: r.pts, kept: false };
+  return { ok: true, pts: chunk, kept: true };
 }

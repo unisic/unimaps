@@ -14,11 +14,11 @@
     "markdown-it": "^14.3.3"
   },
   "scripts": {
-    "dev": "next dev -p ${PORT:-8080}",
-    "build": "next build",
-    "start": "node scripts/start-server.mjs",
+    "dev": "tsx watch --clear-screen=false server/dev.ts",
+    "build": "vite build && node scripts/compress-static.mjs out && node scripts/build-server.mjs",
+    "start": "node dist/server.mjs",
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "svelte-check --tsconfig ./tsconfig.json",
     "test": "node --import tsx --test \"test/**/*.test.ts\"",
     "test:fleet": "tsx scripts/test-live-fleet.ts",
     "build:gtfs": "tsx scripts/build-gtfs.ts",
@@ -27,29 +27,26 @@
   },
   "dependencies": {
     "@maplibre/maplibre-gl-leaflet": "^0.1.4",
-    "@phosphor-icons/react": "^2.1.10",
     "fflate": "^0.8.3",
-    "geist": "^1.9.0",
     "gtfs-realtime-bindings": "^2.2.0",
     "leaflet": "^1.9.4",
     "maplibre-gl": "^6.16.0",
-    "next": "^16.4.3",
-    "p-limit": "^7.3.0",
-    "react": "^19.3.1",
-    "react-dom": "^19.3.1",
-    "react-leaflet": "^5.0.0",
-    "swr": "^2.5.1"
+    "p-limit": "^7.3.0"
   },
   "devDependencies": {
+    "@phosphor-icons/react": "^2.1.10",
+    "@sveltejs/vite-plugin-svelte": "^7.3.1",
     "@tailwindcss/postcss": "^4.3.3",
     "@types/leaflet": "^1.9.22",
     "@types/node": "^24",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
+    "esbuild": "^0.28.1",
     "eslint": "^9",
-    "eslint-config-next": "^16.4.3",
+    "svelte": "^5.57.3",
+    "svelte-check": "^4.7.7",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.23.15",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.62.1",
+    "vite": "^8.3.5"
   }
 }

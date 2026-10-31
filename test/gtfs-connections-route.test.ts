@@ -2,7 +2,7 @@ import "./support/tmp-output"; // first: redirects KB_OUTPUT_DIR before lib/conf
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { GET } from "../app/api/connections/route";
+import { GET } from "../server/api/connections/route";
 
 // every request below should be rejected before the search; a fake, already "started" poller singleton
 // makes sure a regression still cannot start real pollers or touch the network

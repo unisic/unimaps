@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, it } from "node:test";
 import vm from "node:vm";
 
+import { head, PAGES } from "../app/head";
 import manifestFn from "../app/manifest";
 
 interface PngInfo {
@@ -92,19 +93,20 @@ describe("PWA Specification and Assets Verification", () => {
       assert.equal(info.colorType, 2, "apple-touch-icon must be solid RGB (colorType 2) without alpha");
     });
 
-    it("configures layout metadata and viewport for standalone iOS experience", () => {
-      const layoutSrc = fs.readFileSync(path.resolve(process.cwd(), "app/layout.tsx"), "utf-8");
-      assert.ok(layoutSrc.includes('applicationName: "Unimaps"'), "must define applicationName");
-      assert.ok(layoutSrc.includes("telephone: false"), "must disable telephone formatDetection on iOS");
-      assert.ok(layoutSrc.includes("capable: true"), "must set appleWebApp capable: true");
+    it("configures head metadata and viewport for standalone iOS experience", () => {
+      const headHtml = head(PAGES["index.html"]);
+      const meta = (name: string) => headHtml.match(new RegExp(`<meta name="${name}" content="([^"]*)">`))?.[1];
+      assert.equal(meta("application-name"), "Unimaps", "must define applicationName");
+      assert.equal(meta("format-detection"), "telephone=no", "must disable telephone formatDetection on iOS");
+      assert.equal(meta("mobile-web-app-capable"), "yes", "must set mobile-web-app-capable");
       // opaque on purpose: black-translucent makes iOS 26 standalone leave a dead strip at the bottom (WebKit bug 301108)
-      assert.ok(layoutSrc.includes('statusBarStyle: "black"'), "must set statusBarStyle: black");
-      assert.ok(layoutSrc.includes('title: "Unimaps"'), "must set appleWebApp title");
-      assert.ok(layoutSrc.includes('"mobile-web-app-capable": "yes"'), "must set mobile-web-app-capable");
-      assert.ok(layoutSrc.includes('viewportFit: "cover"'), "must set viewportFit: cover for notch/island");
-      assert.ok(layoutSrc.includes('interactiveWidget: "resizes-content"'), "must set interactiveWidget: resizes-content");
-      assert.ok(layoutSrc.includes("userScalable: false"), "must prevent accidental page zoom");
-      assert.ok(layoutSrc.includes("maximumScale: 1"), "must lock maximumScale: 1");
+      assert.equal(meta("apple-mobile-web-app-status-bar-style"), "black", "must set statusBarStyle: black");
+      assert.equal(meta("apple-mobile-web-app-title"), "Unimaps", "must set appleWebApp title");
+      const viewport = meta("viewport") ?? "";
+      assert.ok(viewport.includes("viewport-fit=cover"), "must set viewportFit: cover for notch/island");
+      assert.ok(viewport.includes("interactive-widget=resizes-content"), "must set interactiveWidget: resizes-content");
+      assert.ok(viewport.includes("user-scalable=no"), "must prevent accidental page zoom");
+      assert.ok(viewport.includes("maximum-scale=1"), "must lock maximumScale: 1");
     });
   });
 
@@ -132,8 +134,8 @@ describe("PWA Specification and Assets Verification", () => {
       const legacy = loadSw({ "/brand.svg": "v1" });
       await legacy.dispatch("/brand.svg");
       assert.deepEqual([...new Set(legacy.opened)], ["kb-shell-v2"]);
-      const reg = fs.readFileSync(path.resolve(process.cwd(), "components/PwaRegister.tsx"), "utf-8");
-      assert.ok(reg.includes("/sw.js?v=${process.env.NEXT_PUBLIC_BUILD_ID"), "PwaRegister registers the versioned script");
+      const reg = fs.readFileSync(path.resolve(process.cwd(), "components/PwaRegister.svelte"), "utf-8");
+      assert.ok(reg.includes("/sw.js?v=${__BUILD_ID__}"), "PwaRegister registers the versioned script");
     });
 
     it("activate drops the previous deploy's shell but keeps the page's kb-offline store", async () => {

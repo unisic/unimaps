@@ -10,6 +10,13 @@
 
 export type LatLng = [number, number];
 
+export interface LatLonBox {
+  s: number;
+  w: number;
+  n: number;
+  e: number;
+}
+
 const M_PER_DEG = 111_320;
 const RAD = Math.PI / 180;
 

@@ -7,7 +7,7 @@ import { describe, it } from "node:test";
 
 import { mzkRemapDist, mzkShapeFromCourseDetails, mzkStopIndices } from "../lib/mzk-shape";
 import { kbNextStopIndex } from "../lib/poller";
-import { estimateFixAt, kbDistAlong, nextSpeed, vehicleExtras } from "../lib/route-info";
+import { estimateFixAt, kbDistAlong, nextSpeed, schedSpeed, vehicleExtras } from "../lib/route-info";
 import type { ShapeGeometry } from "../lib/shape-store";
 import { preparePolyline, type LatLng } from "../lib/shared/polyline";
 import type { VehiclePos } from "../lib/types";
@@ -52,6 +52,30 @@ describe("nextSpeed", () => {
   });
 });
 
+describe("schedSpeed", () => {
+  const close = (a: number | null, b: number) => assert.ok(a !== null && Math.abs(a - b) < 1e-6, `${a} != ${b}`);
+
+  it("widens a minute-rounded leg forward, then backward, to 120 s", () => {
+    // 500 m "in 0 s" between two stops printed with the same minute
+    close(schedSpeed([0, 500, 1000, 2000], [0, 60, 60, 240], 700), 1500 / 180);
+    // nothing left ahead: the run grows backward
+    close(schedSpeed([0, 500, 1000, 2000], [0, 60, 120, 150], 1500), 2000 / 150);
+    // untimed or unplaced stops are skipped
+    close(schedSpeed([0, null, 1000, 1500], [0, 30, null, 180], 200), 1500 / 180);
+  });
+
+  it("crosses midnight", () => {
+    close(schedSpeed([0, 1500], [86_280, 60], 10), 1500 / 180);
+  });
+
+  it("null outside the trip, on a timetable too short to widen, or an absurd pace", () => {
+    assert.equal(schedSpeed([0, 500, 1000], [0, 60, 120], -5), null);
+    assert.equal(schedSpeed([0, 500, 1000], [0, 60, 120], 1000), null);
+    assert.equal(schedSpeed([0, 500], [0, 60], 100), null);
+    assert.equal(schedSpeed([0, 5000], [0, 120], 100), null);
+  });
+});
+
 describe("kbDistAlong", () => {
   // out-and-back: 1 km east, back 10 m north of it; stops at 0, 500, 1000(apex), 1510, 2010
   const pl = preparePolyline([P(0, 0), P(1000, 0), P(1000, 10), P(0, 10)])!;
@@ -93,6 +117,10 @@ describe("vehicleExtras", () => {
     assert.equal(vehicleExtras(v, { wireId: () => null }, 1000).shape, undefined);
     assert.equal(vehicleExtras(v, shapes, 1200).speed, undefined); // stale speed
     assert.deepEqual(vehicleExtras({} as VehiclePos, null, 0), {});
+    // a course not begun (layover, depot run) is not on its shape yet: no along-route motion on the wire
+    assert.deepEqual(vehicleExtras({ ...v, notStarted: true }, shapes, 1000), { fix_at: 1000, next_stop_seq: 3, not_started: true });
+    assert.equal(vehicleExtras({ ...v, schedSpeed: 8.333 }, shapes, 1000).sched_speed, 8.3);
+    assert.equal(vehicleExtras({ ...v, schedSpeed: 8.333, notStarted: true }, shapes, 1000).sched_speed, undefined);
   });
 
   it("never throws", () => {

@@ -23,7 +23,7 @@ import path from "node:path";
 
 import { log } from "./logger";
 import { mzkShapeFromCourseDetails } from "./mzk-shape";
-import { routeWaypoints, type OsrmClientOpts } from "./osrm";
+import { paceRequest, routeWaypoints, type OsrmClientOpts, type OsrmPace } from "./osrm";
 import type { KbPattern } from "./shape-patterns";
 import {
   decodePolyline,
@@ -105,6 +105,8 @@ export interface ShapeStoreOptions {
   osrmBase: string | null;
   userAgent: string;
   minIntervalMs: number;
+  /** request slots shared with other clients of the same OSRM server; absent = this store's own */
+  pace?: OsrmPace;
   maxAgeDays: number;
   /** persistence file; null = in-memory only */
   file: string | null;
@@ -208,7 +210,7 @@ function validEntry(v: unknown): ShapeEntry | null {
 type OsrmState = "ok" | "disabled" | "paused" | "blocked" | "config_error";
 
 export class ShapeStore {
-  private readonly o: Required<Omit<ShapeStoreOptions, "mzkFetch" | "osrmBase" | "file">> & {
+  private readonly o: Required<Omit<ShapeStoreOptions, "mzkFetch" | "osrmBase" | "file" | "pace">> & {
     osrmBase: string | null;
     file: string | null;
     mzkFetch: ((variantId: number) => Promise<unknown>) | null;
@@ -222,7 +224,7 @@ export class ShapeStore {
   private mzkInflight = new Map<number, Promise<ShapeEntry | null>>();
   private rawTripToKey = new Map<string, string>();
 
-  private nextSlot = 0;
+  private readonly pace: OsrmPace;
   private mzkNextSlot = 0;
   private pausedUntil = 0;
   private backoffMs = 60_000;
@@ -260,6 +262,7 @@ export class ShapeStore {
       ...opts,
       mzkFetch: opts.mzkFetch ?? null,
     };
+    this.pace = opts.pace ?? { nextSlot: 0 };
     this.osrmState = opts.osrmBase ? "ok" : "disabled";
   }
 
@@ -588,11 +591,8 @@ export class ShapeStore {
     return true;
   }
 
-  private async throttle(): Promise<void> {
-    const now = this.now();
-    const at = Math.max(now, this.nextSlot);
-    this.nextSlot = at + this.o.minIntervalMs;
-    if (at > now) await this.o.sleep(at - now);
+  private throttle(): Promise<void> {
+    return paceRequest(this.pace, this.o.minIntervalMs, this.now(), this.o.sleep);
   }
 
   private async buildKb(key: string): Promise<void> {

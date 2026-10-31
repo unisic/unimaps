@@ -362,11 +362,7 @@ describe("GzmLive", () => {
 });
 
 describe("schedulePosition", () => {
-  const stops = [
-    { stopId: "a", seq: 0, arr: 100, dep: 100 },
-    { stopId: "b", seq: 1, arr: 200, dep: 230 },
-    { stopId: "c", seq: 2, arr: 330, dep: 330 },
-  ];
+  const stops = { arr: Int32Array.from([100, 200, 330]), dep: Int32Array.from([100, 230, 330]) };
   it("runs from the first departure up to the last arrival, standing through a dwell", () => {
     assert.equal(schedulePosition(stops, 99), null);
     assert.deepEqual(schedulePosition(stops, 100), { i: 0, f: 0, next: 1 });
@@ -374,7 +370,7 @@ describe("schedulePosition", () => {
     assert.deepEqual(schedulePosition(stops, 215), { i: 1, f: 0, next: 1 });
     assert.deepEqual(schedulePosition(stops, 280), { i: 1, f: 0.5, next: 2 });
     assert.equal(schedulePosition(stops, 330), null);
-    assert.equal(schedulePosition(stops.slice(0, 1), 100), null);
+    assert.equal(schedulePosition({ arr: stops.arr.subarray(0, 1), dep: stops.dep.subarray(0, 1) }, 100), null);
   });
 });
 

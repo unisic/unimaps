@@ -2,7 +2,7 @@ import "./support/tmp-output"; // first: redirects KB_OUTPUT_DIR before lib/conf
 import assert from "node:assert/strict";
 import { beforeEach, describe, it } from "node:test";
 
-import * as route from "../app/api/trips/route";
+import * as route from "../server/api/trips/route";
 
 /* Fake singleton (already "started"): the route talks to a fake KbApi, never to upstream. */
 const KEY = Symbol.for("kb-gtfs.poller-singleton");

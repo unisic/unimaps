@@ -17,7 +17,6 @@ services:
     read_only: true
     tmpfs:
       - /tmp
-      - /app/.next/cache
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     pids_limit: 256

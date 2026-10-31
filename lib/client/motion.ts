@@ -1,5 +1,3 @@
-"use client";
-
 /** Reduced-motion helpers for Leaflet's JS-driven pans — the CSS
  *  prefers-reduced-motion reset can't reach flyTo/fitBounds animations.
  *  Deliberately no leaflet import: safe anywhere client-side. */

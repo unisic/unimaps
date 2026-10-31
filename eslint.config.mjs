@@ -1,10 +1,9 @@
 import { defineConfig, globalIgnores } from "eslint/config";
-import coreWebVitals from "eslint-config-next/core-web-vitals";
-import typescript from "eslint-config-next/typescript";
+import tseslint from "typescript-eslint";
 
+// .svelte files are type- and a11y-checked by svelte-check (npm run typecheck)
 const eslintConfig = defineConfig([
-  ...coreWebVitals,
-  ...typescript,
+  ...tseslint.configs.recommended,
   {
     rules: {
       "@typescript-eslint/no-unused-vars": [
@@ -18,13 +17,7 @@ const eslintConfig = defineConfig([
       ],
     },
   },
-  globalIgnores([
-    ".next/**",
-    "out/**",
-    "node_modules/**",
-    "next-env.d.ts",
-    "output/**",
-  ]),
+  globalIgnores([".next/**", "out/**", "dist/**", "node_modules/**", "output/**"]),
 ]);
 
 export default eslintConfig;

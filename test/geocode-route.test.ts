@@ -2,7 +2,7 @@ import "./support/tmp-output"; // first: redirects KB_OUTPUT_DIR before lib/conf
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
 
-import * as route from "../app/api/geocode/route";
+import * as route from "../server/api/geocode/route";
 
 // Photon's answer to "Czeladź Sportowa" (captured 2026-10-29, trimmed): the street twice (two OSM
 // ways), a place on it, plus a hit outside the GZM box

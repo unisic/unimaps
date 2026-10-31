@@ -3,16 +3,17 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, it } from "node:test";
 
+import { head, PAGES } from "../app/head";
 import manifestFn from "../app/manifest";
 import { KbApi } from "../lib/kb-api";
 
 describe("Site Performance & Optimization Invariants", () => {
   describe("PWA Fullscreen & Safe-Area Configuration", () => {
     it("includes apple-touch-fullscreen and fullscreen manifest display override", () => {
-      const layoutSrc = fs.readFileSync(path.resolve(process.cwd(), "app/layout.tsx"), "utf-8");
+      const headHtml = head(PAGES["index.html"]);
       assert.ok(
-        layoutSrc.includes('"apple-touch-fullscreen": "yes"'),
-        "layout must include apple-touch-fullscreen for iOS PWA fullscreen",
+        headHtml.includes('<meta name="apple-touch-fullscreen" content="yes">'),
+        "head must include apple-touch-fullscreen for iOS PWA fullscreen",
       );
 
       const manifest = manifestFn();
@@ -24,30 +25,30 @@ describe("Site Performance & Optimization Invariants", () => {
     });
 
     it("ensures TopBar uses safe-area offset with 0.75rem clearance to clear iOS status blur", () => {
-      const topBarSrc = fs.readFileSync(path.resolve(process.cwd(), "components/TopBar.tsx"), "utf-8");
+      const topBarSrc = fs.readFileSync(path.resolve(process.cwd(), "components/TopBar.svelte"), "utf-8");
       assert.ok(
         topBarSrc.includes("calc(env(safe-area-inset-top,0px)+0.75rem)"),
         "TopBar must include clearance below safe-area to prevent entering topbar blur",
       );
 
-      const filterSrc = fs.readFileSync(path.resolve(process.cwd(), "components/LineFilterChip.tsx"), "utf-8");
+      const filterSrc = fs.readFileSync(path.resolve(process.cwd(), "components/LineFilterChip.svelte"), "utf-8");
       assert.ok(
         filterSrc.includes("calc(env(safe-area-inset-top,0px)+0.75rem+56px)"),
         "LineFilterChip must stay aligned with TopBar",
       );
 
-      const toastSrc = fs.readFileSync(path.resolve(process.cwd(), "components/Toast.tsx"), "utf-8");
+      const toastSrc = fs.readFileSync(path.resolve(process.cwd(), "components/Toast.svelte"), "utf-8");
       assert.ok(
         toastSrc.includes("calc(env(safe-area-inset-top,0px)+0.75rem+60px)"),
         "Toast must stay aligned with TopBar",
       );
     });
 
-    it("verifies preconnect links to tile CDNs in layout.tsx", () => {
-      const layoutSrc = fs.readFileSync(path.resolve(process.cwd(), "app/layout.tsx"), "utf-8");
-      assert.ok(layoutSrc.includes('rel="preconnect" href="https://tiles.openfreemap.org"'));
-      assert.ok(layoutSrc.includes('rel="dns-prefetch" href="https://tiles.openfreemap.org"'));
-      assert.ok(layoutSrc.includes('rel="preconnect" href="https://tile.openstreetmap.org"'));
+    it("verifies preconnect links to tile CDNs in the shared head", () => {
+      const headHtml = head(PAGES["index.html"]);
+      assert.ok(headHtml.includes('rel="preconnect" href="https://tiles.openfreemap.org"'));
+      assert.ok(headHtml.includes('rel="dns-prefetch" href="https://tiles.openfreemap.org"'));
+      assert.ok(headHtml.includes('rel="preconnect" href="https://tile.openstreetmap.org"'));
     });
   });
 
@@ -114,7 +115,7 @@ describe("Site Performance & Optimization Invariants", () => {
 
   describe("Map Readiness Tuning", () => {
     it("VectorBaseLayer uses reduced tile padding and faster timeout fallback", () => {
-      const baseLayerSrc = fs.readFileSync(path.resolve(process.cwd(), "components/VectorBaseLayer.tsx"), "utf-8");
+      const baseLayerSrc = fs.readFileSync(path.resolve(process.cwd(), "components/VectorBaseLayer.svelte"), "utf-8");
       assert.ok(baseLayerSrc.includes("padding: 0.08"), "tile padding must be optimized for cold load");
       assert.ok(baseLayerSrc.includes("STYLE_TIMEOUT_MS = 5_000"), "style timeout must be 5s for fast fallback");
       assert.ok(!baseLayerSrc.includes("gl.areTilesLoaded()"), "should not block screen veil waiting for 100% tiles");

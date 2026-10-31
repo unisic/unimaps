@@ -11,7 +11,7 @@ import { STATION_NAME_RE } from "./merged-stops";
 import { hasPlannedDip, isMzkNotStarted } from "./mzk-state";
 import { mzkRemapDist, mzkStopIndices } from "./mzk-shape";
 import { interruptibleSleep } from "./poller";
-import { nextSpeed } from "./route-info";
+import { nextSpeed, schedSpeed } from "./route-info";
 import { loadMzkStopDirs, MzkStopDirs, saveMzkStopDirs } from "./mzk-stop-dirs";
 import type { ShapeGeometry } from "./shape-store";
 import type { LineInfo, Stop, VehiclePos } from "./types";
@@ -508,6 +508,7 @@ export class MzkPoller {
           if (d !== null) {
             pos.distM = Math.round(d * 10) / 10;
             pos.distRev = geom.rev;
+            pos.schedSpeed = schedSpeed(geom.stops, sp.map((p) => (p?.scheduledDeparture ? p.scheduledDeparture / 1000 : null)), d);
           }
         }
       }

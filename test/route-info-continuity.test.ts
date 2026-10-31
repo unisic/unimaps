@@ -2,11 +2,13 @@
  * kbDistAlong on out-and-back patterns: continuity (the previous poll's dist_m) beats a stale upstream window.
  */
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
 import { describe, it } from "node:test";
 
 import { kbAheadM, kbDistAlong } from "../lib/route-info";
 import type { ShapeGeometry } from "../lib/shape-store";
-import { preparePolyline, type LatLng } from "../lib/shared/polyline";
+import { decodePolyline, preparePolyline, type LatLng } from "../lib/shared/polyline";
 
 const LAT0 = 49.8;
 const LON0 = 19.0;
@@ -42,6 +44,29 @@ describe("kbDistAlong — continuity on an out-and-back", () => {
   it("no hint, no vti: strict whole-line search (<= 40 m)", () => {
     assert.equal(kbDistAlong(geom, ...P(300, 400), null, null), null);
     near(kbDistAlong(geom, ...P(300, 5), null, null), 300);
+  });
+});
+
+describe("kbDistAlong: real U-turn (test/fixtures/route-info-uturn-live.json)", () => {
+  // GZM 107_5003, line 707: the bus drove on steadily, the old closest-to-hint tie-break kept the outbound twin
+  // and walked dist_m back 7468 -> 7359 (one poll per step) before it jumped to 7691
+  const fx = JSON.parse(fs.readFileSync(path.join(process.cwd(), "test", "fixtures", "route-info-uturn-live.json"), "utf8")) as {
+    poly: string;
+    stops: number[];
+    fixes: [number, number, number, number, number][];
+  };
+  const geom: ShapeGeometry = { pl: preparePolyline(decodePolyline(fx.poly, 6))!, stops: fx.stops, rev: "d8b925", src: "osrm" };
+
+  it("the chain never steps back more than GPS jitter", () => {
+    let d: number | undefined;
+    let at: number | null = null;
+    for (const [lat, lon, vti, next, fixAt] of fx.fixes) {
+      const got = kbDistAlong(geom, lat, lon, vti, next, d, { aheadM: kbAheadM(at === null ? 0 : fixAt - at) });
+      assert.ok(got !== null, `no chainage at ${fixAt}`);
+      if (d !== undefined) assert.ok(got >= d - 15, `${fixAt}: ${d} -> ${got}`);
+      d = got;
+      at = fixAt;
+    }
   });
 });
 

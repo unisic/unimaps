@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="pl" class="min-h-full">
+  <head>
+    <!--head-->
+  </head>
+  <body class="min-h-full bg-bg font-sans text-text antialiased">
+    <!-- the boot splash, painted before the bundle runs; MapShell replaces it -->
+    <div id="app">
+      <div class="flex h-dvh w-full items-center justify-center bg-bg">
+        <div class="flex flex-col items-center gap-6 animate-fade" role="status" aria-live="polite">
+          <img src="/favicon.svg" alt="Unimaps" class="h-14 w-auto" draggable="false" />
+          <div class="h-8 w-8 animate-spin rounded-full border-2 border-surface-3 border-t-brand"></div>
+          <p class="text-sm text-text-mute">Ładowanie mapy…</p>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="./index.ts"></script>
+  </body>
+</html>

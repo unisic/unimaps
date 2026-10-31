@@ -1,5 +1,3 @@
-"use client";
-
 /**
  * Client cache of server-stored road shapes (GET /api/shapes). Ids carry a
  * content revision, so responses are immutable-cached by the browser and a
@@ -13,10 +11,13 @@ export interface ClientShape {
   pts: LatLng[];
   pl: Polyline;
   stops: Array<number | null>;
+  /** part of a GZM road match: the full one follows */
+  partial?: boolean;
 }
 
 interface ShapePayload {
   id?: unknown;
+  src?: unknown;
   poly?: unknown;
   stops?: unknown;
 }
@@ -48,7 +49,7 @@ export function parseShapePayload(reqId: string, raw: unknown, precision = 6): C
   const stops = Array.isArray(p.stops)
     ? p.stops.map((s) => (typeof s === "number" && Number.isFinite(s) ? s : null))
     : [];
-  return { id: reqId, pts, pl, stops };
+  return { id: reqId, pts, pl, stops, ...(p.src === "partial" ? { partial: true } : {}) };
 }
 
 /** Capped like the cache: an evicted entry only allows an earlier retry. */
@@ -159,6 +160,26 @@ export async function loadShape(id: string): Promise<ClientShape | null> {
   negative.delete(id);
   await fetchBatch([id]);
   return cache.get(id) ?? null;
+}
+
+/**
+ * The newer revision of shape `id` once the server has one (a stale id is answered with it), else null (an
+ * unchanged one is a bodiless 304); skips every cache. `near` ("s,w,n,e") steers a running road match there.
+ */
+export async function fetchNewerShape(id: string, signal: AbortSignal, near?: string): Promise<ClientShape | null> {
+  const res = await fetch(`/api/shapes?ids=${encodeURIComponent(id)}${near ? `&near=${near}` : ""}`, {
+    cache: "no-store",
+    signal,
+    headers: { "If-None-Match": `"${id}"` },
+  });
+  if (!res.ok) return null;
+  const body = (await res.json()) as { precision?: number; shapes?: Record<string, unknown> };
+  const raw = body.shapes?.[id];
+  const cur = raw && typeof (raw as { id?: unknown }).id === "string" ? (raw as { id: string }).id : id;
+  if (cur === id) return null;
+  const s = parseShapePayload(cur, raw, typeof body.precision === "number" ? body.precision : 6);
+  if (s) remember(s);
+  return s;
 }
 
 /** Like loadShape, but a newer revision of the same shape is fine too (trip views). */

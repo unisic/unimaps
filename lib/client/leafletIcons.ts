@@ -55,8 +55,7 @@ const MODE_SVG: Record<TransitMode, string> = {
 const ARROW_SVG = `<svg viewBox="0 0 256 256" aria-hidden="true"><path transform="rotate(45 128 128)" d="${PH_NAV_ARROW_FILL}"/></svg>`;
 
 /**
- * Vehicle pill icon: the operator logo, or a tram / metro / trolleybus glyph for those modes; `more` = how many
- * other vehicles the pill stands for (a stack whose pills would cover each other).
+ * Vehicle pill icon: the operator logo, or a tram / metro / trolleybus glyph for those modes.
  * `bearing` only seeds the arrow's initial angle; after
  * that the VehicleAnimator rotates the arrow element in place. Never key an
  * icon memo on the heading: setIcon rewrites the DOM (replaying the pop
@@ -69,7 +68,6 @@ export function makeVehicleIcon(
   operator?: "KB" | "MZK" | "GZM",
   mode: TransitMode = "bus",
   scheduled = false,
-  more = 0,
 ): L.DivIcon {
   const hasHeading = bearing != null;
   const arrow = hasHeading
@@ -90,7 +88,6 @@ export function makeVehicleIcon(
       arrow +
       brandIcon +
       `<span class="veh-line">${escapeHtml(line || "?")}</span>` +
-      (more ? `<span class="veh-more">+${more}</span>` : "") +
       `</div></div>`,
     iconSize: [40, 40],
     iconAnchor: [20, 20],

@@ -41,6 +41,7 @@ export interface MotionInput {
   fix_at?: number;
   next_stop_seq?: number;
   speed?: number;
+  sched_speed?: number;
 }
 
 export interface MotionShape {
@@ -71,11 +72,15 @@ export interface MotionConfig {
   hMaxMs: number;
   hExtraMs: number;
   rampFrac: number;
+  /** share of the timetable pace in the predicted pace while a cruise speed is known (0 = cruise only);
+   *  without a cruise speed the timetable pace stands in alone */
+  schedW: number;
   catchupTauS: number;
   catchupMaxMult: number;
   catchupMaxAdd: number;
+  /** braking (m/s²) the marker uses to ease into a stop or onto the target: halting on contact reads as a lurch */
+  decelMs2: number;
   aheadFadeM: number;
-  aheadStallMs: number;
   snapBehindM: number;
   snapAheadM: number;
   snap2dM: number;
@@ -97,7 +102,8 @@ export interface MotionConfig {
  *  apart, so the horizon must outlast that or buses stall between fixes.
  *  Overshoot (the bus stopped at a light we can't know about) is answered by
  *  waiting, not by pulling the marker back: nobody sees the true position, but
- *  everybody sees a bus reverse — hence the generous ahead-snap/stall limits. */
+ *  everybody sees a bus reverse: hence the generous ahead-snap limit, and a
+ *  marker ahead of the truth waits for it, however long. */
 export const DEFAULT_MOTION_CONFIG: MotionConfig = {
   holdKbM: 20,
   holdMzkM: 10,
@@ -109,11 +115,12 @@ export const DEFAULT_MOTION_CONFIG: MotionConfig = {
   hMaxMs: 45_000,
   hExtraMs: 12_000,
   rampFrac: 0.6,
+  schedW: 0.5,
   catchupTauS: 2,
   catchupMaxMult: 2,
   catchupMaxAdd: 8,
+  decelMs2: 2,
   aheadFadeM: 60,
-  aheadStallMs: 45_000,
   snapBehindM: 400,
   snapAheadM: 400,
   snap2dM: 300,
@@ -150,6 +157,7 @@ interface Track {
   nextLon: number | null;
   bearing: number | null;
   speed: number | null;
+  sched: number | null;
   /** displacement (m) between the last two distinct fixes; null = unknown */
   lastDisp: number | null;
   /** unit vector (east, north) of the last ≥20 m displacement */
@@ -179,7 +187,6 @@ interface Track {
   dispLon: number;
   heading: number | null;
   lastSampleT: number;
-  aheadSince: number | null;
   moving: boolean;
   segHint: number;
 }
@@ -201,6 +208,19 @@ export function travel(v: number, tauS: number, horizonS: number, rampFrac = 0.6
   if (tauS >= horizonS) return v * (t1 + rest / 2);
   const u = tauS - t1;
   return v * (t1 + u - (u * u) / (2 * rest));
+}
+
+/**
+ * `d` metres of free travel when a stop `cap` metres ahead ends it: unchanged until the braking zone, then a
+ * constant deceleration that halts exactly at the cap (position and speed continuous), so the marker pulls in
+ * instead of slamming into an invisible wall. `brakeM` is the zone length, shrunk when the stop is closer.
+ */
+export function softCap(d: number, cap: number, brakeM: number): number {
+  const b = Math.min(brakeM, cap);
+  if (b <= 0) return Math.min(d, Math.max(0, cap));
+  const x = d - (cap - b);
+  if (x <= 0) return d;
+  return x >= 2 * b ? cap : cap - b + x - (x * x) / (4 * b);
 }
 
 /** Build a MotionShape from a prepared polyline + aligned stop distances. */
@@ -245,6 +265,8 @@ export interface MotionDebug {
   shape: string | null;
   fixAgeMs: number;
   horizonMs: number;
+  /** route mode: where the marker heads at the last sample time; null otherwise */
+  targetS: number | null;
 }
 
 export function createMotionStore(cfgIn: Partial<MotionConfig> = {}): MotionStore {
@@ -347,10 +369,14 @@ export function createMotionStore(cfgIn: Partial<MotionConfig> = {}): MotionStor
 
   function plan(tr: Track): void {
     const holdM = tr.isMzk ? cfg.holdMzkM : cfg.holdKbM;
-    tr.vPred = tr.speed !== null && tr.speed >= cfg.vMin ? cfg.vBias * tr.speed : 0;
+    // the timetable pace (dwell included) tempers a cruise speed taken from a few moving fixes and stands in
+    // for a missing one: measured against the next fix, both beat either alone
+    const sched = tr.sched !== null && tr.sched >= cfg.vMin ? tr.sched : null;
+    const cruise = tr.speed !== null && tr.speed >= cfg.vMin ? cfg.vBias * tr.speed : null;
+    tr.vPred = cruise === null ? (sched ?? 0) : sched === null ? cruise : (1 - cfg.schedW) * cruise + cfg.schedW * sched;
     tr.horizonMs = Math.min(cfg.hMaxMs, Math.max(cfg.hMinMs, tr.gapEma + cfg.hExtraMs));
     if (tr.mode === "route" && tr.shape && tr.fixS !== null) {
-      tr.hold = tr.atStop && (tr.lastDisp === null || tr.lastDisp < holdM);
+      tr.hold = standing(tr, holdM);
       const st = tr.shape.stops;
       let cap = tr.shape.pl.length;
       // being served: the pole of the stop we're at, if it is still ahead
@@ -370,7 +396,7 @@ export function createMotionStore(cfgIn: Partial<MotionConfig> = {}): MotionStor
       return;
     }
     if (tr.mode === "straight" && tr.nextLat !== null && tr.nextLon !== null) {
-      tr.hold = tr.atStop;
+      tr.hold = standing(tr, holdM);
       const [e, n] = localMetres(tr.fixLat, tr.nextLat, tr.nextLon, tr.fixLat, tr.fixLon);
       const d = Math.hypot(e, n);
       tr.dirE = d > 0 ? e / d : 0;
@@ -386,9 +412,20 @@ export function createMotionStore(cfgIn: Partial<MotionConfig> = {}): MotionStor
     tr.vPred = 0;
   }
 
+  /** The last pair of fixes barely moved (a red light, a jam, a dwell): nothing to extrapolate. A first
+   *  fix with no pair yet holds only at a stop. */
+  function standing(tr: Track, holdM: number): boolean {
+    return tr.lastDisp === null ? tr.atStop : tr.lastDisp < holdM;
+  }
+
   /** No new fix for much longer than the horizon: stop pretending it moves. */
   function isGhost(tr: Track, t: number): boolean {
     return t - tr.fixT > Math.max(2 * tr.horizonMs, cfg.ghostMinMs);
+  }
+
+  /** Braking zone before a stop: the distance a bus at the predicted pace needs at decelMs2. */
+  function brakeM(tr: Track): number {
+    return Math.min(40, Math.max(5, (tr.vPred * tr.vPred) / (2 * cfg.decelMs2)));
   }
 
   /** Target displayed along-distance (route) at local time t. */
@@ -396,13 +433,13 @@ export function createMotionStore(cfgIn: Partial<MotionConfig> = {}): MotionStor
     const fixS = tr.fixS ?? 0;
     if (tr.hold || tr.vPred <= 0 || isGhost(tr, t)) return fixS;
     const d = travel(tr.vPred, (t - tr.fixT) / 1000, tr.horizonMs / 1000, cfg.rampFrac);
-    return Math.min(tr.capS, fixS + d);
+    return fixS + softCap(d, tr.capS - fixS, brakeM(tr));
   }
 
   /** Target displayed position (2D modes) at local time t. */
   function target2d(tr: Track, t: number): [number, number] {
     if (tr.mode !== "straight" || tr.hold || tr.vPred <= 0 || isGhost(tr, t)) return [tr.fixLat, tr.fixLon];
-    const d = Math.min(tr.capDist, travel(tr.vPred, (t - tr.fixT) / 1000, tr.horizonMs / 1000, cfg.rampFrac));
+    const d = softCap(travel(tr.vPred, (t - tr.fixT) / 1000, tr.horizonMs / 1000, cfg.rampFrac), tr.capDist, brakeM(tr));
     const kx = M_PER_DEG * Math.cos(tr.fixLat * RAD);
     return [tr.fixLat + (tr.dirN * d) / M_PER_DEG, tr.fixLon + (tr.dirE * d) / kx];
   }
@@ -429,6 +466,7 @@ export function createMotionStore(cfgIn: Partial<MotionConfig> = {}): MotionStor
         nextLon: v.next_stop_lon,
         bearing: v.bearing,
         speed: null,
+        sched: null,
         lastDisp: null,
         moveE: 0,
         moveN: 0,
@@ -453,7 +491,6 @@ export function createMotionStore(cfgIn: Partial<MotionConfig> = {}): MotionStor
         dispLon: v.lon,
         heading: v.bearing,
         lastSampleT: recvMs,
-        aheadSince: null,
         moving: false,
         segHint: -1,
       };
@@ -468,6 +505,7 @@ export function createMotionStore(cfgIn: Partial<MotionConfig> = {}): MotionStor
     tr.nextLon = v.next_stop_lon;
     if (v.bearing !== null) tr.bearing = v.bearing;
     tr.speed = typeof v.speed === "number" && Number.isFinite(v.speed) ? v.speed : null;
+    tr.sched = typeof v.sched_speed === "number" && Number.isFinite(v.sched_speed) ? v.sched_speed : null;
 
     const fixAt = typeof v.fix_at === "number" && Number.isFinite(v.fix_at) ? v.fix_at : null;
     const moved = segMeters(tr.fixLat, tr.fixLon, v.lat, v.lon);
@@ -624,26 +662,24 @@ export function createMotionStore(cfgIn: Partial<MotionConfig> = {}): MotionStor
           tr.dispS = sT;
           tr.latE = 0;
           tr.latN = 0;
-          tr.aheadSince = null;
         } else {
           const dtS = dt / 1000;
           const e = sT - tr.dispS;
-          if (isGhost(tr, t)) {
-            // no news for long: settle back onto the last real fix
+          const vT = Math.max(0, (sT - targetS(tr, t - dt)) / dtS);
+          if (e < 0) {
+            // ahead of the target: keep to its pace, fading out over aheadFadeM, and wait for the
+            // truth to come by; a bus seen reversing is worse than one a few seconds early
+            tr.dispS += vT * Math.min(1, Math.max(0, 1 + e / cfg.aheadFadeM)) * dtS;
+          } else if (isGhost(tr, t)) {
             tr.dispS += e * (1 - Math.exp(-dt / 2000));
-          } else if (e >= 0) {
-            tr.aheadSince = null;
-            const u = Math.min(tr.vPred + e / cfg.catchupTauS, cfg.catchupMaxMult * tr.vPred + cfg.catchupMaxAdd);
-            tr.dispS = Math.min(sT, tr.dispS + u * dtS);
           } else {
-            tr.aheadSince ??= t;
-            if (t - tr.aheadSince > cfg.aheadStallMs && -e > 25) {
-              // stuck ahead of the truth for long (e.g. a long red light): ease back
-              tr.dispS += e * (1 - Math.exp(-dt / 3000));
-            } else {
-              const u = tr.vPred * Math.min(1, Math.max(0, 1 + e / cfg.aheadFadeM));
-              tr.dispS += u * dtS;
-            }
+            // the braking term slows early enough to meet the target at its own pace instead of halting on contact
+            const u = Math.min(
+              tr.vPred + e / cfg.catchupTauS,
+              cfg.catchupMaxMult * tr.vPred + cfg.catchupMaxAdd,
+              vT + Math.sqrt(2 * cfg.decelMs2 * e),
+            );
+            tr.dispS = Math.min(sT, tr.dispS + u * dtS);
           }
           const k = Math.exp(-dt / cfg.latTauMs);
           tr.latE *= k;
@@ -668,16 +704,14 @@ export function createMotionStore(cfgIn: Partial<MotionConfig> = {}): MotionStor
       let lon = tLon;
       if (!snap) {
         const [e, n] = localMetres(tr.dispLat, tLat, tLon, tr.dispLat, tr.dispLon);
-        const back = tr.mode === "straight" ? -(e * tr.dirE + n * tr.dirN) : 0;
+        // target behind the displayed point along the way it travels (the extrapolation, else the last
+        // real move: a bus that stopped after an overshoot): follow only sideways, never drive back
+        const ue = tr.vPred > 0 ? tr.dirE : tr.moveE;
+        const un = tr.vPred > 0 ? tr.dirN : tr.moveN;
+        const back = tr.mode === "straight" ? Math.max(0, -(e * ue + n * un)) : 0;
         const k = 1 - Math.exp(-dt / cfg.followTauMs);
-        if (back > 0 && back <= 15 && !isGhost(tr, t)) {
-          // target fell slightly behind the displayed point: wait instead of reversing
-          lat = tr.dispLat;
-          lon = tr.dispLon;
-        } else {
-          lat = tr.dispLat + (tLat - tr.dispLat) * k;
-          lon = tr.dispLon + (tLon - tr.dispLon) * k;
-        }
+        lat = tr.dispLat + ((n + back * un) * k) / M_PER_DEG;
+        lon = tr.dispLon + ((e + back * ue) * k) / (M_PER_DEG * Math.cos(tr.dispLat * RAD));
       }
       const step = segMeters(prevLat, prevLon, lat, lon);
       tr.moving = !snap && dt > 0 && (step / dt) * 1000 > 0.5;
@@ -731,6 +765,7 @@ export function createMotionStore(cfgIn: Partial<MotionConfig> = {}): MotionStor
         shape: tr.shape?.key ?? null,
         fixAgeMs: tr.lastSampleT - tr.fixT,
         horizonMs: tr.horizonMs,
+        targetS: tr.mode === "route" ? targetS(tr, tr.lastSampleT) : null,
       };
     },
     size() {
