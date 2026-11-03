@@ -43,8 +43,8 @@ describe("PWA Specification and Assets Verification", () => {
       assert.equal(manifest.id, "/", "id must be /");
       assert.equal(manifest.display, "standalone", "display mode must be standalone");
       assert.ok(manifest.display_override?.includes("standalone"), "display_override must contain standalone");
-      assert.equal(manifest.background_color, "#0d1013", "background_color matches dark theme");
-      assert.equal(manifest.theme_color, "#0d1013", "theme_color matches dark theme");
+      assert.equal(manifest.background_color, "#0f0e15", "background_color matches dark theme");
+      assert.equal(manifest.theme_color, "#0f0e15", "theme_color matches dark theme");
       assert.equal(manifest.lang, "pl", "language must be Polish (pl)");
       assert.equal(manifest.prefer_related_applications, false);
     });

@@ -48,7 +48,7 @@ On first visit the map asks for a city and remembers it. `?city=<slug>` opens a 
 The cities are isolated: a GZM or other-city failure never touches Bielsko-Biała data. The other cities are
 loaded on first request and only while watched: at most `KB_ZB_RESIDENT` timetables stay in memory, each
 dropped after `KB_ZB_IDLE_MIN` minutes without a request; their positions are polled only while a page asks.
-They have no fleet history, SDIP overlay, announcements or bike layer.
+They have no fleet history, SDIP overlay or announcements.
 
 ## Run
 
@@ -97,9 +97,8 @@ Checks: `npm run typecheck`, `npm run lint`, `npm test`.
 | `/api/lines` | Line catalogue |
 | `/api/line?name=` | One line's stop patterns and per-stop departures for a day (`op=KB\|MZK`, `date=YYYY-MM-DD`) |
 | `/api/shapes?ids=` | Stored road geometry, immutable-cached |
-| `/api/fleet`, `/api/fleet/:side`, `/api/fleet/timeline` | Fleet and brigades |
+| `/api/fleet`, `/api/fleet/:side`, `/api/fleet/:side/history`, `/api/fleet/timeline` | Fleet and brigades; `history` = the vehicle's courses on past days (MZK 28, GZM 14) |
 | `/api/announcements` | Service announcements: KB + MZK, or the ZTM news page for `?city=gzm` |
-| `/api/bikes?city=gzm` | Metrorower stations with the bikes available now (nextbike GBFS, 60 s memo, ETag + gzip) |
 | `/api/health` | Status, scan counters, feed age, shape store |
 
 List endpoints take `?city=<slug>` (`gzm`, `warsaw`, …); without it they answer for Bielsko-Biała.
@@ -122,7 +121,6 @@ All settings are optional `KB_*` environment variables, read once at start.
 | `KB_GZM` | `1` | `0` switches Metropolia GZM off |
 | `KB_GZM_SDIP` | `1` | `0` disables the SDIP position overlay |
 | `KB_GZM_NEWS_URL` | `https://rj.transportgzm.pl/v2/news/` | ZTM news page scraped as GZM announcements, `off` disables |
-| `KB_GZM_GBFS_URL` | `https://gbfs.nextbike.net/maps/gbfs/v2/nextbike_zz` | Metrorower GBFS root for the bike-stations layer, `off` disables |
 | `KB_ZB` | `1` | `0` switches the other cities off (404) |
 | `KB_ZB_API_URL` | `https://api.zbiorkom.live/api6-open` | feed API root of the other cities (`<slug>/gtfs/default`, `<slug>/positions/<bbox>`) |
 | `KB_ZB_RESIDENT` | `2` | how many of those cities keep their timetable in memory at once (25-60 MB each, LRU) |
@@ -145,6 +143,22 @@ Flags: `--date YYYY-MM-DD` (default today), `--out DIR`, `--concurrency N`,
 `--no-zip`, `--single-day`. Output is written atomically, including
 `kb_gtfs.zip`.
 
+## Vehicle photos and specs
+
+The fleet cards (GZM and MZK Bielsko-Biała) show each vehicle's photos and
+technical data from [phototrans.eu](https://phototrans.eu). phototrans refuses
+datacenter IPs, so the server never contacts it: the data lives in
+`lib/phototrans.json`, which is bundled into `dist/server.mjs`, and the browser
+loads each thumbnail from phototrans itself. To refresh it, run this from a home
+connection (one page per second, ~1700 pages, ~30 min) and commit the file:
+
+```bash
+npm run build:phototrans
+```
+
+Flags: `--photos N` (newest photos per vehicle, default 5), `--cache DIR`
+(pages of an interrupted run, resumed the same day).
+
 ## Data
 
 Unimaps is an independent project, not affiliated with any operator. Data
@@ -156,6 +170,7 @@ comes from:
 - Other cities: each operator's GTFS and vehicle positions (`output/gzm/<slug>/gtfs.zip`)
 - Map: © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors, tiles by [OpenFreeMap](https://openfreemap.org)
 - Road routing: [OSRM](https://project-osrm.org)
+- Vehicle photos and specs: [phototrans.eu](https://phototrans.eu), each photo credited to its author
 
 `/prywatnosc` (Polish) states what the app handles: the IP only in memory for
 rate limiting, coordinates only for a journey search, a push subscription only

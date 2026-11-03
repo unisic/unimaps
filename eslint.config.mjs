@@ -17,7 +17,7 @@ const eslintConfig = defineConfig([
       ],
     },
   },
-  globalIgnores([".next/**", "out/**", "dist/**", "node_modules/**", "output/**"]),
+  globalIgnores([".next/**", "out/**", "dist/**", "node_modules/**", "output/**", ".claude/**"]),
 ]);
 
 export default eslintConfig;

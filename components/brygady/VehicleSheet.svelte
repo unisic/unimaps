@@ -28,7 +28,7 @@
   import ShareButton from "@/components/ui/ShareButton.svelte";
   import { cityOfSide, isNotFound, type FleetSummaryItem } from "@/lib/client/fleet";
   import { useVehicleDetail } from "@/lib/client/fleet.svelte";
-  import type { VehicleCourseRecord } from "@/lib/shared/fleet";
+  import type { PredictedNextCourse, VehicleCourseRecord, VehiclePhoto } from "@/lib/shared/fleet";
 
   import Block from "./Block.svelte";
   import type { DelayColumn, GanttCourse } from "./charts";
@@ -40,6 +40,7 @@
   import { useEpochNow } from "./hooks.svelte";
   import { ALERT, CHEVRON_DOWN, INFO, MAP } from "./icons";
   import Svg from "./Svg.svelte";
+  import VehicleHistory from "./VehicleHistory.svelte";
 
   /** Modal sheet: bottom sheet on phones, centred dialog from md up. The city follows from the side number. */
   let {
@@ -145,12 +146,24 @@
       : [],
   );
 
+  const SOURCE_LABEL: Record<PredictedNextCourse["source"], string> = {
+    schedule: "rozkład brygady",
+    history: "z historii",
+    timetable: "rozkład linii",
+    estimate: "szacunek",
+  };
+  const CONFIDENCE_LABEL: Record<PredictedNextCourse["confidence"], string> = { high: "pewne", medium: "prawdopodobne", low: "możliwe" };
+
   function toggle(id: string) {
     const next = new Set(expanded);
     if (next.has(id)) next.delete(id);
     else next.add(id);
     expanded = next;
   }
+
+  /** thumbnails that failed to load: phototrans removed the photo since the index was built */
+  let brokenPhotos = $state.raw<ReadonlySet<string>>(new Set());
+  const photos = $derived((vehicle?.photos ?? []).filter((p) => !brokenPhotos.has(p.thumb)));
 
   function reveal(id: string) {
     if (!expanded.has(id)) expanded = new Set(expanded).add(id);
@@ -283,29 +296,50 @@
 {/snippet}
 
 {#snippet predictionCard(p: NonNullable<FleetVehicleDetail["predictedNextCourse"]>, operator: FleetVehicleDetail["operator"])}
-  <!-- "high" = the brigade's next trip from the GZM schedule, not a guess -->
-  {@const scheduled = p.confidence === "high"}
+  <!-- only a same-line layover guess is a guess: the rest names a source (brigade schedule, history, timetable) -->
+  {@const guess = p.source === "estimate"}
   <section
-    aria-label={scheduled ? "Następny kurs według rozkładu" : "Następny kurs, szacunek"}
-    class="rounded-2xl border p-4 {scheduled ? 'border-hairline bg-surface' : 'border-dashed border-tint/15'}"
+    aria-label={guess ? "Następny kurs, szacunek" : "Następny kurs"}
+    class="rounded-2xl border p-4 {guess ? 'border-dashed border-tint/15' : 'border-hairline bg-surface'}"
   >
     <div class="mb-2 flex items-center justify-between gap-3">
-      <h3 class="text-[14px] font-semibold text-text">{scheduled ? "Następny kurs" : "Następny kurs (szacunek)"}</h3>
+      <h3 class="text-[14px] font-semibold text-text">{guess ? "Następny kurs (szacunek)" : "Następny kurs"}</h3>
       <span class="rounded-full bg-tint/6 px-2 py-0.5 text-[11.5px] font-medium text-text-mute">
-        {scheduled ? "według rozkładu" : p.confidence === "medium" ? "średnia pewność" : "niska pewność"}
+        {SOURCE_LABEL[p.source]}{p.seen ? `, ${p.seen.days} z ${p.seen.of} dni` : ""}
       </span>
     </div>
     <div class="flex items-center gap-2.5">
       <LineBadge line={p.lineName} {operator} />
       <p class="min-w-0 flex-1 text-[13.5px] text-text">
         <span class="font-medium">{p.direction}</span><span class="block text-[12.5px] text-text-mute tabular-nums">
-          {scheduled
-            ? `${p.departureTime} z ${p.fromStopName}, postój ${p.pauseMinutes} min`
-            : `ok. ${p.departureTime} z ${p.fromStopName}, postój ok. ${p.pauseMinutes} min`}
+          {guess
+            ? `ok. ${p.departureTime} z ${p.fromStopName}, postój ok. ${p.pauseMinutes} min`
+            : `${p.departureTime} z ${p.fromStopName}, postój ${p.pauseMinutes} min`}
         </span>
       </p>
+      {#if !guess && p.confidence !== "high"}
+        <span class="shrink-0 text-[11.5px] text-text-faint">{CONFIDENCE_LABEL[p.confidence]}</span>
+      {/if}
     </div>
     <p class="mt-2.5 text-[12px] leading-snug text-text-faint">{p.reason}</p>
+    {#if p.later && p.later.length > 0}
+      <h4 class="mt-3 mb-1 text-[12px] font-medium text-text-mute">Potem</h4>
+      <ol class="-mx-1 divide-y divide-hairline">
+        {#each p.later as l, i (i)}
+          <li class="flex min-h-10 items-center gap-2.5 px-1 py-1.5">
+            <span class="w-11 shrink-0 text-[12.5px] text-text-mute tabular-nums">{l.departureTime}</span>
+            <LineBadge line={l.lineName} {operator} />
+            <span class="min-w-0 flex-1">
+              <span class="block truncate text-[13px] text-text">{l.direction}</span>
+              <span class="block truncate text-[11.5px] text-text-faint">z {l.fromStopName}</span>
+            </span>
+            {#if l.confidence !== "high"}
+              <span class="shrink-0 text-[11.5px] text-text-faint">{CONFIDENCE_LABEL[l.confidence]}</span>
+            {/if}
+          </li>
+        {/each}
+      </ol>
+    {/if}
   </section>
 {/snippet}
 
@@ -316,6 +350,7 @@
   {@const notStarted = live && "notStarted" in c && Boolean(c.notStarted)}
   {@const cancelled = c.status === "cancelled"}
   {@const km = c.drivenMeters !== undefined ? c.drivenMeters / 1000 : null}
+  {@const extra = [brigade ? `brygada ${brigade}` : null, km !== null && km > 0 ? fmtKm(km) : null].filter(Boolean).join(", ")}
   <li id="course-{c.id}" class="scroll-mt-4">
     <button
       type="button"
@@ -324,19 +359,18 @@
       onclick={() => toggle(c.id)}
       class="flex min-h-12 w-full items-center gap-3 rounded-lg px-1 py-2 text-left transition-colors hover:bg-tint/5"
     >
-      <span class="w-[5.5rem] shrink-0 text-[12.5px] text-text-mute tabular-nums">
+      <!-- a phone has no room for a time column: the time leads the second line there -->
+      <span class="hidden w-[5.5rem] shrink-0 text-[12.5px] text-text-mute tabular-nums sm:block">
         {c.startTime}–{c.endTime}
       </span>
       <LineBadge line={c.lineName} {operator} />
       <span class="min-w-0 flex-1">
-        <span class="block truncate text-[13px] text-text">
+        <span class="line-clamp-2 text-[13px] text-text">
           {c.firstStopName} → {c.lastStopName}
         </span>
-        {#if brigade || (km !== null && km > 0)}
-          <span class="block text-[11.5px] text-text-faint tabular-nums">
-            {[brigade ? `brygada ${brigade}` : null, km !== null && km > 0 ? fmtKm(km) : null].filter(Boolean).join(", ")}
-          </span>
-        {/if}
+        <span class="block text-[11.5px] text-text-faint tabular-nums">
+          <span class="text-text-mute sm:hidden">{c.startTime}–{c.endTime}{extra ? ", " : ""}</span>{extra}
+        </span>
       </span>
       {#if cancelled}
         <span class="shrink-0 rounded-md bg-danger/12 px-1.5 py-0.5 text-[12px] font-semibold text-danger">Przerwany</span>
@@ -402,6 +436,47 @@
       {/if}
     </div>
   </li>
+{/snippet}
+
+{#snippet techRow(name: string, value: string | number | undefined)}
+  {#if value}
+    <dt class="text-text-mute">{name}</dt>
+    <dd class="text-text">{value}</dd>
+  {/if}
+{/snippet}
+
+{#snippet photoStrip(v: FleetVehicleDetail, list: VehiclePhoto[])}
+  <ul
+    class="kb-scroll -mx-1 mb-4 flex snap-x snap-mandatory gap-2 overflow-x-auto overscroll-x-contain px-1 pb-2"
+    aria-label="Zdjęcia pojazdu #{v.label ?? v.sideNumber}"
+  >
+    {#each list as p, i (p.thumb)}
+      <li class="w-[240px] shrink-0 snap-start">
+        <a
+          href={p.page}
+          target="_blank"
+          rel="noopener"
+          title="Pełna rozdzielczość na phototrans.eu"
+          class="block overflow-hidden rounded-xl border border-hairline bg-surface-2"
+        >
+          <img
+            src={p.thumb}
+            alt="Pojazd #{v.label ?? v.sideNumber}, zdjęcie {i + 1} z {list.length}, fot. {p.author}"
+            width="300"
+            height="200"
+            loading="lazy"
+            decoding="async"
+            referrerpolicy="no-referrer"
+            class="aspect-[3/2] w-full object-cover"
+            onerror={() => (brokenPhotos = new Set(brokenPhotos).add(p.thumb))}
+          />
+        </a>
+        <p class="mt-1 truncate text-[11.5px] text-text-faint">
+          fot. {p.author}{p.date ? `, ${p.date.split("-").reverse().join(".")}` : ""}
+        </p>
+      </li>
+    {/each}
+  </ul>
 {/snippet}
 
 {#snippet vehicleBody(v: FleetVehicleDetail)}
@@ -500,16 +575,31 @@
       {/if}
     </Block>
 
+    <VehicleHistory side={v.sideNumber} operator={v.operator} />
+
     <Block title="Dane techniczne">
+      {#if photos.length > 0}
+        {@render photoStrip(v, photos)}
+      {/if}
+      {@const t = v.tech}
       {#if v.operator === "GZM"}
-        <!-- GZM publishes the model only: no producer, year, length, propulsion or equipment -->
+        <!-- GZM publishes the model only: the rest comes from phototrans when it lists the vehicle -->
         <dl class="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 text-[13px]">
           <dt class="text-text-mute">Numer taborowy</dt>
           <dd class="font-semibold text-text tabular-nums">#{v.label ?? v.sideNumber}</dd>
           <dt class="text-text-mute">Przewoźnik</dt>
           <dd class="text-text">{v.company || "–"}</dd>
+          {@render techRow("Producent", v.producer)}
           <dt class="text-text-mute">Model</dt>
           <dd class="text-text">{v.model || "–"}</dd>
+          {@render techRow("Rok produkcji", t?.built)}
+          {@render techRow("W taborze od", t?.since)}
+          {@render techRow("Długość", v.lengthCategory ? LENGTH_LABEL[v.lengthCategory] : undefined)}
+          {@render techRow("Napęd", v.fuelType ? FUEL_LABEL[v.fuelType] : undefined)}
+          {@render techRow("Nadwozie", t?.body)}
+          {@render techRow("Silnik", t?.engine)}
+          {@render techRow("Skrzynia biegów", t?.gearbox)}
+          {@render techRow("Układ drzwi", t?.doors)}
         </dl>
       {:else}
         <dl class="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 text-[13px]">
@@ -527,7 +617,16 @@
           <dd class="text-text">{v.fuelType ? FUEL_LABEL[v.fuelType] : "–"}</dd>
           <dt class="text-text-mute">Wyposażenie</dt>
           <dd class="text-text">{featureList(v.features).join(", ") || "–"}</dd>
+          {@render techRow("Silnik", t?.engine)}
+          {@render techRow("Skrzynia biegów", t?.gearbox)}
+          {@render techRow("Układ drzwi", t?.doors)}
         </dl>
+      {/if}
+      {#if t}
+        <p class="mt-3 text-[12px] text-text-faint">
+          Źródło danych{photos.length > 0 ? " i zdjęć" : ""}:
+          <a href={t.page} target="_blank" rel="noopener" class="font-medium text-primary hover:underline">phototrans.eu</a>
+        </p>
       {/if}
     </Block>
   </div>

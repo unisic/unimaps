@@ -17,6 +17,8 @@ import { getAllFleetVehicles, getFleetDetails, type MzkVehicleStatic } from "./m
 import { isMzkNotStarted } from "./mzk-state";
 import { mzkStopIndices } from "./mzk-shape";
 import { AGENCY_TIMEZONE, FLEET_HISTORY_DAYS as HISTORY_KEEP_DAYS, OUTPUT_DIR } from "./config";
+import { courseChain, dayKind, FleetHistory, historyReason } from "./fleet-history";
+import { mzkDaySchedule, type MzkDaySchedule } from "./mzk-timetable";
 import {
   classifyDelay,
   compareLineNames,
@@ -29,6 +31,7 @@ import {
   type FleetStats,
   type FleetSummaryItem,
   type FleetTimelinePoint,
+  type FleetHistoryDay,
   type FleetVehicleDetail,
   type FleetVehicleStats,
   type PredictedNextCourse,
@@ -85,8 +88,8 @@ export interface FleetRunningInput {
   /** scheduled departure of each stopPoints entry, service-day seconds, may exceed 86 400 (skips dateToAgencySecs) */
   stopSecs?: number[];
   brigade?: string | null;
-  /** the brigade's next scheduled trip; dep in service-day seconds */
-  nextTrip?: { line: string; headsign: string; firstStopName: string; firstStopId: string; dep: number } | null;
+  /** the brigade's next scheduled trips in order (at most 5); dep in service-day seconds */
+  nextTrips?: { line: string; headsign: string; firstStopName: string; firstStopId: string; dep: number }[];
   /** naming read by the details source of a tracker without a static fleet */
   label?: string;
   model?: string | null;
@@ -112,8 +115,14 @@ export interface FleetTrackerOptions {
   staticFleet?: (() => FleetVehicleInfo[]) | null;
   /** info for a vehicle first seen live */
   details?: (v: FleetRunningInput, staticInfo?: MzkVehicleStatic) => FleetVehicleInfo;
+  /** info of a vehicle restored from today's file without a static fleet: refreshes what the file may hold stale */
+  restoreInfo?: (info: FleetVehicleInfo) => FleetVehicleInfo;
   /** keep the stop table of finished courses; default true */
   archiveStops?: boolean;
+  /** past days read back into memory for the vehicle history (capped by keepDays); default 28, 0 = none */
+  historyDays?: number;
+  /** the day's timetable for the next-course rules and the successor index (MZK); default none */
+  schedule?: ((date: string) => MzkDaySchedule | null) | null;
 }
 
 const mzkDetails = (v: FleetRunningInput, staticInfo?: MzkVehicleStatic): FleetVehicleInfo =>
@@ -339,7 +348,10 @@ export class FleetTracker {
   private readonly saveDebounceMs: number;
   private readonly staticFleet: (() => FleetVehicleInfo[]) | null;
   private readonly details: (v: FleetRunningInput, staticInfo?: MzkVehicleStatic) => FleetVehicleInfo;
+  private readonly restoreInfo: (info: FleetVehicleInfo) => FleetVehicleInfo;
   private readonly archiveStops: boolean;
+  private readonly schedule: ((date: string) => MzkDaySchedule | null) | null;
+  private readonly history: FleetHistory;
 
   constructor(opts: FleetTrackerOptions = {}) {
     this.historyDir = opts.historyDir === undefined ? DEFAULT_HISTORY_DIR : opts.historyDir;
@@ -348,7 +360,12 @@ export class FleetTracker {
     this.saveDebounceMs = opts.saveDebounceMs ?? SAVE_DEBOUNCE_MS;
     this.staticFleet = opts.staticFleet === undefined ? getAllFleetVehicles : opts.staticFleet;
     this.details = opts.details ?? mzkDetails;
+    this.restoreInfo = opts.restoreInfo ?? ((info) => info);
     this.archiveStops = opts.archiveStops ?? true;
+    this.schedule = opts.schedule ?? null;
+    this.history = new FleetHistory(Math.min(this.keepDays, opts.historyDays ?? 28), !!this.schedule);
+    this.history.setToday(this.currentDay);
+    if (this.historyDir) void this.history.load(this.historyDir, rejudgeCancelled);
     this.initFromStaticFleet();
     this.loadHistoryFromDisk();
   }
@@ -401,8 +418,11 @@ export class FleetTracker {
       this.saveTimeout = null;
     }
     this.saveHistoryToDisk();
+    const ended = this.currentDay;
     this.currentDay = today;
     this.version++;
+    this.history.setToday(today);
+    this.history.addDay(ended, [...this.vehicles].map(([side, v]) => [side, v.todayCourses] as const));
     this.initFromStaticFleet();
     this.loadHistoryFromDisk();
     this.pruneHistory();
@@ -590,7 +610,7 @@ export class FleetTracker {
       };
 
       this.recalculateStats(detail);
-      detail.predictedNextCourse = this.predictNextCourse(detail, v.nextTrip);
+      detail.predictedNextCourse = this.predictNextCourse(detail, v.nextTrips);
     }
 
     // vehicles that left the running list: the course they ran is history now
@@ -673,36 +693,100 @@ export class FleetTracker {
   }
 
   /**
-   * "Where next" once the current course ends. GZM: the brigade's next scheduled trip, when the
-   * feed knows one. Otherwise an ESTIMATE, labelled as such: OnTime does not publish duty
-   * rosters. Assumes the usual shuttle (same line back from the terminus) after the layover
-   * this vehicle showed today (or a typical one), never earlier than a short turnaround after
-   * the expected (delayed) arrival. None for a course into the depot.
+   * "Where next" once the current course ends, and the courses after it. GZM: the brigade's
+   * scheduled trips, when the feed knows them. MZK publishes no duty rosters: the course this
+   * one was followed by on past days of the same kind (when today's timetable runs it), else the
+   * next timetable course from the terminus (lib/fleet-history.ts). Otherwise an ESTIMATE,
+   * labelled as such: the same line back after the layover this vehicle showed today (or a
+   * typical one), never earlier than a short turnaround after the expected (delayed) arrival.
+   * None for a course into the depot.
    */
   private predictNextCourse(
     detail: FleetVehicleDetail,
-    nextTrip?: FleetRunningInput["nextTrip"],
+    nextTrips?: FleetRunningInput["nextTrips"],
   ): PredictedNextCourse | null {
     const cur = detail.currentCourse;
-    if (cur && nextTrip) {
-      const departureSecs = daySecs(nextTrip.dep);
-      const expectedArrival = cur.endSecs + Math.max(0, cur.notStarted ? 0 : cur.delaySec);
+    if (!cur) return null;
+    const expectedArrival = cur.endSecs + Math.max(0, cur.notStarted ? 0 : cur.delaySec);
+    if (nextTrips?.length) {
+      const [n, ...rest] = nextTrips;
+      const departureSecs = daySecs(n.dep);
       let pause = departureSecs - expectedArrival;
       if (pause < -HALF_DAY_SEC) pause += 86400;
       return {
-        lineName: nextTrip.line,
-        direction: nextTrip.headsign,
+        lineName: n.line,
+        direction: n.headsign,
         departureTime: secsToHHMM(departureSecs),
         departureSecs,
-        fromStopName: nextTrip.firstStopName,
-        fromStopSymbol: nextTrip.firstStopId,
+        fromStopName: n.firstStopName,
+        fromStopSymbol: n.firstStopId,
         pauseMinutes: Math.max(0, Math.round(pause / 60)),
         confidence: "high",
+        source: "schedule",
         reason: cur.brigade ? `Według rozkładu brygady ${cur.lineName}/${cur.brigade}.` : "Według rozkładu.",
+        ...(rest.length
+          ? {
+              later: rest.slice(0, 4).map((t) => ({
+                lineName: t.line,
+                direction: t.headsign,
+                departureTime: secsToHHMM(daySecs(t.dep)),
+                fromStopName: t.firstStopName,
+                confidence: "high" as const,
+              })),
+            }
+          : {}),
       };
     }
-    if (!cur || cur.stopsCount < 2 || !cur.endSecs) return null;
+    if (cur.stopsCount < 2 || !cur.endSecs) return null;
     if (foldText(cur.lastStopName).includes("zajezdnia")) return null;
+
+    const sched = this.schedule?.(this.currentDay) ?? null;
+    if (sched) {
+      const kind = dayKind(this.currentDay);
+      const steps = courseChain(
+        { line: cur.lineName, firstSym: cur.firstStopSymbol, start: cur.startSecs, end: cur.endSecs, lastName: cur.lastStopName, arrival: expectedArrival },
+        sched,
+        (key) => this.history.successor(kind, key),
+      );
+      if (steps.length) {
+        const [first, ...rest] = steps;
+        const c = first.course;
+        const rank = { high: 2, medium: 1, low: 0 } as const;
+        let conf = first.confidence;
+        return {
+          lineName: c.line,
+          direction: c.headsign,
+          departureTime: secsToHHMM(c.start),
+          departureSecs: c.start,
+          fromStopName: c.firstName,
+          fromStopSymbol: c.firstSym,
+          pauseMinutes: Math.max(0, Math.round((c.start - expectedArrival) / 60)),
+          confidence: first.confidence,
+          source: first.source,
+          ...(first.seen ? { seen: first.seen } : {}),
+          reason: first.seen
+            ? historyReason(first.seen, kind)
+            : c.line === cur.lineName
+              ? `Najbliższy kurs linii ${c.line} z przystanku ${c.firstName} według rozkładu MZK (MZK nie publikuje obiegów brygad).`
+              : `Linia ${cur.lineName} nie ma stąd kursu w ciągu 45 min; najbliżej z przystanku ${c.firstName} odjeżdża linia ${c.line}.`,
+          ...(rest.length
+            ? {
+                // a step is no surer than the one it follows
+                later: rest.map((st) => {
+                  if (rank[st.confidence] < rank[conf]) conf = st.confidence;
+                  return {
+                    lineName: st.course.line,
+                    direction: st.course.headsign,
+                    departureTime: secsToHHMM(st.course.start),
+                    fromStopName: st.course.firstName,
+                    confidence: conf,
+                  };
+                }),
+              }
+            : {}),
+        };
+      }
+    }
 
     const chain = detail.todayCourses
       .filter((c) => c.status === "completed")
@@ -723,7 +807,6 @@ export class FleetTracker {
       foldText(prev.lastStopName) === foldText(cur.firstStopName) &&
       foldText(prev.firstStopName) === foldText(cur.lastStopName);
 
-    const expectedArrival = cur.endSecs + Math.max(0, cur.notStarted ? 0 : cur.delaySec);
     const departureSecs = Math.max(cur.endSecs + layoverMin * 60, expectedArrival + MIN_LAYOVER_SEC);
 
     return {
@@ -735,6 +818,7 @@ export class FleetTracker {
       fromStopSymbol: cur.lastStopSymbol,
       pauseMinutes: Math.round((departureSecs - expectedArrival) / 60),
       confidence: shuttle ? "medium" : "low",
+      source: "estimate",
       reason: shuttle
         ? `Pojazd kursuje dziś wahadłowo na linii ${cur.lineName}, postój na pętli ok. ${layoverMin} min.`
         : this.operator === "MZK"
@@ -887,6 +971,11 @@ export class FleetTracker {
   public getVehicleDetail(sideNumber: string): FleetVehicleDetail | null {
     const clean = sideNumber.replace(/^#/, "").trim();
     return this.vehicles.get(clean) ?? null;
+  }
+
+  /** A vehicle's past days (today excluded), newest first; `complete` false while the day files are still being read. */
+  public vehicleHistory(sideNumber: string): { days: FleetHistoryDay[]; complete: boolean } {
+    return { days: this.history.vehicleDays(sideNumber.replace(/^#/, "").trim()), complete: this.history.complete };
   }
 
   /** An idle detail for a vehicle this tracker never saw on a course (GZM: on the map, off a trip). Not stored. */
@@ -1049,7 +1138,7 @@ export class FleetTracker {
         let v = this.vehicles.get(side);
         // no static fleet (GZM): the file is the only list of the vehicles seen today
         if (!v && !this.staticFleet && saved.info && typeof saved.info.model === "string") {
-          v = this.newVehicle({ ...saved.info, sideNumber: side, features: saved.info.features ?? {} });
+          v = this.newVehicle(this.restoreInfo({ ...saved.info, sideNumber: side, features: saved.info.features ?? {} }));
           this.vehicles.set(side, v);
         }
         if (!v) continue;
@@ -1088,7 +1177,7 @@ type GlobalWithTracker = typeof globalThis & { [TRACKER_KEY]?: FleetTracker };
 export function getFleetTracker(): FleetTracker {
   const g = globalThis as GlobalWithTracker;
   if (!g[TRACKER_KEY]) {
-    g[TRACKER_KEY] = new FleetTracker();
+    g[TRACKER_KEY] = new FleetTracker({ schedule: mzkDaySchedule });
   }
   return g[TRACKER_KEY];
 }

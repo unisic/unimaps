@@ -77,7 +77,7 @@ export interface ZbRecord {
 // ponytail: fixed GZM bbox (stop extent +-0.05 deg, 2026-10-28); widen if the network grows
 const AREA = { latMin: 49.9728, latMax: 50.5791, lonMin: 18.4043, lonMax: 19.4763 };
 /** a zbiorkom city's bbox until its feed parsed: the slug alone scopes the answer (Kraków, Łódź, Warsaw: 2026-10-30) */
-const POLAND: FeedArea = { latMin: 49, latMax: 55, lonMin: 14, lonMax: 24.2 };
+export const POLAND: FeedArea = { latMin: 49, latMax: 55, lonMin: 14, lonMax: 24.2 };
 const KEY_RE = /(?:%3A|:)(\d{1,4}_\d{1,6})$/i;
 // ponytail: a record older than 10 min is a vehicle zbiorkom forgot to drop, not a live one
 const RECORD_MAX_AGE_MS = 600_000;
@@ -321,12 +321,31 @@ export function nextPollDelay(nowMs: number): number {
 }
 
 /** A response body as text, refused past `max` bytes. */
-async function cappedText(res: Response, max: number): Promise<string> {
+export async function cappedText(res: Response, max: number): Promise<string> {
   if (Number(res.headers.get("content-length")) > max) throw new Error("response body exceeds the size cap");
   // ponytail: the cap is checked after text() buffered the body; stream it if upstream ever lies about its length
   const text = await res.text();
   if (text.length > max) throw new Error("response body exceeds the size cap");
   return text;
+}
+
+/** A fresh SDIP session: the JSESSIONID cookie its map page `url` sets. */
+export async function sdipSession(fetchImpl: typeof fetch, url: string): Promise<string> {
+  const res = await fetchImpl(url, { headers: { "User-Agent": config.USER_AGENT }, signal: AbortSignal.timeout(SDIP_TIMEOUT_MS) });
+  await res.body?.cancel();
+  const id = res.headers.getSetCookie().map((c) => /^JSESSIONID=[^;]+/.exec(c)?.[0]).find(Boolean);
+  if (!res.ok || !id) throw new Error(`SDIP session: HTTP ${res.status}${id ? "" : ", no JSESSIONID"}`);
+  return id;
+}
+
+/** SDIP's vehicle list body: JSON, or its expired-session page. */
+export async function sdipListText(fetchImpl: typeof fetch, url: string, cookie: string): Promise<string> {
+  const res = await fetchImpl(`${url}?command=planner&action=v`, {
+    headers: { "User-Agent": config.USER_AGENT, Accept: "application/json", Cookie: cookie, "X-Requested-With": "XMLHttpRequest" },
+    signal: AbortSignal.timeout(SDIP_TIMEOUT_MS),
+  });
+  if (!res.ok) throw new Error(`SDIP vehicles: HTTP ${res.status}`);
+  return cappedText(res, SDIP_MAX_BODY);
 }
 
 const pad = (n: number): string => String(n).padStart(2, "0");
@@ -519,21 +538,12 @@ export class GzmLive {
   }
 
   private async sdipLogin(): Promise<void> {
-    const res = await this.fetchImpl(this.sdipUrl!, { headers: { "User-Agent": config.USER_AGENT }, signal: AbortSignal.timeout(SDIP_TIMEOUT_MS) });
-    await res.body?.cancel();
-    const id = res.headers.getSetCookie().map((c) => /^JSESSIONID=[^;]+/.exec(c)?.[0]).find(Boolean);
-    if (!res.ok || !id) throw new Error(`SDIP session: HTTP ${res.status}${id ? "" : ", no JSESSIONID"}`);
-    this.sdipCookie = id;
+    this.sdipCookie = await sdipSession(this.fetchImpl, this.sdipUrl!);
   }
 
   /** The vehicle list, or null when SDIP answered something else than JSON (its expired-session page). */
   private async sdipVehicles(): Promise<unknown> {
-    const res = await this.fetchImpl(`${this.sdipUrl}?command=planner&action=v`, {
-      headers: { "User-Agent": config.USER_AGENT, Accept: "application/json", Cookie: this.sdipCookie, "X-Requested-With": "XMLHttpRequest" },
-      signal: AbortSignal.timeout(SDIP_TIMEOUT_MS),
-    });
-    if (!res.ok) throw new Error(`SDIP vehicles: HTTP ${res.status}`);
-    const text = await cappedText(res, SDIP_MAX_BODY);
+    const text = await sdipListText(this.fetchImpl, this.sdipUrl!, this.sdipCookie);
     this.sdipBytes += text.length;
     try {
       return JSON.parse(text) as unknown;
@@ -636,7 +646,10 @@ export class GzmLive {
       const { rec, pos, trip, feed } = t;
       if (!trip || !feed) continue;
       const geom = pos.shapeKey ? feed.shapes.geometry(pos.shapeKey) : null;
-      const n = trip.next;
+      const nextTrips: GzmFleetSource["nextTrips"] = [];
+      for (let n = trip.next; n && nextTrips.length < 5; n = n.next) {
+        if (n.stopIds.length) nextTrips.push({ line: n.line, headsign: n.headsign, firstStopName: feed.stops.get(n.stopIds[0])?.name ?? "", firstStopId: n.stopIds[0], dep: n.dep[0] });
+      }
       out.push({
         side: rec.key,
         label: rec.label,
@@ -657,10 +670,7 @@ export class GzmLive {
         lon: pos.lon,
         bearing: pos.bearing,
         fixAt: pos.fixAt ?? null,
-        nextTrip:
-          n && n.stopIds.length
-            ? { line: n.line, headsign: n.headsign, firstStopName: feed.stops.get(n.stopIds[0])?.name ?? "", firstStopId: n.stopIds[0], dep: n.dep[0] }
-            : null,
+        nextTrips,
       });
     }
     return out;

@@ -2,6 +2,7 @@ import { badRequest, jsonWithEtag, notFound, parseCity, upstreamError } from "@/
 import { getFleetTracker } from "@/lib/fleet-tracker";
 import { GZM_SIDE_RE, getGzmFleetTracker, gzmIdleDetail } from "@/lib/gzm-fleet";
 import { getGzm, startGzm } from "@/lib/gzm";
+import { ptVehicle } from "@/lib/phototrans";
 import { startPoller } from "@/lib/poller-singleton";
 
 export const dynamic = "force-dynamic";
@@ -13,6 +14,7 @@ const NO_STORE = { "Cache-Control": "no-store, no-cache, must-revalidate, max-ag
  * GET /api/fleet/[sideNumber] — one vehicle: the course it runs now, today's courses, day stats
  * and the (estimated) next course. ETag: a vehicle in the depot does not change between polls (304).
  * `?city=gzm`: a Metropolia GZM vehicle, sideNumber "<company code>_<fleet number>".
+ * `tech` and `photos` come from the bundled phototrans index (no request leaves the server).
  */
 export async function GET(
   req: Request,
@@ -42,7 +44,8 @@ export async function GET(
       return Response.json({ error: "Vehicle not found" }, { status: 404, headers: NO_STORE });
     }
 
-    return jsonWithEtag(req, { vehicle: detail });
+    const pt = ptVehicle(city, sideNumber);
+    return jsonWithEtag(req, { vehicle: pt ? { ...detail, tech: pt.tech, photos: pt.photos } : detail });
   } catch (err) {
     return upstreamError("fleet-detail", err);
   }

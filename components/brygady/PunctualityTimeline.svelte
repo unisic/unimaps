@@ -238,7 +238,7 @@
           {#if l.edge}<path d={l.edge} fill="none" stroke={SURFACE} stroke-width={1.5} stroke-linejoin="round" />{/if}
         {/each}
         {#if hp}
-          <line x1={hx} x2={hx} y1={TL_M.t} y2={TL_M.t + geo.innerH} stroke="#e8eaed" stroke-width={1} stroke-dasharray="3 3" />
+          <line x1={hx} x2={hx} y1={TL_M.t} y2={TL_M.t + geo.innerH} stroke="var(--color-text)" stroke-width={1} stroke-dasharray="3 3" />
         {/if}
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <!-- pointer-only hover surface; the svg's arrow keys are its keyboard path -->
@@ -283,23 +283,23 @@
         <table class="w-full text-left text-[12.5px] tabular-nums">
           <thead class="sticky top-0 bg-surface-2 text-text-mute">
             <tr>
-              <th scope="col" class="px-3 py-2 font-medium">Godzina</th>
-              <th scope="col" class="px-3 py-2 text-right font-medium">W trasie (śr.)</th>
-              <th scope="col" class="px-3 py-2 text-right font-medium">Punktualnie</th>
-              <th scope="col" class="px-3 py-2 text-right font-medium">Opóźnione</th>
-              <th scope="col" class="px-3 py-2 text-right font-medium">Przed czasem</th>
+              <th scope="col" class="px-2 py-2 font-medium">Godzina</th>
+              <th scope="col" class="px-2 py-2 text-right font-medium">W trasie (śr.)</th>
+              <th scope="col" class="px-2 py-2 text-right font-medium">Punktualnie</th>
+              <th scope="col" class="px-2 py-2 text-right font-medium">Opóźnione</th>
+              <th scope="col" class="px-2 py-2 text-right font-medium">Przed czasem</th>
             </tr>
           </thead>
           <tbody>
             {#each tableRows as [h, r] (h)}
               <tr class="border-t border-hairline">
-                <th scope="row" class="px-3 py-1.5 font-medium text-text">
+                <th scope="row" class="px-2 py-1.5 font-medium text-text">
                   {clockFromSecs(h * 3600)}–{clockFromSecs((h + 1) * 3600)}
                 </th>
-                <td class="px-3 py-1.5 text-right text-text">{Math.round(r.total / r.n)}</td>
-                <td class="px-3 py-1.5 text-right text-text">{pct(r.onTime, r.m)}</td>
-                <td class="px-3 py-1.5 text-right text-text">{pct(r.late, r.m)}</td>
-                <td class="px-3 py-1.5 text-right text-text">{pct(r.early, r.m)}</td>
+                <td class="px-2 py-1.5 text-right text-text">{Math.round(r.total / r.n)}</td>
+                <td class="px-2 py-1.5 text-right text-text">{pct(r.onTime, r.m)}</td>
+                <td class="px-2 py-1.5 text-right text-text">{pct(r.late, r.m)}</td>
+                <td class="px-2 py-1.5 text-right text-text">{pct(r.early, r.m)}</td>
               </tr>
             {/each}
           </tbody>

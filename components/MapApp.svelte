@@ -31,6 +31,7 @@
     Stop,
     Trip,
     TripExecutionResponse,
+    TripTime,
     TripStopResolved,
     TripView,
     Vehicle,
@@ -54,7 +55,6 @@
   import TripPanel from "@/components/TripView.svelte";
   import JourneyView from "@/components/JourneyView.svelte";
   import VehicleLayer from "@/components/VehicleLayer.svelte";
-  import BikesLayer from "@/components/BikesLayer.svelte";
   import StopsLayer from "@/components/StopsLayer.svelte";
   import TripLayer from "@/components/TripLayer.svelte";
   import JourneyLayer from "@/components/JourneyLayer.svelte";
@@ -64,6 +64,8 @@
   const OFF_TRIP = "Pojazd poza kursem";
   const SCHEDULED = "Pozycja z rozkładu, metro nie podaje GPS";
   const TRIP_REFRESH_MS = 30_000;
+  /** back in a hidden tab: a timeline older than this is fetched at once instead of on the next tick */
+  const TRIP_CATCHUP_MS = 10_000;
   /** a road match takes ~1.1 s per 9 shape points on the public OSRM (line 27: 19 requests, ~21 s) */
   const MATCH_POLL_MS = 1000;
   const MATCH_POLLS = 100;
@@ -199,29 +201,25 @@
   let map = $state.raw<L.Map | null>(null);
   let selectedStop = $state.raw<Stop | null>(null);
   let stopsVisible = $state(true);
-  let bikesVisible = $state(
-    (() => {
-      try {
-        return window.localStorage.getItem("kb:bikes") !== "0";
-      } catch {
-        return true;
-      }
-    })(),
-  );
   let trip = $state.raw<TripView | null>(null);
   let journey = $state.raw<JourneyViewState | null>(null);
   let journeySeq = 0;
   let vehMeta = $state.raw<Vehicle | null>(null);
+  /* no style picked yet: the basemap follows the app theme (set by the pre-paint script in the page head) */
+  const themeLayer = (): BaseLayerId => (document.documentElement.dataset.theme === "light" ? "kb" : "dark");
+  let layerPicked = false;
   let baseLayer = $state<BaseLayerId>(
     (() => {
       try {
         const v = window.localStorage.getItem(LAYER_KEY);
-        if (v && v in BASE_LAYERS) return v as BaseLayerId;
+        if (v && v in BASE_LAYERS) {
+          layerPicked = true;
+          return v as BaseLayerId;
+        }
       } catch {
         /* private mode: ignore */
       }
-      // no choice yet: the app theme (set by the pre-paint script in the page head)
-      return document.documentElement.dataset.theme === "light" ? "kb" : "dark";
+      return themeLayer();
     })(),
   );
   /* basemap readiness: veil while loading; one silent remount-retry on failure,
@@ -274,6 +272,7 @@
   const geoFollowing = $derived(geoFollow && geo.status === "active");
 
   function setBaseLayer(id: BaseLayerId) {
+    layerPicked = true;
     baseLayer = id;
     // switching styles gets a fresh vector attempt even after a raster fallback
     basemap = { status: "loading", attempt: 0 };
@@ -283,6 +282,19 @@
       /* private mode: ignore */
     }
   }
+
+  /* a theme switch (Motyw, or the system setting followed live) takes the basemap along until a style is picked */
+  onMount(() => {
+    const root = document.documentElement;
+    const obs = new MutationObserver(() => {
+      const id = themeLayer();
+      if (layerPicked || id === untrack(() => baseLayer)) return;
+      baseLayer = id;
+      basemap = { status: "loading", attempt: 0 };
+    });
+    obs.observe(root, { attributes: true, attributeFilter: ["data-theme"] });
+    return () => obs.disconnect();
+  });
 
   /* reported from the layer's own effects: untracked, so the status write never re-runs them */
   function handleBasemapStatus(s: BasemapStatus) {
@@ -358,6 +370,20 @@
     vehMeta = null;
   }
 
+  /** The trip's times matched to physical stops (a time with no known stop is left out). */
+  function resolveTripStops(times: TripTime[], stop: Stop | null): TripStopResolved[] {
+    const { byId, byDesig } = untrack(() => stopsMaps);
+    const resolved: TripStopResolved[] = [];
+    for (const t of times) {
+      let c: Stop | undefined;
+      if (t.designator != null) c = byId.get(String(t.designator));
+      if (!c && t.place_id) c = byDesig.get(t.place_id);
+      if (!c) continue;
+      resolved.push({ t, s: c, selected: !!stop && tripTimeMatchesStop(t, stop) });
+    }
+    return resolved;
+  }
+
   /** Resolve stop coords, publish trip state, then attach its road geometry:
    *  the server-stored shape when there is one, browser OSRM only while the
    *  server is still routing it, straight lines when it has none.
@@ -377,17 +403,8 @@
     arrived: (number | null)[] | null = null,
   ) {
     if (gen !== tripSeq) return;
-    const { byId, byDesig } = untrack(() => stopsMaps);
     const times = tripData?.times ?? [];
-    const resolved: TripStopResolved[] = [];
-    for (const t of times) {
-      let c: Stop | undefined;
-      if (t.designator != null) c = byId.get(String(t.designator));
-      if (!c && t.place_id) c = byDesig.get(t.place_id);
-      if (!c) continue;
-      const selected = !!stop && tripTimeMatchesStop(t, stop);
-      resolved.push({ t, s: c, selected });
-    }
+    const resolved = resolveTripStops(times, stop);
     const pts: LatLng[] = resolved.map(({ s }): LatLng => adjustStopRoutePoint(s.id, [s.lat, s.lon]));
     const needRoute = pts.length >= 2;
     const { points: routePts, detour } = injectDetourPoints(pts, tripData?.line?.name, tripData?.direction);
@@ -558,8 +575,9 @@
     }
   }
 
-  /* the live timeline is fetched once on open: re-fetch it so stops passed meanwhile gain their recorded
-     arrival. One request per 30 s per open trip, none while the tab is hidden, never two in flight. */
+  /* the live timeline is fetched once on open: re-fetch it so the forecasts of the stops ahead follow the
+     bus and the stops passed meanwhile gain their recorded arrival. One request per 30 s per open trip, none
+     while the tab is hidden (catching up as soon as it is shown again), never two in flight. */
   const liveExecId = $derived(
     trip?.isLive && (trip.status === "ready" || trip.status === "routing") ? trip.execId : null,
   );
@@ -569,7 +587,8 @@
     const g = tripGen;
     if (!exec) return;
     let ac: AbortController | null = null;
-    const id = setInterval(async () => {
+    let lastOk = Date.now();
+    const refresh = async () => {
       if (document.hidden || ac) return;
       ac = new AbortController();
       try {
@@ -577,9 +596,14 @@
           `/api/trip_execution?exec_id=${encodeURIComponent(exec)}`,
           { cache: "no-store", signal: ac.signal },
         );
-        if (g !== tripSeq || !resp?.trip) return;
-        const arrived = arrivedSecs(resp);
-        if (arrived && trip?.gen === g) trip = { ...trip, arrived };
+        if (g !== tripSeq || !resp?.trip || trip?.gen !== g) return;
+        lastOk = Date.now();
+        const times = resp.trip.times ?? [];
+        trip = {
+          ...trip,
+          ...(times.length ? { rawTimes: times, stops: resolveTripStops(times, trip.stop) } : {}),
+          arrived: arrivedSecs(resp) ?? trip.arrived,
+        };
         // the server swapped in a better road shape since the open (a GZM shape snapped to the roads)
         if (resp.shape_id && resp.shape_status === "road" && trip?.gen === g && trip.shapeId !== resp.shape_id) {
           const sh = await loadShapeLatest(resp.shape_id);
@@ -592,9 +616,15 @@
       } finally {
         ac = null;
       }
-    }, TRIP_REFRESH_MS);
+    };
+    const id = setInterval(refresh, TRIP_REFRESH_MS);
+    const onShow = () => {
+      if (Date.now() - lastOk >= TRIP_CATCHUP_MS) void refresh();
+    };
+    document.addEventListener("visibilitychange", onShow);
     return () => {
       clearInterval(id);
+      document.removeEventListener("visibilitychange", onShow);
       ac?.abort();
     };
   });
@@ -684,17 +714,6 @@
   function toggleStops() {
     stopsVisible = !stopsVisible;
   }
-  function toggleBikes() {
-    bikesVisible = !bikesVisible;
-  }
-  $effect(() => {
-    const on = bikesVisible;
-    try {
-      window.localStorage.setItem("kb:bikes", on ? "1" : "0");
-    } catch {
-      /* private mode */
-    }
-  });
   function pickStopFly(s: Stop) {
     handleSelectStop(s, { fly: true });
   }
@@ -1435,9 +1454,6 @@
       onSelect={handleSelectStop}
       minZoom={cityCfg.stopMinZoom}
     />
-    {#if city === "gzm"}
-      <BikesLayer {map} visible={bikesVisible} />
-    {/if}
     <TripLayer {map} {trip} {desktop} {vehMeta} liveVehicle={liveTripVeh} />
     <JourneyLayer {map} {journey} {desktop} />
     <LineLayer
@@ -1472,8 +1488,6 @@
     offline={!!vehQ.error}
     {stopsVisible}
     onToggleStops={toggleStops}
-    {bikesVisible}
-    onToggleBikes={city === "gzm" ? toggleBikes : undefined}
     {baseLayer}
     onBaseLayer={setBaseLayer}
     onOpenAnnouncements={openAnnouncements}

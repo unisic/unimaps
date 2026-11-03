@@ -74,7 +74,7 @@
       const color = operatorColor(line?.operator, line?.name);
       layers.put(
         "casing",
-        () => L.polyline(path, { color: "#0d1013", weight: 9, opacity: 0.85, lineCap: "round", lineJoin: "round" }),
+        () => L.polyline(path, { color: "#0d1013", className: "route-casing", weight: 9, opacity: 0.85, lineCap: "round", lineJoin: "round" }),
         (l) => l.setLatLngs(path),
       );
       const route: L.PolylineOptions = { color, weight: 4.5, opacity: 0.95, lineCap: "round", lineJoin: "round" };

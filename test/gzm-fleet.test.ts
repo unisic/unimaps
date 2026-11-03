@@ -22,11 +22,12 @@ const NOON = 43_200;
 beforeEach(() => mock.timers.enable({ apis: ["Date"], now: NOON_OCT4_MS }));
 afterEach(() => mock.timers.reset());
 
+// Side numbers 9xxx are absent from lib/phototrans.json on purpose: a listed vehicle takes its model from there.
 /** Brigade 69/1 at noon: 11:40 -> 12:05, served the second of three stops. */
 function src(over: Partial<GzmFleetSource> = {}): GzmFleetSource {
   return {
-    side: "283_4285",
-    label: "4285",
+    side: "283_9285",
+    label: "9285",
     model: "Solaris Urbino 12",
     vehicleType: "3",
     line: "69",
@@ -48,7 +49,7 @@ function src(over: Partial<GzmFleetSource> = {}): GzmFleetSource {
     lon: 19.03,
     bearing: 90,
     fixAt: NOON_OCT4_MS / 1000 - 4,
-    nextTrip: null,
+    nextTrips: [],
     ...over,
   };
 }
@@ -69,7 +70,7 @@ const SECOND_TRIP: Partial<GzmFleetSource> = {
 describe("gzm-fleet input", () => {
   it("maps a GZM source to the tracker input", () => {
     const v = gzmFleetInput(src());
-    assert.equal(v.vehicleId, "283_4285");
+    assert.equal(v.vehicleId, "283_9285");
     assert.equal(v.courseLoid, 0x0123456789ab);
     assert.equal(v.lineName, "69");
     assert.equal(v.direction, "Sosnowiec Pętla");
@@ -89,7 +90,7 @@ describe("gzm-fleet input", () => {
     assert.equal(v.servedIdx, 1);
     assert.equal(v.nextIdx, 2);
     assert.equal(v.brigade, "1");
-    assert.equal(v.label, "4285");
+    assert.equal(v.label, "9285");
     assert.equal(v.company, "PKM Tychy");
     assert.equal(v.notStarted, false);
   });
@@ -119,9 +120,9 @@ describe("gzm-fleet input", () => {
   it("names companies by their code and validates keys", () => {
     assert.equal(gzmCompany("125_712"), "Tramwaje Śląskie");
     assert.equal(gzmCompany("999_1"), "Przewoźnik 999");
-    assert.equal(GZM_SIDE_RE.test("283_4285"), true);
+    assert.equal(GZM_SIDE_RE.test("283_9285"), true);
     assert.equal(GZM_SIDE_RE.test("283"), false);
-    assert.equal(GZM_SIDE_RE.test("283_4285/../x"), false);
+    assert.equal(GZM_SIDE_RE.test("283_9285/../x"), false);
   });
 });
 
@@ -132,10 +133,10 @@ describe("gzm-fleet tracker", () => {
     mock.timers.setTime(NOON_OCT4_MS + 6 * 60_000);
     t.updateFromRunningVehicles([gzmFleetInput(src(SECOND_TRIP))]);
 
-    const d = t.getVehicleDetail("283_4285");
+    const d = t.getVehicleDetail("283_9285");
     assert(d);
     assert.equal(d.operator, "GZM");
-    assert.equal(d.label, "4285");
+    assert.equal(d.label, "9285");
     assert.equal(d.company, "PKM Tychy");
     assert.equal(d.currentCourse?.courseLoid, 0xfedcba987654);
     assert.equal(d.currentCourse?.brigade, "1");
@@ -153,8 +154,8 @@ describe("gzm-fleet tracker", () => {
     assert.equal(d.stats.totalCoursesToday, 2);
 
     const row = t.getFleetSummary()[0];
-    assert.equal(row.sideNumber, "283_4285");
-    assert.equal(row.label, "4285");
+    assert.equal(row.sideNumber, "283_9285");
+    assert.equal(row.label, "9285");
     assert.equal(row.company, "PKM Tychy");
     assert.equal(row.brigade, "1");
   });
@@ -168,22 +169,25 @@ describe("gzm-fleet tracker", () => {
 
     mock.timers.setTime(NOON_OCT4_MS + 60_000);
     t.updateFromRunningVehicles([gzmFleetInput(src(SECOND_TRIP))]);
-    assert.equal(t.getVehicleDetail("283_4285")?.todayCourses.length, 0);
+    assert.equal(t.getVehicleDetail("283_9285")?.todayCourses.length, 0);
 
     mock.timers.setTime(NOON_OCT4_MS + 2 * 60_000);
     const t2 = createGzmFleetTracker(null);
     t2.updateFromRunningVehicles([gzmFleetInput(src({ notStarted: true }))]);
     t2.updateFromRunningVehicles([]);
-    const gone = t2.getVehicleDetail("283_4285");
+    const gone = t2.getVehicleDetail("283_9285");
     assert.equal(gone?.status, "depot");
     assert.equal(gone?.todayCourses.length, 0);
   });
 
-  it("predicts the next course from the brigade's next scheduled trip", () => {
+  it("predicts the next courses from the brigade's next scheduled trips", () => {
     const t = createGzmFleetTracker(null);
-    const nextTrip = { line: "69", headsign: "Katowice Dworzec", firstStopName: "Sosnowiec Pętla", firstStopId: "s3", dep: NOON + 900 };
-    t.updateFromRunningVehicles([gzmFleetInput(src({ nextTrip }))]);
-    assert.deepEqual(t.getVehicleDetail("283_4285")?.predictedNextCourse, {
+    const nextTrips = [
+      { line: "69", headsign: "Katowice Dworzec", firstStopName: "Sosnowiec Pętla", firstStopId: "s3", dep: NOON + 900 },
+      { line: "69", headsign: "Sosnowiec Pętla", firstStopName: "Katowice Dworzec", firstStopId: "s1", dep: NOON + 3900 },
+    ];
+    t.updateFromRunningVehicles([gzmFleetInput(src({ nextTrips }))]);
+    assert.deepEqual(t.getVehicleDetail("283_9285")?.predictedNextCourse, {
       lineName: "69",
       direction: "Katowice Dworzec",
       departureTime: "12:15",
@@ -193,7 +197,9 @@ describe("gzm-fleet tracker", () => {
       // ends 12:05 +1 min late, leaves 12:15
       pauseMinutes: 9,
       confidence: "high",
+      source: "schedule",
       reason: "Według rozkładu brygady 69/1.",
+      later: [{ lineName: "69", direction: "Sosnowiec Pętla", departureTime: "13:05", fromStopName: "Katowice Dworzec", confidence: "high" }],
     });
   });
 
@@ -207,10 +213,10 @@ describe("gzm-fleet tracker", () => {
       ],
       servedIdx: 0,
       nextIdx: 1,
-      nextTrip: { line: "69", headsign: "A", firstStopName: "B", firstStopId: "s2", dep: 86_400 + 600 },
+      nextTrips: [{ line: "69", headsign: "A", firstStopName: "B", firstStopId: "s2", dep: 86_400 + 600 }],
     });
     t.updateFromRunningVehicles([gzmFleetInput(late)]);
-    const p = t.getVehicleDetail("283_4285")?.predictedNextCourse;
+    const p = t.getVehicleDetail("283_9285")?.predictedNextCourse;
     assert.equal(p?.departureTime, "00:10");
     assert.equal(p?.departureSecs, 600);
     assert.equal(p?.pauseMinutes, 15);
@@ -218,11 +224,11 @@ describe("gzm-fleet tracker", () => {
 
   it("sorts by company, then fleet number, numerically", () => {
     const t = createGzmFleetTracker(null);
-    const sides = ["283_4285", "108_12", "2_900", "108_3"];
+    const sides = ["283_9285", "108_12", "2_900", "108_3"];
     t.updateFromRunningVehicles(sides.map((side, i) => gzmFleetInput(src({ side, label: side.split("_")[1], tripId: `${i}`.repeat(16) }))));
     assert.deepEqual(
       t.getFleetSummary().map((v) => v.sideNumber),
-      ["2_900", "108_3", "108_12", "283_4285"],
+      ["2_900", "108_3", "108_12", "283_9285"],
     );
   });
 
@@ -236,7 +242,7 @@ describe("gzm-fleet tracker", () => {
       const a = gzmFleetListBody();
       const body = JSON.parse(a.body) as { count: number; vehicles: { sideNumber: string }[]; serverNow?: number };
       assert.equal(body.count, 1);
-      assert.equal(body.vehicles[0].sideNumber, "283_4285");
+      assert.equal(body.vehicles[0].sideNumber, "283_9285");
       assert.equal("serverNow" in body, false);
       assert.match(a.etag, /^"[\w-]{22}"$/);
       assert.equal(gzmFleetListBody(), a);
@@ -256,16 +262,16 @@ describe("gzm-fleet tracker", () => {
     g[key] = createGzmFleetTracker(null);
     try {
       const fixAt = NOON_OCT4_MS / 1000 - 15;
-      const d = gzmIdleDetail("104_3008", { label: "3008", model: "Mercedes Citaro", line: "744", lat: 50.3, lon: 18.9, fixAt });
-      assert.equal(d.sideNumber, "104_3008");
-      assert.equal(d.label, "3008");
+      const d = gzmIdleDetail("104_9008", { label: "9008", model: "Mercedes Citaro", line: "744", lat: 50.3, lon: 18.9, fixAt });
+      assert.equal(d.sideNumber, "104_9008");
+      assert.equal(d.label, "9008");
       assert.equal(d.company, "PKM Świerklaniec");
       assert.equal(d.model, "Mercedes Citaro");
       assert.equal(d.status, "depot");
       assert.equal(d.currentCourse, null);
       assert.equal(d.lastSeenAt, fixAt);
       assert.deepEqual(d.lastKnownLocation, { lat: 50.3, lon: 18.9, name: "Na mapie bez kursu, linia 744" });
-      assert.equal(g[key].getVehicleDetail("104_3008"), null);
+      assert.equal(g[key].getVehicleDetail("104_9008"), null);
     } finally {
       g[key] = prev;
     }
@@ -281,9 +287,9 @@ describe("gzm-fleet tracker", () => {
       t.flushSync();
       assert.deepEqual(fs.readdirSync(dir), ["fleet-history-2026-10-04.json"]);
 
-      const back = createGzmFleetTracker(dir).getVehicleDetail("283_4285");
+      const back = createGzmFleetTracker(dir).getVehicleDetail("283_9285");
       assert(back);
-      assert.equal(back.label, "4285");
+      assert.equal(back.label, "9285");
       assert.equal(back.company, "PKM Tychy");
       assert.equal(back.model, "Solaris Urbino 12");
       assert.equal(back.todayCourses.length, 1);
@@ -371,6 +377,7 @@ describe("default MZK tracker", () => {
       fromStopSymbol: "1",
       pauseMinutes: 3,
       confidence: "medium",
+      source: "estimate",
       reason: "Pojazd kursuje dziś wahadłowo na linii 50, postój na pętli ok. 5 min.",
     });
   });

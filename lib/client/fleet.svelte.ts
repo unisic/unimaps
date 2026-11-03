@@ -13,6 +13,7 @@ import {
   type FleetCity,
   type FleetTimelineResponse,
   type VehicleDetailApiResponse,
+  type VehicleHistoryApiResponse,
 } from "./fleet";
 
 /**
@@ -66,3 +67,16 @@ export function useFleetTimeline(enabled: () => boolean, city: FleetCity = "bb")
   });
 }
 
+
+/** One vehicle's past days: changes once a day (a 304 in between), every 5 s while the server still reads its files. */
+export function useVehicleHistory(sideNumber: () => string | null, city: FleetCity = "bb") {
+  const key = () => {
+    const clean = sideNumber()?.replace(/^#/, "").trim();
+    return clean ? cityUrl(`/api/fleet/${encodeURIComponent(clean)}/history`, city) : null;
+  };
+  return swr<VehicleHistoryApiResponse>(key, fetcher, {
+    refreshInterval: (d) => (d && !d.complete ? 5_000 : 15 * 60_000),
+    dedupingInterval: 5_000,
+    shouldRetryOnError: (err: unknown) => !isNotFound(err),
+  });
+}

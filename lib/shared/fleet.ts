@@ -13,15 +13,40 @@
  *
  * Metropolia GZM (lib/gzm-fleet.ts) publishes the GTFS brigade of every trip, so its courses
  * carry `brigade` and the next course comes from the brigade's schedule. Its vehicles are keyed
- * by "<company code>_<fleet number>" (fleet numbers repeat across companies) and have no
- * equipment data: `label` is the printed fleet number, length and fuel are null.
+ * by "<company code>_<fleet number>" (fleet numbers repeat across companies); GZM publishes no
+ * equipment data, so producer, year, length and fuel come from phototrans (lib/phototrans.ts) or stay
+ * empty: `label` is the printed fleet number.
  */
 import type { VehicleFeatures } from "../mzk-fleet";
 
 export type { VehicleFeatures };
 
-export type FleetFuelType = "diesel" | "electric" | "hydrogen" | "hybrid";
+export type FleetFuelType = "diesel" | "electric" | "hydrogen" | "hybrid" | "cng";
 export type FleetLengthCategory = "MINI" | "MIDI" | "MAXI" | "MEGA";
+
+/** A phototrans photo: the browser loads `thumb` from phototrans, `page` shows the original. */
+export interface VehiclePhoto {
+  thumb: string;
+  page: string;
+  author: string;
+  /** YYYY-MM-DD, null when phototrans gives none */
+  date: string | null;
+}
+
+/** Technical data from phototrans that the fleet sources lack. */
+export interface VehicleTech {
+  body?: string;
+  engine?: string;
+  gearbox?: string;
+  /** door layout, e.g. "2-2-2" */
+  doors?: string;
+  /** production year */
+  built?: number;
+  /** year the operator took the vehicle over */
+  since?: number;
+  /** the vehicle's phototrans page (source credit) */
+  page: string;
+}
 
 export interface VehicleCourseStop {
   symbol: string;
@@ -90,10 +115,46 @@ export interface PredictedNextCourse {
   fromStopSymbol?: string;
   /** minutes between the expected arrival and the estimated departure */
   pauseMinutes: number;
-  /** "high": the brigade's next scheduled trip (GZM GTFS); "medium": the vehicle shuttled on this
-   *  line today (observed); "low": generic assumption */
+  /** how sure the source is: "high" = the GZM brigade schedule, or history that agreed nearly every time */
   confidence: "high" | "medium" | "low";
+  /** schedule = GZM brigade (GTFS); history = what this course was followed by on past days of the same
+   *  kind; timetable = the next MZK course from the same terminus; estimate = same line back after a layover */
+  source: "schedule" | "history" | "timetable" | "estimate";
+  /** history only: the successor on `days` of the `of` past days that ran this course */
+  seen?: { days: number; of: number };
   reason: string;
+  /** the courses after this one, same sources, at most 4; absent for an estimate */
+  later?: PredictedLaterCourse[];
+}
+
+export interface PredictedLaterCourse {
+  lineName: string;
+  direction: string;
+  departureTime: string;
+  fromStopName: string;
+  confidence: PredictedNextCourse["confidence"];
+}
+
+/** One past course of a vehicle (/api/fleet/<side>/history): the slim record the history keeps. */
+export interface FleetHistoryCourse {
+  lineName: string;
+  direction: string;
+  firstStopName: string;
+  lastStopName: string;
+  startSecs: number;
+  endSecs: number;
+  brigade?: string;
+  delaySec: number;
+  status: "completed" | "cancelled";
+  drivenMeters: number;
+  cancelledAtStopName?: string;
+}
+
+export interface FleetHistoryDay {
+  /** YYYY-MM-DD, Warsaw */
+  date: string;
+  /** by scheduled start */
+  courses: FleetHistoryCourse[];
 }
 
 export interface FleetVehicleStats {
@@ -139,6 +200,9 @@ export interface FleetVehicleDetail {
   lastSeenAt: number;
   lastKnownLocation: { lat: number; lon: number; name: string } | null;
   stats: FleetVehicleStats;
+  /** from the phototrans index; absent when phototrans has no such vehicle */
+  tech?: VehicleTech;
+  photos?: VehiclePhoto[];
 }
 
 /**

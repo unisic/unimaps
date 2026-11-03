@@ -126,7 +126,7 @@
   /** % of a half-row rail the vehicle has covered; `x` = stop units travelled into that half */
   const railFill = (x: number) => Math.max(0, Math.min(100, x * 200));
   /** the travelled rail: opaque (it covers the line-coloured rail underneath) */
-  const RAIL_DONE = "color-mix(in srgb, #fff 16%, var(--color-surface))";
+  const RAIL_DONE = "color-mix(in srgb, var(--color-tint) 16%, var(--color-surface))";
   /** seconds-of-day difference folded into ±12 h (a post-midnight time against a pre-midnight one) */
   const wrapDay = (d: number) => (d > 43200 ? d - 86400 : d < -43200 ? d + 86400 : d);
   const SAFE_PAD = "calc(env(safe-area-inset-bottom, 0px) + 1.25rem)";
@@ -410,8 +410,13 @@
   function rowOf(t: TripTime, idx: number) {
     const passed = idx < vti;
     const planned = secsFromHHMM(t.departure_time);
-    /* passed: the recorded arrival; ahead: the live forecast (the stop's own estimate, else the bus's delay) */
-    const forecast = notStarted ? null : (t.estimate?.time_diff ?? headerDelay);
+    /* passed: the recorded arrival; ahead: the live forecast. KB and MZK estimate each stop (else the bus's
+       delay); a zbiorkom estimate is just the bus's delay when the timeline was fetched, the poll's is fresher */
+    const forecast = notStarted
+      ? null
+      : isGzmTrip
+        ? (headerDelay ?? t.estimate?.time_diff ?? null)
+        : (t.estimate?.time_diff ?? headerDelay);
     const actual =
       !isLiveWithLoc || notStarted || planned == null
         ? null

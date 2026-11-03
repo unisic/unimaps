@@ -200,10 +200,10 @@
     const color = lineColor;
     const pts = routed;
     if (pts && pts.length >= 2) {
-      // dark casing under the colored line
+      // casing under the coloured line, in the map's contrast colour (.route-casing)
       layers.put(
         "casing",
-        () => L.polyline(pts, { color: "#0d1013", weight: 9, opacity: 0.85, lineCap: "round", lineJoin: "round" }),
+        () => L.polyline(pts, { color: "#0d1013", className: "route-casing", weight: 9, opacity: 0.85, lineCap: "round", lineJoin: "round" }),
         (l) => l.setLatLngs(pts),
       );
       const line: L.PathOptions = { color, weight: 4.5, opacity: 0.95, lineCap: "round", lineJoin: "round" };

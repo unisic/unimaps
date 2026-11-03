@@ -9,6 +9,7 @@ import { GZM_DIR, GZM_FLEET_HISTORY_DAYS } from "./config";
 import { FleetTracker, type FleetRunningInput, type FleetVehicleInfo } from "./fleet-tracker";
 import type { FleetVehicleDetail } from "./shared/fleet";
 import { log } from "./logger";
+import { ptVehicle } from "./phototrans";
 
 export interface GzmFleetSource {
   side: string; // "<op>_<fleet>", e.g. "283_4285"; the map vehicle id is `gzm:${side}`
@@ -30,7 +31,7 @@ export interface GzmFleetSource {
   lon: number;
   bearing: number | null; // compass degrees
   fixAt: number | null; // epoch s of the GPS fix
-  nextTrip: { line: string; headsign: string; firstStopName: string; firstStopId: string; dep: number } | null; // the brigade's next GTFS trip, dep = service-day seconds
+  nextTrips: { line: string; headsign: string; firstStopName: string; firstStopId: string; dep: number }[]; // the brigade's next GTFS trips in order (at most 5), dep = service-day seconds
 }
 
 /**
@@ -104,24 +105,28 @@ export function gzmFleetInput(src: GzmFleetSource): FleetRunningInput {
     nextIdx: src.nextIdx,
     stopSecs: src.stops.map((s) => s.dep),
     brigade: src.brigade,
-    nextTrip: src.nextTrip,
+    nextTrips: src.nextTrips,
     label: src.label,
     model: src.model,
     company: gzmCompany(src.side),
   };
 }
 
-/** GZM publishes no equipment data: the live record's model, everything else unknown. */
+/** GZM publishes the model only: producer, year, length and propulsion come from phototrans when it lists the vehicle. */
 function gzmInfo(side: string, label: string | undefined, model: string | null | undefined): FleetVehicleInfo {
+  const pt = ptVehicle("gzm", side);
+  const year = pt?.tech.built ?? pt?.tech.since;
+  const fuel = pt?.fuel ?? null;
   return {
     sideNumber: side,
     label: label ?? side.slice(side.indexOf("_") + 1),
     company: gzmCompany(side),
-    model: model ?? "",
-    producer: "",
-    lengthCategory: null,
-    fuelType: null,
-    features: {},
+    model: pt?.group.model || model || "",
+    producer: pt?.group.producer ?? "",
+    ...(year !== undefined ? { year: String(year) } : {}),
+    lengthCategory: pt?.len ?? null,
+    fuelType: fuel,
+    features: fuel === "electric" || fuel === "hydrogen" || fuel === "hybrid" ? { [fuel]: true } : {},
   };
 }
 
@@ -152,6 +157,8 @@ export function createGzmFleetTracker(historyDir: string | null = GZM_DIR): Flee
     operator: "GZM",
     historyDir,
     keepDays: GZM_FLEET_HISTORY_DAYS,
+    // ponytail: 14 days x ~27 000 courses x 48 B ~ 18 MB of typed arrays; no successor index (the brigades are in the GTFS)
+    historyDays: 14,
     // ponytail: the day file is written synchronously. An estimated ~27 000 courses a day x ~25 stops would make it
     // ~90 MB, so finished courses keep no stop table (~12 MB, plus the running courses' stops) and
     // 2 min between writes bounds the stringify; a crash loses at most 2 min. Upgrade: an append log.
@@ -159,6 +166,7 @@ export function createGzmFleetTracker(historyDir: string | null = GZM_DIR): Flee
     archiveStops: false,
     staticFleet: null,
     details: gzmDetails,
+    restoreInfo: (info) => gzmInfo(info.sideNumber, info.label, info.model),
   });
 }
 

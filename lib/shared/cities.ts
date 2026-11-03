@@ -2,7 +2,7 @@
  * Cities served from zbiorkom.live's open api6 (merged GTFS + live positions), keyed by their zbiorkom
  * slug. The slug is the `?city=` value, the id prefix (`krakow:<stop_id>`, `krakow:<type>_<vehicle>`)
  * and the storage-key suffix. Shared by the server and the client: no Node imports.
- * "gzm" is the first and fullest of them (SDIP overlay, fleet history, news, bikes); the rest get the
+ * "gzm" is the first and fullest of them (SDIP overlay, fleet history, news); the rest get the
  * feed and the positions only, loaded on first request (lib/gzm-feed.ts).
  */
 export interface ZbCity {

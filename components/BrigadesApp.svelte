@@ -233,7 +233,7 @@
     </div>
     <div class="skeleton mt-5 h-11 w-56 rounded-lg"></div>
     <div class="skeleton mt-4 h-11 w-full rounded-xl"></div>
-    <div class="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+    <div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
       {#each [0, 1, 2, 3, 4, 5] as i (i)}
         <div class="skeleton h-40 rounded-2xl"></div>
       {/each}

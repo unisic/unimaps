@@ -93,6 +93,7 @@
       // Casing line
       line(`journey-leg-${lIdx}-casing`, pts, {
         color: "#0d1013",
+        className: "route-casing",
         weight: isLegSelected ? 9 : 6,
         opacity: isLegSelected ? 0.85 : 0.35,
         lineCap: "round",
@@ -118,9 +119,9 @@
         [from.lat, from.lon],
         [to.lat, to.lon],
       ];
-      // same dash period as the dots, so each dot gets a dark rim
-      line(`journey-walk-${i}-casing`, pts, { color: "#0d1013", weight: 8, opacity: on ? 0.85 : 0.35, dashArray: "1 10", lineCap: "round" });
-      line(`journey-walk-${i}`, pts, { color: "#e8eaed", weight: 5, opacity: on ? 0.95 : 0.4, dashArray: "1 10", lineCap: "round" });
+      // same dash period as the dots, so each dot gets a rim in the map's contrast colour
+      line(`journey-walk-${i}-casing`, pts, { color: "#0d1013", className: "route-casing", weight: 8, opacity: on ? 0.85 : 0.35, dashArray: "1 10", lineCap: "round" });
+      line(`journey-walk-${i}`, pts, { color: "#e8eaed", className: "route-walk", weight: 5, opacity: on ? 0.95 : 0.4, dashArray: "1 10", lineCap: "round" });
     });
 
     // Intermediate stops across legs

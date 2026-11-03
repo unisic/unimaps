@@ -3,10 +3,10 @@
  * Next's App Router used) under the URL it answers. `[name]` segments arrive decoded as `ctx.params`.
  */
 import * as announcements from "./api/announcements/route";
-import * as bikes from "./api/bikes/route";
 import * as connections from "./api/connections/route";
 import * as fleet from "./api/fleet/route";
 import * as fleetSide from "./api/fleet/[sideNumber]/route";
+import * as fleetSideHistory from "./api/fleet/[sideNumber]/history/route";
 import * as fleetTimeline from "./api/fleet/timeline/route";
 import * as geocode from "./api/geocode/route";
 import * as gtfsRt from "./api/gtfs-rt.pb/route";
@@ -16,6 +16,7 @@ import * as lines from "./api/lines/route";
 import * as push from "./api/push/route";
 import * as pushNews from "./api/push/news/route";
 import * as shapes from "./api/shapes/route";
+import * as status from "./api/status/route";
 import * as stopDepartures from "./api/stop/[designator]/departures/route";
 import * as stopTimetable from "./api/stop/[designator]/timetable/route";
 import * as stops from "./api/stops/route";
@@ -55,11 +56,11 @@ function route<P>(pattern: string, mod: Partial<Record<Method, (req: Request, ct
 
 export const ROUTES: Route[] = [
   route("/api/announcements", announcements),
-  route("/api/bikes", bikes),
   route("/api/connections", connections),
   route("/api/fleet", fleet),
   route("/api/fleet/timeline", fleetTimeline),
   route("/api/fleet/[sideNumber]", fleetSide),
+  route("/api/fleet/[sideNumber]/history", fleetSideHistory),
   route("/api/geocode", geocode),
   route("/api/gtfs-rt.pb", gtfsRt),
   route("/api/health", health),
@@ -68,6 +69,7 @@ export const ROUTES: Route[] = [
   route("/api/push", push),
   route("/api/push/news", pushNews),
   route("/api/shapes", shapes),
+  route("/api/status", status),
   route("/api/stop/[designator]/departures", stopDepartures),
   route("/api/stop/[designator]/timetable", stopTimetable),
   route("/api/stops", stops),

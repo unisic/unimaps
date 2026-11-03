@@ -151,7 +151,7 @@
       valueText: `${x.active} z ${x.total}`,
       ariaLabel: `${label}: ${x.active} z ${x.total} w trasie`,
     });
-    const fuelOrder: FleetFuelType[] = ["diesel", "hybrid", "electric", "hydrogen"];
+    const fuelOrder: FleetFuelType[] = ["diesel", "cng", "hybrid", "electric", "hydrogen"];
     const lengthOrder: FleetLengthCategory[] = ["MINI", "MIDI", "MAXI", "MEGA"];
     return {
       fuel: fuelOrder.filter((k) => fuel.has(k)).map((k) => twoPart(FUEL_LABEL_PLURAL[k], k, fuel.get(k)!)),
@@ -208,7 +208,7 @@
   {/if}
 {/snippet}
 
-<div class="grid gap-4 lg:grid-cols-2">
+<div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
   <div class="lg:col-span-2">
     <SectionCard
       id="sec-timeline"
@@ -270,11 +270,11 @@
 
   <SectionCard id="sec-lines" title="Linie w ruchu" subtitle="Kliknij linię, aby zobaczyć jej pojazdy." actions={lineSortActions}>
     {#if sortedLines.length > 0}
-      <div aria-hidden="true" class="grid grid-cols-[3rem_4rem_5.5rem_1fr] gap-3 px-1.5 pb-1.5 text-[11.5px] font-medium text-text-faint">
+      <div aria-hidden="true" class="grid grid-cols-[3rem_3rem_5rem_minmax(0,1fr)] gap-2 sm:gap-3 px-1.5 pb-1.5 text-[11.5px] font-medium text-text-faint">
         <span>Linia</span>
         <span class="text-right">Pojazdy</span>
         <span class="text-right">Mediana</span>
-        <span>Punktualnie</span>
+        <span class="truncate">Punktualnie</span>
       </div>
       <ul class="kb-scroll max-h-[22rem] overflow-y-auto">
         {#each sortedLines as r (r.line)}
@@ -285,7 +285,7 @@
               aria-label="Linia {r.line}: {r.vehicles} {vehicleWord(r.vehicles)} w trasie{r.medianSec !== null
                 ? `, mediana opóźnienia ${fmtDelayMin(r.medianSec)}`
                 : ''}{r.onTimePct !== null ? `, punktualnie ${r.onTimePct}%` : ''}. Pokaż pojazdy."
-              class="grid min-h-10 w-full grid-cols-[3rem_4rem_5.5rem_1fr] items-center gap-3 rounded-lg px-1.5 text-left text-[12.5px] transition-colors hover:bg-tint/5"
+              class="grid min-h-10 w-full grid-cols-[3rem_3rem_5rem_minmax(0,1fr)] items-center gap-2 sm:gap-3 rounded-lg px-1.5 text-left text-[12.5px] transition-colors hover:bg-tint/5"
             >
               <LineBadge line={r.line} operator={brand.operator} />
               <span class="text-right text-text tabular-nums">{r.vehicles}</span>
