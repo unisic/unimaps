@@ -9,7 +9,7 @@ export type ThemePref = "system" | "light" | "dark";
 
 const KEY = "kb:theme";
 /** --color-bg of each theme, for the browser chrome */
-const CHROME = { light: "#f2f3f5", dark: "#0d1013" } as const;
+const CHROME = { light: "#f3f2f7", dark: "#0f0e15" } as const;
 
 let snapshot: ThemePref | null = null;
 const subs = new Set<() => void>();

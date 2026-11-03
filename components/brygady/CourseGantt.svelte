@@ -63,8 +63,8 @@
   {#if geo}
     <svg {width} height={GT_H} aria-hidden="true" class="block overflow-visible">
       <defs>
-        <HatchPattern id="{uid}-x" color={CANCELLED_HATCH} bg="rgba(245,204,92,0.12)" />
-        <HatchPattern id="{uid}-w" color={WAITING_HATCH} bg="rgba(131,141,150,0.12)" />
+        <HatchPattern id="{uid}-x" color={CANCELLED_HATCH} bg="color-mix(in srgb, var(--color-danger) 12%, transparent)" />
+        <HatchPattern id="{uid}-w" color={WAITING_HATCH} bg="color-mix(in srgb, var(--color-text-faint) 12%, transparent)" />
       </defs>
       <line x1={4} x2={width - 4} y1={GT_BAR_Y + GT_BAR_H / 2} y2={GT_BAR_Y + GT_BAR_H / 2} stroke={GRID} stroke-width={2} />
       {#each geo.ticks as t (t)}
@@ -80,7 +80,7 @@
           c.course.status === "cancelled" ? `url(#${uid}-x)` : c.notStarted ? `url(#${uid}-w)` : DELAY_FILL[classifyDelay(c.course.delaySec)]}
         <g>
           {#if showLabel}
-            <text x={cx} y={GT_BAR_Y - 7} text-anchor="middle" font-size="11" font-weight={600} fill="#9aa0a6">
+            <text x={cx} y={GT_BAR_Y - 7} text-anchor="middle" font-size="11" font-weight={600} fill="var(--color-text-mute)">
               {c.course.lineName}
             </text>
           {/if}
@@ -91,7 +91,7 @@
             height={GT_BAR_H}
             rx={3}
             {fill}
-            stroke={c.live ? "#e8eaed" : SURFACE}
+            stroke={c.live ? "var(--color-text)" : SURFACE}
             stroke-width={c.live ? 1.5 : 2}
           />
         </g>
@@ -102,7 +102,7 @@
           x2={geo.sx(geo.nowT)}
           y1={GT_BAR_Y - 6}
           y2={GT_BAR_Y + GT_BAR_H + 6}
-          stroke="#5ccbe3"
+          stroke="var(--color-primary)"
           stroke-width={2}
           stroke-linecap="round"
         />

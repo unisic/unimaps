@@ -2,11 +2,12 @@ import type { FleetTimelinePoint, VehicleCourseRecord } from "@/lib/shared/fleet
 
 import { fmtDelay } from "./common";
 
-export const GRID = "rgba(255,255,255,0.07)";
-export const AXIS = "rgba(255,255,255,0.18)";
-export const TICK_TEXT = "#838d96";
-export const WAITING_HATCH = "#838d96";
-export const CANCELLED_HATCH = "#f5cc5c";
+/* theme tokens (app/globals.css), so the charts follow the theme of the map the vehicle sheet opens over */
+export const GRID = "var(--color-hairline)";
+export const AXIS = "color-mix(in srgb, var(--color-tint) 18%, transparent)";
+export const TICK_TEXT = "var(--color-text-faint)";
+export const WAITING_HATCH = "var(--color-text-faint)";
+export const CANCELLED_HATCH = "var(--color-danger)";
 
 export function niceCeil(v: number): { max: number; step: number } {
   for (const step of [1, 2, 5, 10, 20, 25, 50, 100, 200]) {

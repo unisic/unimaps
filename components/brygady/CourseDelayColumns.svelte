@@ -91,10 +91,10 @@
         {@const d = columnPath(x, geo.barW, y0, y1)}
         <g>
           {#if hover === i}
-            <rect x={CD_M.l + geo.slot * i} y={CD_M.t} width={geo.slot} height={geo.innerH} fill="rgba(255,255,255,0.05)" />
+            <rect x={CD_M.l + geo.slot * i} y={CD_M.t} width={geo.slot} height={geo.innerH} fill="color-mix(in srgb, var(--color-tint) 5%, transparent)" />
           {/if}
           {#if d}
-            <path d={d} fill={DELAY_FILL[classifyDelay(c.delaySec)]} stroke={c.live ? "#e8eaed" : "none"} stroke-width={c.live ? 1.5 : 0} />
+            <path d={d} fill={DELAY_FILL[classifyDelay(c.delaySec)]} stroke={c.live ? "var(--color-text)" : "none"} stroke-width={c.live ? 1.5 : 0} />
           {:else}
             <line x1={x} x2={x + geo.barW} y1={y0} y2={y0} stroke={DELAY_FILL.onTime} stroke-width={2} />
           {/if}
@@ -105,7 +105,7 @@
               text-anchor="middle"
               font-size="10.5"
               font-weight={600}
-              fill="#9aa0a6"
+              fill="var(--color-text-mute)"
               class="tabular-nums"
             >
               {fmtMinTick(Math.round(v))}

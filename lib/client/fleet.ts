@@ -5,7 +5,7 @@
  */
 import { fetchJSON, HttpError } from "./api";
 import { loadCity } from "./city";
-import type { FleetStats, FleetSummaryItem, FleetTimelinePoint, FleetVehicleDetail } from "../shared/fleet";
+import type { FleetHistoryDay, FleetStats, FleetSummaryItem, FleetTimelinePoint, FleetVehicleDetail } from "../shared/fleet";
 
 export type * from "../shared/fleet";
 
@@ -17,7 +17,11 @@ export type FleetCity = "bb" | "gzm";
  * Read once per page load (switching city is a navigation); client only.
  */
 export function readBrygadyCity(search: string): FleetCity {
-  if (new URLSearchParams(search).get("city") === "gzm") return "gzm";
+  const params = new URLSearchParams(search);
+  if (params.get("city") === "gzm") return "gzm";
+  // a shared vehicle link names its city through the side number (BB carries no city marker)
+  const side = params.get("tabor");
+  if (side) return cityOfSide(side);
   return loadCity() === "gzm" ? "gzm" : "bb";
 }
 
@@ -44,6 +48,13 @@ export function localUpdatedAt(d: FleetApiResponse): number {
 
 export interface VehicleDetailApiResponse {
   vehicle: FleetVehicleDetail;
+}
+
+export interface VehicleHistoryApiResponse {
+  /** newest first, today excluded */
+  days: FleetHistoryDay[];
+  /** false while the server still reads its day files */
+  complete: boolean;
 }
 
 export interface FleetTimelineResponse {

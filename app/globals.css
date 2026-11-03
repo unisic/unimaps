@@ -11,29 +11,29 @@
 @theme {
   --font-sans: "Geist", ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
 
-  /* ---- surfaces (Material-3-like dark neutrals) ---- */
-  --color-bg: #0d1013;
-  --color-surface: #16191d;
-  --color-surface-2: #1f242a;
-  --color-surface-3: #293038;
+  /* ---- surfaces: dark neutrals with a faint violet cast (the Unisic logo's #17153B family) ---- */
+  --color-bg: #0f0e15;
+  --color-surface: #17161f;
+  --color-surface-2: #201f2a;
+  --color-surface-3: #2b2a37;
   --color-hairline: rgba(255, 255, 255, 0.07);
   /* hover / press / fill overlays (`bg-tint/6`): white on dark, black on light */
   --color-tint: #ffffff;
 
   /* ---- text ---- */
-  --color-text: #e8eaed;
-  --color-text-mute: #9aa0a6;
-  /* WCAG AA on bg/surface/surface-2 (5.65 / 5.22 / 4.62:1) */
-  --color-text-faint: #838d96;
+  --color-text: #ebe9f1;
+  --color-text-mute: #a29eae;
+  /* WCAG AA on bg/surface/surface-2 (5.53 / 5.17 / 4.69:1) */
+  --color-text-faint: #8c879b;
 
-  /* ---- brand: teal-cyan, never red (red stays the KB operator's data colour) ----
-     brand / brand-hi carry white text: 5.36 / 7.01:1 */
-  --color-brand: #0e7490;
-  --color-brand-hi: #0b6178;
+  /* ---- brand: violet from the Unisic logo (#433D8B), never red (red stays the KB operator's data colour) ----
+     brand / brand-hi carry white text: 5.74 / 7.56:1; brand on surface 3.12:1 */
+  --color-brand: #6153d0;
+  --color-brand-hi: #4f42b5;
   --color-on-brand: #ffffff;
-  /* lightened brand tone, accessible as text/icons on dark surfaces (8.26:1 on surface-2) */
-  --color-primary: #5ccbe3;
-  --color-primary-dim: rgba(92, 203, 227, 0.14);
+  /* lightened brand tone, accessible as text/icons on dark surfaces (7.66:1 on surface-2) */
+  --color-primary: #b6a6ff;
+  --color-primary-dim: rgba(182, 166, 255, 0.14);
 
   /* ---- operators: data colour only (markers, line badges), never chrome.
      Same hex as BRAND_KB / BRAND_MZK / BRAND_GZM in lib/client/format.ts; Tailwind's
@@ -41,13 +41,12 @@
   --color-kb: #dc2626;
   --color-mzk: #2563eb;
   --color-gzm: #a16207;
-  /* Metrorower stations (white text at 5.2:1) */
-  --color-bike: #0b7a6b;
 
   /* ---- status ---- */
   --color-good: #7ee2a8;
   --color-late: #ffb865;
-  --color-early: #cf9bff;
+  /* cyan, not violet: violet is the brand now (8.60:1 on surface-2) */
+  --color-early: #5ccbe3;
   /* errors and interrupted courses: amber, not red (10.17:1 on surface-2) */
   --color-danger: #f5cc5c;
 
@@ -105,24 +104,24 @@
 }
 
 /* ---------- light theme ----------
-   data-theme is set before first paint by the inline script in app/layout.tsx (kb:theme, else the
+   data-theme is set before first paint by the inline script in app/head.ts (kb:theme, else the
    system setting); without it the app stays dark. Same AA guarantee for text on bg/surface/surface-2. */
 :root[data-theme="light"] {
   color-scheme: light;
-  --color-bg: #f2f3f5;
+  --color-bg: #f3f2f7;
   --color-surface: #ffffff;
-  --color-surface-2: #eef0f3;
-  --color-surface-3: #e2e6ea;
+  --color-surface-2: #efedf4;
+  --color-surface-3: #e3e0ea;
   --color-hairline: rgba(0, 0, 0, 0.09);
   --color-tint: #000000;
-  --color-text: #1b1e22;
-  --color-text-mute: #596069;
-  --color-text-faint: #666e77;
-  --color-primary: #0b6b85;
-  --color-primary-dim: rgba(11, 107, 133, 0.1);
+  --color-text: #1c1a23;
+  --color-text-mute: #5c5869;
+  --color-text-faint: #686377;
+  --color-primary: #5143b8;
+  --color-primary-dim: rgba(81, 67, 184, 0.1);
   --color-good: #16794a;
   --color-late: #9c5200;
-  --color-early: #7a3fc8;
+  --color-early: #0b6b85;
   --color-danger: #7f5d00;
   --shadow-float: 0 1px 2px rgba(0, 0, 0, 0.1), 0 8px 28px -6px rgba(0, 0, 0, 0.18);
   --shadow-sheet: 0 -4px 32px rgba(0, 0, 0, 0.14);
@@ -142,7 +141,7 @@ body {
   -webkit-tap-highlight-color: transparent;
 }
 
-::selection { background: rgba(92, 203, 227, 0.3); }
+::selection { background: color-mix(in srgb, var(--color-primary) 30%, transparent); }
 
 /* tactile press for controls: named properties only. Uses the individual
    `scale` property so it composes with Tailwind's `translate` utilities. */
@@ -168,7 +167,12 @@ body {
 /* skeleton shimmer */
 .skeleton {
   border-radius: 8px;
-  background: linear-gradient(100deg, rgba(154, 160, 166, 0.1) 40%, rgba(154, 160, 166, 0.2) 50%, rgba(154, 160, 166, 0.1) 60%);
+  background: linear-gradient(
+    100deg,
+    color-mix(in srgb, var(--color-text-mute) 10%, transparent) 40%,
+    color-mix(in srgb, var(--color-text-mute) 20%, transparent) 50%,
+    color-mix(in srgb, var(--color-text-mute) 10%, transparent) 60%
+  );
   background-size: 200% 100%;
   animation: var(--animate-shimmer);
 }
@@ -176,12 +180,12 @@ body {
 /* slim dark scrollbars inside panels */
 .kb-scroll {
   scrollbar-width: thin;
-  scrollbar-color: rgba(154, 160, 166, 0.3) transparent;
+  scrollbar-color: color-mix(in srgb, var(--color-text-mute) 30%, transparent) transparent;
   /* sheet/palette lists must not chain into page pull-to-refresh */
   overscroll-behavior: contain;
 }
 .kb-scroll::-webkit-scrollbar { width: 8px; }
-.kb-scroll::-webkit-scrollbar-thumb { background: rgba(154, 160, 166, 0.28); border-radius: 8px; }
+.kb-scroll::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--color-text-mute) 28%, transparent); border-radius: 8px; }
 .kb-scroll::-webkit-scrollbar-track { background: transparent; }
 
 /* staggered list entrance (first rows only, subtle) */
@@ -322,25 +326,6 @@ body {
 }
 .stop-mk-sign.stop-mk-station svg { width: 14px; height: 14px; }
 
-/* Metrorower station: bike glyph + available count; empty = hollow pill */
-.bike-mk-icon { background: none; border: 0; }
-.bike-mk {
-  display: inline-flex; align-items: center; gap: 3px;
-  height: 20px; padding: 0 7px 0 5px;
-  border-radius: 999px;
-  background: var(--color-bike);
-  color: #fff;
-  font-weight: 650; font-size: 11px; line-height: 1;
-  font-variant-numeric: tabular-nums; white-space: nowrap;
-  box-shadow: 0 0 0 1.5px #fff, 0 1px 4px rgba(0, 0, 0, 0.4);
-  cursor: pointer;
-  animation: pop 0.22s var(--ease-spring) backwards;
-  transition: transform 0.16s var(--ease-spring);
-}
-.bike-mk svg { width: 13px; height: 13px; display: block; fill: currentColor; }
-.bike-mk.is-empty { background: var(--color-surface); color: var(--color-text-faint); }
-.leaflet-marker-icon.bike-mk-icon:hover .bike-mk { transform: scale(1.1); }
-
 /* one wrapper per bearing, rotating about the icon centre (17px = half of 34) */
 .stop-dir {
   position: absolute; inset: 0;
@@ -398,7 +383,12 @@ body {
 .veh-motion .leaflet-marker-icon.veh-marker { transition: none; }
 .veh-motion .veh-arrow { transition: none; }
 
-/* ---------- leaflet dark skin ---------- */
+/* ---------- leaflet skin (both themes) ---------- */
+
+/* route casings and walk dots take the map's contrast colour: a dark rim on the dark basemap, a light
+   one on the light basemap. A CSS stroke beats the stroke attribute Leaflet's SVG renderer writes. */
+.leaflet-overlay-pane .route-casing { stroke: var(--color-bg); }
+.leaflet-overlay-pane .route-walk { stroke: var(--color-text); }
 
 .leaflet-container {
   background: var(--color-bg);

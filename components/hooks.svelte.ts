@@ -155,8 +155,14 @@ export function useGeolocation() {
 export function useNow(intervalMs = 15000): { readonly current: number } {
   let now = $state(nowSecs());
   $effect(() => {
-    const id = setInterval(() => (now = nowSecs()), intervalMs);
-    return () => clearInterval(id);
+    const tick = () => (now = nowSecs());
+    const id = setInterval(tick, intervalMs);
+    // a tab coming back from the background would show a clock up to `intervalMs` old
+    document.addEventListener("visibilitychange", tick);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", tick);
+    };
   });
   return {
     get current() {

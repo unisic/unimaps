@@ -9,9 +9,6 @@
     offline: boolean;
     stopsVisible: boolean;
     onToggleStops: () => void;
-    /** Metrorower stations layer; absent where the city has no bike share */
-    bikesVisible?: boolean;
-    onToggleBikes?: () => void;
     baseLayer: BaseLayerId;
     onBaseLayer: (id: BaseLayerId) => void;
     /** opens the service-announcements sheet ("Utrudnienia") */
@@ -72,8 +69,6 @@
     offline,
     stopsVisible,
     onToggleStops,
-    bikesVisible,
-    onToggleBikes,
     baseLayer,
     onBaseLayer,
     onOpenAnnouncements,
@@ -298,14 +293,6 @@
 
       <div class="mt-2 border-t border-hairline pt-1">
         <SwitchRow checked={stopsVisible} onToggle={onToggleStops} label="Przystanki na mapie" />
-        {#if onToggleBikes}
-          <SwitchRow
-            checked={!!bikesVisible}
-            onToggle={onToggleBikes}
-            label="Metrorower na mapie"
-            hint="Stacje i liczba dostępnych rowerów"
-          />
-        {/if}
         <SwitchRow
           checked={smoothMotion.current}
           onToggle={() => setSmoothMotion(!smoothMotion.current)}

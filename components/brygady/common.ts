@@ -28,13 +28,13 @@ export const FLEET_CITY = {
 } as const satisfies Record<FleetCity, { operator: "MZK" | "GZM" } & Record<string, string>>;
 
 /* ── punctuality palette (charts) ────────────────────────────────────────────
- * Diverging around a neutral midpoint, following the map's semantics (violet = early,
- * orange = late). Checked with the dataviz palette validator on --color-surface:
- * adjacent CVD ΔE ≥ 10.9, normal vision ≥ 15.3. The gray midpoint is deliberately low
+ * Diverging around a neutral midpoint, following the map's semantics (cyan = early,
+ * orange = late; blue-orange stays apart under every CVD type). Early on surface: 5.50:1 dark,
+ * 3.26:1 light. The gray midpoint is deliberately low
  * chroma/contrast, so every chart that uses it also labels it (legend + values/table).
  */
 export const DELAY_FILL: Record<DelayClass, string> = {
-  early: "#9085e9",
+  early: "#1f9bb8",
   onTime: "#545b64",
   late: "#a65c1c",
   veryLate: "#f0703c",
@@ -65,9 +65,9 @@ export const DELAY_TEXT: Record<DelayClass, string> = {
 };
 
 /** One-series bars (magnitude) and their track. */
-export const SERIES_FILL = "#3987e5";
-export const TRACK_FILL = "#293038";
-export const SURFACE = "#16191d";
+export const SERIES_FILL = "#7a6be8";
+export const TRACK_FILL = "var(--color-surface-3)";
+export const SURFACE = "var(--color-surface)";
 
 /* ── formatting ──────────────────────────────────────────────────────────── */
 
@@ -135,6 +135,7 @@ export const FUEL_LABEL: Record<FleetFuelType, string> = {
   electric: "Elektryczny",
   hydrogen: "Wodorowy",
   hybrid: "Hybrydowy",
+  cng: "CNG (gaz)",
 };
 
 export const FUEL_LABEL_PLURAL: Record<FleetFuelType, string> = {
@@ -142,6 +143,7 @@ export const FUEL_LABEL_PLURAL: Record<FleetFuelType, string> = {
   electric: "Elektryczne",
   hydrogen: "Wodorowe",
   hybrid: "Hybrydowe",
+  cng: "CNG (gaz)",
 };
 
 export const LENGTH_LABEL: Record<FleetLengthCategory, string> = {
@@ -165,4 +167,11 @@ export function featureList(f: VehicleFeatures): string[] {
   if (f.ticketMachine) out.push("Biletomat");
   if (f.ecoVehicle) out.push("Pojazd ekologiczny");
   return out;
+}
+
+const dayFmt = new Intl.DateTimeFormat("pl-PL", { timeZone: "UTC", weekday: "short", day: "2-digit", month: "2-digit" });
+
+/** "pon., 03.11" for a Warsaw date "2026-11-03". */
+export function fmtDay(date: string): string {
+  return dayFmt.format(new Date(`${date}T12:00:00Z`));
 }

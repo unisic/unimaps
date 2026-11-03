@@ -159,11 +159,6 @@ export const GZM_NEWS_URL: string | null = (() => {
   const v = envStr("KB_GZM_NEWS_URL", "https://rj.transportgzm.pl/v2/news/").trim();
   return v.toLowerCase() === "off" ? null : v;
 })();
-/** Metrorower GBFS v2 root (nextbike) behind the GZM bike-stations layer (lib/gbfs.ts); `off` = no /api/bikes (404). */
-export const GZM_GBFS_URL: string | null = (() => {
-  const v = envStr("KB_GZM_GBFS_URL", "https://gbfs.nextbike.net/maps/gbfs/v2/nextbike_zz").trim().replace(/\/+$/, "");
-  return v.toLowerCase() === "off" ? null : v;
-})();
 /** GZM state on disk: the last good GTFS zip and the GZM fleet history (outside output/gtfs). */
 export const GZM_DIR = envStr("KB_GZM_DIR", path.join(OUTPUT_DIR, "gzm"));
 /** Days of GZM fleet history kept on disk (~12-14 MB per day: ~22 000 finished courses x ~530 B, plus the running ones). */

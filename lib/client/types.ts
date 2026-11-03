@@ -254,22 +254,6 @@ export interface AnnouncementsResponse {
   hash?: string;
 }
 
-/** One Metrorower station (GBFS) with the bikes available right now. */
-export interface BikeStation {
-  id: string;
-  name: string;
-  lat: number;
-  lon: number;
-  bikes: number;
-  docks: number;
-  url: string | null;
-}
-
-export interface BikesResponse {
-  stations?: BikeStation[];
-  updated?: number;
-}
-
 export type LatLng = [number, number];
 
 /** Resolved trip stop: schedule entry + matched physical stop. */

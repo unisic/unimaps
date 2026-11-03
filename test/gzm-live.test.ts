@@ -165,7 +165,7 @@ describe("GzmLive", () => {
     );
     const d = s.stops.map((x) => x.distM);
     assert.ok(d.every((m) => m !== null) && d[0]! < d[1]! && d[1]! < d[2]!, `distM ${d}`);
-    assert.deepEqual(s.nextTrip, { line: "7", headsign: "Alfa", firstStopName: "Gamma 01", firstStopId: "gzm:c", dep: at("08:20") - at("00:00") });
+    assert.deepEqual(s.nextTrips, [{ line: "7", headsign: "Alfa", firstStopName: "Gamma 01", firstStopId: "gzm:c", dep: at("08:20") - at("00:00") }]);
   });
 
   it("a vehicle at its first stop before departure is not_started with no delay", async () => {

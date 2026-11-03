@@ -14,6 +14,7 @@ import pLimit from "p-limit";
 import * as config from "./config";
 import { log } from "./logger";
 import type { MzkApi, MzkAtomicScheduleResponse } from "./mzk-api";
+import { foldText } from "./shared/fleet";
 
 export interface MzkTimetableTrip {
   /** `mzk:<courseId>:<variantId>`, the id the stop timetable route uses (parsed by lib/mzk-trip.ts) */
@@ -267,4 +268,71 @@ export function loadMzkTimetable(file = config.MZK_TIMETABLE_FILE): MzkTimetable
     log.warn("mzk-tt", `ignoring ${file}: ${err}`);
     return null;
   }
+}
+
+/** One MZK course of a day as the next-course prediction reads it (lib/fleet-history.ts). */
+export interface MzkDayCourse {
+  line: string;
+  headsign: string;
+  firstSym: string;
+  firstName: string;
+  /** scheduled first departure, agency seconds */
+  start: number;
+  lastName: string;
+  /** scheduled terminus time, agency seconds (may exceed 86 400) */
+  end: number;
+}
+
+export interface MzkDaySchedule {
+  /** by courseKey (line|first stop symbol|start) */
+  byKey: Map<string, MzkDayCourse>;
+  /** by folded first-stop name, by start */
+  fromStop: Map<string, MzkDayCourse[]>;
+}
+
+let dayMemo: { file: string; date: string; mtimeMs: number; checkedAt: number; sched: MzkDaySchedule | null } | null = null;
+const RECHECK_MS = 10 * 60_000;
+
+/**
+ * The courses of `date` from the timetable file, memoized for one date; the file's mtime is
+ * rechecked at most every 10 min (the nightly rebuild replaces it). Null without the file or
+ * without the date in its calendar. ~2 500 courses, < 1 MB held; a reload parses 2.3 MB (~30 ms).
+ */
+export function mzkDaySchedule(date: string, file = config.MZK_TIMETABLE_FILE): MzkDaySchedule | null {
+  const now = Date.now();
+  if (dayMemo && dayMemo.file === file && dayMemo.date === date && now - dayMemo.checkedAt < RECHECK_MS) return dayMemo.sched;
+  let mtimeMs = -1;
+  try {
+    mtimeMs = fs.statSync(file).mtimeMs;
+  } catch {
+    // no file: null below
+  }
+  if (dayMemo && dayMemo.file === file && dayMemo.date === date && dayMemo.mtimeMs === mtimeMs) {
+    dayMemo.checkedAt = now;
+    return dayMemo.sched;
+  }
+  const tt = mtimeMs < 0 ? null : loadMzkTimetable(file);
+  const dayType = tt?.calendar[date];
+  let sched: MzkDaySchedule | null = null;
+  if (tt && dayType) {
+    sched = { byKey: new Map(), fromStop: new Map() };
+    for (const t of tt.trips) {
+      if (t.dayType !== dayType || t.calls.length < 2) continue;
+      const [firstSym, start] = t.calls[0];
+      const [lastSym, end] = t.calls[t.calls.length - 1];
+      // ponytail: a course starting after midnight of its service day is skipped (MZK runs none past ~00:30);
+      // the tracker keys courses by wall-clock seconds, so it would need the previous date's schedule.
+      if (start >= 86_400) continue;
+      const firstName = tt.stops[firstSym]?.[0] ?? "";
+      const c: MzkDayCourse = { line: t.line, headsign: t.headsign, firstSym, firstName, start, lastName: tt.stops[lastSym]?.[0] ?? "", end };
+      sched.byKey.set(`${c.line}|${firstSym}|${start}`, c);
+      const k = foldText(firstName);
+      const list = sched.fromStop.get(k);
+      if (list) list.push(c);
+      else sched.fromStop.set(k, [c]);
+    }
+    for (const list of sched.fromStop.values()) list.sort((a, b) => a.start - b.start);
+  }
+  dayMemo = { file, date, mtimeMs, checkedAt: now, sched };
+  return sched;
 }

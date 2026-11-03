@@ -6,7 +6,7 @@
 /* Runs before first paint: kb:theme, else the system setting (followed live), as data-theme on <html>,
    plus the browser chrome colour in its own first <meta>. Mirrors setThemePref in lib/client/theme.ts.
    ponytail: /brygady stays dark, its charts draw with fixed dark colours. */
-const THEME_SCRIPT = `(function(){var d=document.documentElement,m=matchMedia("(prefers-color-scheme: light)");function a(){var p=null;try{p=localStorage.getItem("kb:theme")}catch(e){}var t=location.pathname.indexOf("/brygady")===0?"dark":p==="light"||p==="dark"?p:m.matches?"light":"dark";d.dataset.theme=t;var e=document.getElementById("kb-theme-color");if(!e){e=document.createElement("meta");e.name="theme-color";e.id="kb-theme-color";document.head.prepend(e)}e.content=t==="light"?"#f2f3f5":"#0d1013"}a();m.addEventListener("change",a)})()`;
+const THEME_SCRIPT = `(function(){var d=document.documentElement,m=matchMedia("(prefers-color-scheme: light)");function a(){var p=null;try{p=localStorage.getItem("kb:theme")}catch(e){}var t=location.pathname.indexOf("/brygady")===0?"dark":p==="light"||p==="dark"?p:m.matches?"light":"dark";d.dataset.theme=t;var e=document.getElementById("kb-theme-color");if(!e){e=document.createElement("meta");e.name="theme-color";e.id="kb-theme-color";document.head.prepend(e)}e.content=t==="light"?"#f3f2f7":"#0f0e15"}a();m.addEventListener("change",a)})()`;
 
 export const SITE_TITLE = "Unimaps: komunikacja miejska na żywo";
 export const SITE_DESCRIPTION =
@@ -23,6 +23,10 @@ export const PAGES: Record<string, { title: string; description: string }> = {
     title: "Prywatność i dane | Unimaps",
     description: "Co Unimaps robi z adresem IP, lokalizacją i powiadomieniami: bez kont, ciasteczek, analityki i reklam.",
   },
+  "status.html": {
+    title: "Status danych na żywo | Unimaps",
+    description: "Czy pozycje pojazdów na żywo docierają teraz z każdego miasta: Bielsko-Biała, Metropolia GZM i pozostałe miasta.",
+  },
   "404.html": { title: "Nie ma takiej strony | Unimaps", description: SITE_DESCRIPTION },
 };
 
@@ -37,8 +41,8 @@ export function head(page: { title: string; description: string }): string {
     `<script>${THEME_SCRIPT}</script>`,
     // a <link>, not a JS import: the dev server would inject the styles only after the whole module graph ran
     `<link rel="stylesheet" href="/globals.css">`,
-    `<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0d1013">`,
-    `<meta name="theme-color" media="(prefers-color-scheme: light)" content="#f2f3f5">`,
+    `<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0f0e15">`,
+    `<meta name="theme-color" media="(prefers-color-scheme: light)" content="#f3f2f7">`,
     `<title>${esc(page.title)}</title>`,
     `<meta name="description" content="${esc(page.description)}">`,
     `<meta name="application-name" content="Unimaps">`,
