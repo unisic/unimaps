@@ -14,6 +14,8 @@ const OPERATOR = `<h4>Current fleet<h4><h5>Bus</h5> <table id="t1"><tbody>
 
 const GROUP = `<tr><td class="gensmall">Design of doors</td><td class="gensmall" style="font-weight: bold">1-2-2, 2-2-0, 2-2-2</td></tr><tr><td class="gensmall">No. of modules</td><td class="gensmall" style="font-weight: bold">1</td></tr></table>
 <tr><td class=row_service rowspan=2><span class=genmed><b>0410<br /></b></span></td><td class=row_service><span class=gen><b>Solaris Urbino 12 electric</b></span></td></tr><tr><td colspan="8" class="row_service" style="text-align: right"><a class=nav href="15,882543,69.html">Show Photos and History Of Vehicle (2/0)</a></td></tr>
+<tr><td class=row_spisan rowspan=2><span class=genmed><b>0410<br /></b></span></td><td class=row_spisan><span class=gen><b>Jelcz M11</b></span></td></tr><tr><td colspan="8" class="row_spisan" style="text-align: right"><a class=nav href="15,13400,45.html">Show Photos and History Of Vehicle (20/0)</a></td></tr>
+<tr><td class=row_service rowspan=2><span class=genmed><b><br /></b></span></td><td class=row_service><span class=gen><b>Solaris Urbino 12 electric</b></span></td></tr><tr><td colspan="8" class="row_service" style="text-align: right"><a class=nav href="15,882545,69.html">Show Photos and History Of Vehicle (1/0)</a></td></tr>
 <tr><td class=row_service rowspan=2><span class=genmed><b>SK 1234<br /></b></span></td><td class=row_service></td></tr><tr><td colspan="8"><a class=nav href="15,882544,69.html">Show Photos and History Of Vehicle (0/0)</a></td></tr>`;
 
 const VEHICLE = `<tr><td class="row2" colspan="2"><span class="genmed">Built</span></td><td class="row2"><span class="genmed">2014</span></td></tr>
@@ -31,11 +33,12 @@ test("operator page: current passenger fleet only", () => {
       engine: "MAN D2066LUH58 (Euro 6c)",
       gearbox: "",
       since: 2017,
+      active: 5,
     },
   ]);
 });
 
-test("group page: details and vehicles", () => {
+test("group page: numbered vehicles in service, a withdrawn one (row_spisan) skipped, an unnumbered one only counted", () => {
   assert.deepEqual(parseGroupPage(GROUP), {
     doors: "1-2-2, 2-2-0, 2-2-2",
     modules: 1,
@@ -43,6 +46,7 @@ test("group page: details and vehicles", () => {
       { number: "0410", id: 882543, photos: 2 },
       { number: "SK 1234", id: 882544, photos: 0 },
     ],
+    inService: 3,
   });
 });
 

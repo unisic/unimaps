@@ -1,7 +1,7 @@
 import { badRequest, internalError, isValidDate, parseCity, warming } from "@/lib/api-helpers";
 import { getZb, startZb } from "@/lib/gzm";
 import { bbLiveDelay, getMergedStopsView, getShapes, startPoller } from "@/lib/poller-singleton";
-import { allowRequest, clientIp, tooManyRequests } from "@/lib/rate-limit";
+import { allowRequest, allowSearch, chargeSearch, clientIp, tooManyRequests } from "@/lib/rate-limit";
 import { findConnections, type ConnectionItinerary } from "@/lib/router";
 import { rawTripId } from "@/lib/shape-patterns";
 
@@ -66,6 +66,17 @@ function attachLegShapes(connections: ConnectionItinerary[]): void {
   }
 }
 
+/** Run a synchronous search inside the process-wide loop-time budget, charged what it took; 429 while overdrawn. */
+function budgeted(ip: string, search: () => Response): Response {
+  if (!allowSearch()) return tooManyRequests();
+  const t0 = performance.now();
+  try {
+    return search();
+  } finally {
+    chargeSearch(ip, performance.now() - t0);
+  }
+}
+
 /** A comma list param, every item matching `re`; null when malformed or too long. */
 function listParam(v: string | null, re: RegExp): string[] | null {
   if (!v) return [];
@@ -83,7 +94,8 @@ function listParam(v: string | null, re: RegExp): string[] | null {
 export async function GET(req: Request): Promise<Response> {
   // the search is synchronous CPU work on the event loop the pollers share
   const city = parseCity(req);
-  if (!allowRequest(clientIp(req), city !== "bb" ? GZM_COST : 1)) return tooManyRequests();
+  const ip = clientIp(req);
+  if (!allowRequest(ip, city !== "bb" ? GZM_COST : 1)) return tooManyRequests();
   if (city instanceof Response) return city;
   let url: URL;
   try {
@@ -146,44 +158,48 @@ export async function GET(req: Request): Promise<Response> {
 
   if (city !== "bb") {
     void startZb(city);
-    try {
-      const connections = getZb(city).connections(
-        { from, fromPoint, to, toPoint, afterSecs, arriveBy, limit, directOnly, minTransferSecs, date: date || undefined, dayLabel, sortBy, avoidLines: avoid },
-        avoidTypes,
-      );
-      if (!connections) return warming();
-      return Response.json({ count: connections.length, connections }, { headers: { "Cache-Control": "public, max-age=60" } });
-    } catch (err) {
-      return internalError("gzm-connections", err);
-    }
+    return budgeted(ip, () => {
+      try {
+        const connections = getZb(city).connections(
+          { from, fromPoint, to, toPoint, afterSecs, arriveBy, limit, directOnly, minTransferSecs, date: date || undefined, dayLabel, sortBy, avoidLines: avoid },
+          avoidTypes,
+        );
+        if (!connections) return warming();
+        return Response.json({ count: connections.length, connections }, { headers: { "Cache-Control": "public, max-age=60" } });
+      } catch (err) {
+        return internalError("gzm-connections", err);
+      }
+    });
   }
 
   try {
     // the merged stop list needs both pollers' stops; a failed start still leaves name search working
     await startPoller().catch(() => undefined);
-    const connections = findConnections({
-      from,
-      fromPoint,
-      to,
-      toPoint,
-      fromIds: fromPoint ? undefined : stopIds(from),
-      toIds: toPoint ? undefined : stopIds(to),
-      afterSecs,
-      arriveBy,
-      limit,
-      directOnly,
-      minTransferSecs,
-      date: date || undefined,
-      dayLabel,
-      sortBy,
-      avoidLines: avoid,
-      live: bbLiveDelay(),
+    return budgeted(ip, () => {
+      const connections = findConnections({
+        from,
+        fromPoint,
+        to,
+        toPoint,
+        fromIds: fromPoint ? undefined : stopIds(from),
+        toIds: toPoint ? undefined : stopIds(to),
+        afterSecs,
+        arriveBy,
+        limit,
+        directOnly,
+        minTransferSecs,
+        date: date || undefined,
+        dayLabel,
+        sortBy,
+        avoidLines: avoid,
+        live: bbLiveDelay(),
+      });
+      attachLegShapes(connections);
+      return Response.json(
+        { count: connections.length, connections },
+        { headers: { "Cache-Control": "public, max-age=60" } },
+      );
     });
-    attachLegShapes(connections);
-    return Response.json(
-      { count: connections.length, connections },
-      { headers: { "Cache-Control": "public, max-age=60" } },
-    );
   } catch (err) {
     return internalError("connections", err);
   }

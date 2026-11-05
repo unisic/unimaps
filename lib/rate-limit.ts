@@ -34,8 +34,21 @@ const GLOBAL_REFILL_PER_SEC = config.RATE_LIMIT_GLOBAL;
 const GLOBAL_CAP = GLOBAL_REFILL_PER_SEC * 8;
 const globalBucket: Bucket = { tokens: GLOBAL_CAP, last: Date.now() };
 
+// Event-loop time for synchronous searches (`/api/connections`: RAPTOR on the loop every poller and request
+// shares), process-wide in milliseconds: a GZM search costs 40-150 ms, the per-IP buckets do not bound a flood
+// from many IPs, and a measured charge makes a memo hit near free and a bigger city cost more. A GZM flood of 24
+// searches/s left the loop's worst lag at 173 ms with it and 617 ms without (2026-11-05).
+// ponytail: a fixed share of the one event loop; run the search in worker_threads to lift it
+const SEARCH_MS_PER_SEC = 250;
+const SEARCH_CAP_MS = 200;
+// The same loop time also comes out of the client's own bucket, one token per 2.5 ms: at 40 tokens/s one IP
+// holds at most 100 ms/s of the 250, so a single client inside its request limit cannot lock everyone out.
+const SEARCH_MS_PER_TOKEN = 2.5;
+const searchBucket: Bucket = { tokens: SEARCH_CAP_MS, last: Date.now() };
+
 function refill(b: Bucket, now: number, cap: number, perSec: number): void {
-  b.tokens = Math.min(cap, b.tokens + ((now - b.last) / 1000) * perSec);
+  // a wall clock stepped back must not drain a bucket
+  b.tokens = Math.min(cap, b.tokens + (Math.max(0, now - b.last) / 1000) * perSec);
   b.last = now;
 }
 
@@ -87,6 +100,23 @@ export function allowRequest(ip: string, cost = 1): boolean {
   b.tokens -= cost;
   globalBucket.tokens -= cost;
   return true;
+}
+
+/** true = a synchronous search may run now: the process-wide loop-time budget is not overdrawn. */
+export function allowSearch(): boolean {
+  refill(searchBucket, Date.now(), SEARCH_CAP_MS, SEARCH_MS_PER_SEC);
+  return searchBucket.tokens > 0;
+}
+
+/**
+ * Charge the event-loop time a search took to the process-wide budget and to `ip`'s bucket; a long search may
+ * overdraw either, later ones wait the debt out.
+ */
+export function chargeSearch(ip: string, ms: number): void {
+  refill(searchBucket, Date.now(), SEARCH_CAP_MS, SEARCH_MS_PER_SEC);
+  searchBucket.tokens -= ms;
+  const b = buckets.get(ip.slice(0, MAX_KEY_LEN));
+  if (b) b.tokens -= ms / SEARCH_MS_PER_TOKEN;
 }
 
 /** 429 response with a Retry-After hint. */

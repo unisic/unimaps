@@ -3,6 +3,7 @@
  * forwarded into upstream URLs, and error responses that don't leak internals.
  */
 import { createHash } from "node:crypto";
+import { gzipSync } from "node:zlib";
 
 import { GZM_ENABLED, ZB_ENABLED } from "./config";
 import { log } from "./logger";
@@ -102,6 +103,22 @@ export function etagMatches(header: string | null, etag: string): boolean {
     const v = t.trim();
     return v === "*" || v.replace(/^W\//, "") === want;
   });
+}
+
+const bodies = new WeakMap<object, { body: string; gz?: Uint8Array<ArrayBuffer> }>();
+
+/**
+ * JSON built once per `owner` (an object never mutated after it is built: a feed, the merged stops view, a vehicles
+ * memo) and gzipped once when a client accepts it, so a request is a buffer write. Lives as long as `owner`.
+ */
+export function prebuiltJson(req: Request, owner: object, build: () => string, headers: Record<string, string>): Response {
+  let e = bodies.get(owner);
+  if (!e) bodies.set(owner, (e = { body: build() }));
+  const h = { ...headers, "Content-Type": "application/json", Vary: "Accept-Encoding" };
+  // ponytail: substring test, a client sending "gzip;q=0" still gets gzip; every browser accepts it
+  if (!(req.headers.get("accept-encoding") ?? "").includes("gzip")) return new Response(e.body, { headers: h });
+  e.gz ??= new Uint8Array(gzipSync(e.body));
+  return new Response(e.gz, { headers: { ...h, "Content-Encoding": "gzip" } });
 }
 
 /**

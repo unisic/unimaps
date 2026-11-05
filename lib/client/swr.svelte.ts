@@ -170,7 +170,9 @@ export function swr<T>(key: () => string | null, fetcher: (url: string) => Promi
       if (opts.revalidateOnReconnect ?? true) window.addEventListener("online", onOnline);
       // SWR ignores focus right after mount: the mount fetch covers it
       e.focusAt = performance.now();
-      if (e.data === undefined || (opts.revalidateIfStale ?? true)) void run(e);
+      // a preload that already answered within the dedupe window is the mount fetch
+      const fresh = !e.inflight && e.focusAt - e.startedAt < (opts.dedupingInterval ?? 2000);
+      if (e.data === undefined || ((opts.revalidateIfStale ?? true) && !fresh)) void run(e);
       else if (!e.timer) next(e);
       return () => {
         if (--e.users === 0 && e.timer) {

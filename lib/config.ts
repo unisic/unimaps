@@ -151,7 +151,7 @@ export const GZM_POSITIONS_URL = envStr(
   "KB_GZM_POSITIONS_URL",
   "https://api.zbiorkom.live/api6-open/gzm/positions/18.3,49.9,19.7,50.7",
 );
-/** SDIP (sdip.transportgzm.pl) vehicle overlay, polled every 5 s only while someone watches GZM. */
+/** SDIP (sdip.transportgzm.pl) vehicle overlay, polled on its 5 s grid only while someone watches GZM. */
 export const GZM_SDIP_ENABLED = envInt("KB_GZM_SDIP", 1, 0) !== 0;
 export const GZM_SDIP_URL = envStr("KB_GZM_SDIP_URL", "https://sdip.transportgzm.pl/vm/main");
 /** GZM news page scraped for "Utrudnienia" (lib/gzm-news.ts), at most every 15 min; `off` = no GZM announcements (404). */

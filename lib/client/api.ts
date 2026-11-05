@@ -1,4 +1,5 @@
 import type { City } from "./city";
+import { LIVE_FETCH_TIMEOUT_MS } from "./live-poll";
 import type { ConnectionItinerary, ConnectionsResponse, LatLng, Trip, VehiclesResponse } from "./types";
 
 export class HttpError extends Error {
@@ -12,8 +13,9 @@ export function isWarming(err: unknown): boolean {
   return err instanceof HttpError && err.status === 503;
 }
 
+/** A caller without its own signal gets a timeout: a hung socket must not wedge an swr poll chain. */
 export async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
-  const r = await fetch(url, init);
+  const r = await fetch(url, init?.signal ? init : { ...init, signal: AbortSignal.timeout(LIVE_FETCH_TIMEOUT_MS) });
   if (!r.ok) throw new HttpError(r.status, url);
   return (await r.json()) as T;
 }
@@ -26,11 +28,22 @@ export async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> 
  */
 export const vehiclesClock = new WeakMap<object, { recvPerf: number; serverMs: number | null }>();
 
+/** performance.now() of the server's next vehicles body (its X-Next-Update on this clock), 0 = it sent none */
+let vehiclesNextPerf = 0;
+
+/** ms until the server's next vehicles body, at most 2 x `every`; `every` when it sent no X-Next-Update or it passed. */
+export function vehiclesPollDelay(every: number): number {
+  const ms = vehiclesNextPerf - performance.now();
+  return vehiclesNextPerf && ms > 0 ? Math.min(Math.max(ms, 250), 2 * every) : every;
+}
+
 export async function vehiclesFetcher(url: string): Promise<VehiclesResponse> {
-  const r = await fetch(url, { cache: "no-store" });
+  const r = await fetch(url, { cache: "no-store", signal: AbortSignal.timeout(LIVE_FETCH_TIMEOUT_MS) });
   if (!r.ok) throw new HttpError(r.status, url);
   const recvPerf = performance.now();
   const st = Number(r.headers.get("x-server-time"));
+  const nx = Number(r.headers.get("x-next-update"));
+  vehiclesNextPerf = st > 0 && nx > st ? recvPerf + (nx - st) : 0;
   const body = (await r.json()) as VehiclesResponse;
   if (body && Array.isArray(body.vehicles)) {
     vehiclesClock.set(body.vehicles, { recvPerf, serverMs: Number.isFinite(st) && st > 0 ? st : null });

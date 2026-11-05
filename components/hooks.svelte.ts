@@ -1,4 +1,4 @@
-import { fetchJSON, vehiclesFetcher } from "@/lib/client/api";
+import { fetchJSON, vehiclesFetcher, vehiclesPollDelay } from "@/lib/client/api";
 import { CITY, cityUrl, getPageCity } from "@/lib/client/city";
 import { nowSecs } from "@/lib/client/format";
 import { loadOffline, saveOffline } from "@/lib/client/offline";
@@ -31,12 +31,13 @@ async function stopsFetcher(url: string): Promise<StopsResponse> {
  *  zbiorkom city's first visit); the 1.5 s dedupe makes anything shorter ~2 s anyway. */
 const WARMING_MS = 2000;
 
-/** Live vehicle positions, polled every 4 s (GZM: 5 s, ~0.7 MB a poll), never HTTP-cached. Bounded warm-up:
- *  an upstream that keeps failing drops back to the normal pace after 3 attempts. */
+/** Live vehicle positions, polled every 4 s (BB) or right after the server's next body (zbiorkom cities: its
+ *  X-Next-Update, GZM every ~5 s, others ~10 s), never HTTP-cached. Bounded warm-up: an upstream that keeps failing
+ *  drops back to the normal pace after 3 attempts. */
 export function useVehicles() {
   const city = getPageCity();
   return swr<VehiclesResponse>(() => cityUrl("/api/vehicles", city), vehiclesFetcher, {
-    refreshInterval: (d) => (!d || (!d.timestamp && d.scan_count < 3) ? WARMING_MS : CITY[city].vehiclesRefreshMs),
+    refreshInterval: (d) => (!d || (!d.timestamp && d.scan_count < 3) ? WARMING_MS : vehiclesPollDelay(CITY[city].vehiclesRefreshMs)),
     dedupingInterval: 1500,
   });
 }
