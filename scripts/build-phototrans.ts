@@ -93,6 +93,10 @@ async function main(): Promise<void> {
     let count = 0;
     for (const og of opGroups) {
       const gp = parseGroupPage(await get(`2415,${o.op},${og.id},0.html`));
+      // the operator page counts the group's vehicles in service: a different count is a misread status
+      if (og.active !== null && gp.inService !== og.active) {
+        console.warn(`[phototrans] group ${o.op}/${og.id} ${og.model}: ${gp.inService} in service parsed, ${og.active} listed`);
+      }
       const g =
         groups.push({
           op: o.op,
@@ -117,6 +121,8 @@ async function main(): Promise<void> {
         count++;
       }
     }
+    // groups without one vehicle in service are a status-markup change: writing the file would wipe the operator
+    if (count === 0) throw new Error(`operator ${o.op}: no vehicle in service parsed`);
     console.log(`[phototrans] operator ${o.op} (${o.city}:${o.prefix}): ${opGroups.length} groups, ${count} vehicles`);
   }
 

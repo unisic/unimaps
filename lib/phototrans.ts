@@ -115,6 +115,8 @@ export interface PtOperatorGroup {
   engine: string;
   gearbox: string;
   since: number | null;
+  /** vehicles in service, the N of the row's "N/M" (a current group keeps its withdrawn ones: Jelcz M11 = 1/67) */
+  active: number | null;
 }
 
 /** The current-fleet groups (bus, tram, trolleybus) of an operator page `24,<op>,0.html`. */
@@ -127,10 +129,21 @@ export function parseOperatorPage(html: string): PtOperatorGroup[] {
     const kind = part.slice(0, part.indexOf("<")).trim();
     if (!KINDS.has(kind)) continue;
     for (const row of part.matchAll(/<tr><td><a href="2415,\d+,(\d+),0\.html">[\s\S]*?<\/tr>/g)) {
-      // numbers, model, manufacturer, body, chassis, engine, gearbox, year of get, year of remove, ...
+      // numbers, model, manufacturer, body, chassis, engine, gearbox, year of get, year of remove, photos, in service/all
       const c = [...row[0].matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((m) => text(m[1]));
       if (c.length < 9) continue;
-      out.push({ id: Number(row[1]), kind, model: c[1], producer: c[2], body: c[3], engine: c[5], gearbox: c[6], since: year(c[7]) });
+      const active = /^(\d+)\/\d+$/.exec(c[10] ?? "");
+      out.push({
+        id: Number(row[1]),
+        kind,
+        model: c[1],
+        producer: c[2],
+        body: c[3],
+        engine: c[5],
+        gearbox: c[6],
+        since: year(c[7]),
+        active: active ? Number(active[1]) : null,
+      });
     }
   }
   return out;
@@ -139,26 +152,35 @@ export function parseOperatorPage(html: string): PtOperatorGroup[] {
 export interface PtGroupPage {
   doors: string;
   modules: number | null;
-  /** fleet number as printed, vehicle page id, photo count */
+  /** in-service vehicles only: fleet number as printed, vehicle page id, photo count */
   vehicles: { number: string; id: number; photos: number }[];
+  /** rows in service, numbered or not: the N of the operator page's "N/M" (a vehicle without a number has no key) */
+  inService: number;
 }
 
-/** Group page `2415,<op>,<group>,0.html`: its details and the vehicles in it. */
+/** Group page `2415,<op>,<group>,0.html`: its details and its vehicles still in service. */
 export function parseGroupPage(html: string): PtGroupPage {
   const details = new Map<string, string>();
   for (const m of html.matchAll(/<td class="gensmall">([^<]+)<\/td><td class="gensmall" style="font-weight: bold">([\s\S]*?)<\/td>/g)) {
     details.set(text(m[1]), text(m[2]));
   }
   const vehicles: PtGroupPage["vehicles"] = [];
-  // one block per vehicle: its number cell opens it (rowspan=2), the photo link closes it
-  for (const block of html.split("rowspan=2>").slice(1)) {
+  // one block per vehicle: its number cell opens it (rowspan=2), the photo link closes it. The cell's class is the
+  // vehicle's status: row_service in service, row_spisan withdrawn (a "current" group keeps its withdrawn vehicles:
+  // PKM Sosnowiec's Jelcz M11 lists 66, one of them running), and a withdrawn number is often reused
+  const parts = html.split(/<td class="?(row_\w+)"? rowspan=2>/);
+  let inService = 0;
+  for (let i = 1; i + 1 < parts.length; i += 2) {
+    if (parts[i] !== "row_service") continue;
+    inService++;
+    const block = parts[i + 1];
     const num = /<b>([\s\S]*?)<\/b>/.exec(block);
     const link = /href="15,(\d+),\d+\.html">[^<]*\((\d+)\/\d+\)/.exec(block);
     const number = num ? text(num[1].split(/<br\s*\/?>/)[0]) : "";
     if (number && link) vehicles.push({ number, id: Number(link[1]), photos: Number(link[2]) });
   }
   const modules = Number(details.get("No. of modules"));
-  return { doors: details.get("Design of doors") ?? "", modules: modules > 0 ? modules : null, vehicles };
+  return { doors: details.get("Design of doors") ?? "", modules: modules > 0 ? modules : null, vehicles, inService };
 }
 
 /** Vehicle page `15,<id>,<op>.html`: production year and the newest `max` photos. */
