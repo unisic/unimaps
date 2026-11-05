@@ -370,7 +370,7 @@
   {/if}
 
   {#if shown.length > 0}
-    <ul class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3" aria-label="Pojazdy">
+    <ul class="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3" aria-label="Pojazdy">
       {#each shown.slice(0, limit) as v (v.sideNumber)}
         <li>
           {@render vehicleCard(v, brand.operator)}

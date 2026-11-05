@@ -254,7 +254,10 @@
 
   <!-- Settings dropdown menu -->
   {#if menu}
-    <div class="surface mt-2 rounded-[20px] p-2 text-[13.5px] animate-drop">
+    <!-- 5rem = the bar above (top offset + height + gap) and a margin below: the menu outgrows a short phone -->
+    <div
+      class="surface kb-scroll mt-2 max-h-[calc(100dvh-env(safe-area-inset-top,0px)-5rem)] overflow-y-auto rounded-[20px] p-2 text-[13.5px] animate-drop"
+    >
       {@render menuLabel("Miasto")}
       <div class="px-1">
         <CityCard id="bb" current={bb} onClick={() => switchCity("bb")} />
