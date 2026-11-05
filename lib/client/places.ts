@@ -1,6 +1,6 @@
 /**
- * Saved places (Dom, Praca) and saved routes of the connection search, per
- * city: a module-level localStorage store like favorites.ts. A place is a stop
+ * Saved places (Dom, Praca), saved routes and the last searched routes of the
+ * connection search, per city: a module-level localStorage store like favorites.ts. A place is a stop
  * (designator) or a point (an address, or where the rider stood when saving);
  * it never leaves the browser except as the search's own `from=geo:` / `to=geo:` point.
  */
@@ -18,10 +18,13 @@ export interface Places {
   home?: Place;
   work?: Place;
   routes: readonly SavedRoute[];
+  /** searched routes, newest first */
+  recent: readonly SavedRoute[];
 }
 
 const MAX_ROUTES = 10;
-const EMPTY: Places = { routes: [] };
+const MAX_RECENT = 5;
+const EMPTY: Places = { routes: [], recent: [] };
 const keyOf = (city: City) => cityKey("kb:places", city);
 
 function isPlace(v: unknown): v is Place {
@@ -31,23 +34,27 @@ function isPlace(v: unknown): v is Place {
   return Number.isFinite(o.lat) && Number.isFinite(o.lon) && typeof o.label === "string";
 }
 
+const routesOf = (v: unknown, max: number): SavedRoute[] =>
+  Array.isArray(v)
+    ? v
+        // a route saved before points could be destinations ends at a designator string
+        .map((r) => (typeof r?.to === "string" ? { ...r, to: { designator: r.to } } : r))
+        .filter((r): r is SavedRoute => isPlace(r?.from) && isPlace(r?.to))
+        .slice(0, max)
+    : [];
+
 function load(city: City): Places {
   try {
     const raw = window.localStorage.getItem(keyOf(city));
     if (!raw) return EMPTY;
     const o: unknown = JSON.parse(raw);
     if (!o || typeof o !== "object") return EMPTY;
-    const { home, work, routes } = o as Record<string, unknown>;
+    const { home, work, routes, recent } = o as Record<string, unknown>;
     return {
       ...(isPlace(home) ? { home } : {}),
       ...(isPlace(work) ? { work } : {}),
-      routes: Array.isArray(routes)
-        ? routes
-            // a route saved before points could be destinations ends at a designator string
-            .map((r) => (typeof r?.to === "string" ? { ...r, to: { designator: r.to } } : r))
-            .filter((r): r is SavedRoute => isPlace(r?.from) && isPlace(r?.to))
-            .slice(0, MAX_ROUTES)
-        : [],
+      routes: routesOf(routes, MAX_ROUTES),
+      recent: routesOf(recent, MAX_RECENT),
     };
   } catch {
     return EMPTY;
@@ -109,6 +116,13 @@ export function toggleRoute(city: City, route: SavedRoute): void {
     ? cur.routes.filter((r) => !sameRoute(r, route))
     : [route, ...cur.routes].slice(0, MAX_ROUTES);
   mutate(city, { ...cur, routes });
+}
+
+/** Remember a searched route (newest first, at most MAX_RECENT); one already first writes nothing. */
+export function pushRecent(city: City, route: SavedRoute): void {
+  const cur = getSnapshot(city);
+  if (cur.recent[0] && sameRoute(cur.recent[0], route)) return;
+  mutate(city, { ...cur, recent: [route, ...cur.recent.filter((r) => !sameRoute(r, route))].slice(0, MAX_RECENT) });
 }
 
 /** Reactive saved places of `city` (`.current`). */

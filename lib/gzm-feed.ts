@@ -920,7 +920,7 @@ function feedUrl(slug: string): string {
 
 /** A city's current feed, or null while the first one loads (or after it was dropped). Never starts anything. */
 export function getGzmFeed(slug = "gzm"): GzmFeed | null {
-  return state(slug).feed;
+  return states().get(slug)?.feed ?? null;
 }
 
 function setFeed(s: FeedGlobal, feed: GzmFeed): void {
@@ -944,7 +944,8 @@ async function refresh(s: FeedGlobal): Promise<void> {
       log.warn("gzm-feed", `${s.slug}: kept zip unreadable, downloading again: ${err}`);
     }
   }
-  if (!gzmRefreshDue(s, Date.now())) return;
+  // dropped while it parsed (stopGzmFeed): a city nobody holds must not download
+  if (states().get(s.slug) !== s || !gzmRefreshDue(s, Date.now())) return;
   try {
     const got = await downloadGzmZip(zip, {
       url: feedUrl(s.slug),

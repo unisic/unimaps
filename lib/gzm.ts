@@ -1,15 +1,16 @@
 /**
  * Metropolia GZM live layer: zbiorkom.live vehicle positions joined to the static GZM feed (lib/gzm-feed.ts).
  *
- * zbiorkom refreshes its positions on a 20 s grid (2026-10-28: 1349 of 1363 record timestamps were multiples of
- * 20 s), so one request per 20 s, 3 s after the grid, is all there is to get. Each record names its line, brigade
+ * zbiorkom publishes a positions snapshot on the epoch 10 s grid, visible 0.1-2.1 s after it (2026-11-05: gzm, warsaw,
+ * lodz, krakow; it was 20 s on 2026-10-28), so one request per 10 s, 3 s after the grid, is all there is to get. Each record names its line, brigade
  * and the next 0-3 calls with their scheduled departures; a vehicle is joined to the one GTFS trip of that line
  * whose calls match ALL of those (sequence, scheduled departure) pairs, the brigade breaking ties. Departures,
  * timetables and trips are answered from the local feed plus that join, never by asking upstream per request.
  *
  * SDIP (sdip.transportgzm.pl, the operator's own map) moves a vehicle every ~5 s (2026-10-28, 150 s sample: per-vehicle
- * change interval p50 5 s vs 20 s, the same position ~8 s before zbiorkom's snapshot). While someone watches GZM
- * it is polled every 5 s and only its POSITION overrides zbiorkom's, never the join; it sends no fix time, so a
+ * change interval p50 5 s vs 20 s, the same position ~8 s before zbiorkom's snapshot): one whole-list snapshot per
+ * epoch 5 s step, visible 1.85-1.99 s after it (2026-11-05). While someone watches GZM it is polled 2.5 s past every
+ * 5 s step and only its POSITION overrides zbiorkom's, never the join; it sends no fix time, so a
  * position counts only once it was seen changing (the midpoint of that poll window).
  *
  * Isolated from the BB pollers: its own singleton, started from instrumentation.ts, and its failure never
@@ -275,7 +276,7 @@ interface SdipSample extends SdipPos {
   fixAt: number | null;
 }
 
-const POLL_MS = 20_000;
+const POLL_MS = 10_000;
 const POLL_PHASE_MS = 3_000;
 const TIMEOUT_MS = 10_000;
 const MAX_BODY = 16 * 1024 * 1024;
@@ -296,6 +297,7 @@ const BOARD_ROWS = 40;
 const GROUP_M = 600;
 const GROUP_MAX = 12;
 const SDIP_MS = 5_000;
+const SDIP_PHASE_MS = 2_500;
 const SDIP_TIMEOUT_MS = 4_000;
 const SDIP_MAX_BODY = 4 * 1024 * 1024;
 /** SDIP runs only while a vehicles request came in this recently */
@@ -303,6 +305,8 @@ const WATCH_MS = 120_000;
 /** two SDIP polls further apart than this can't date a change; an SDIP sample older than this yields to zbiorkom */
 const SDIP_GAP_SEC = 15;
 const SDIP_PAUSE_MS = 300_000;
+/** added to a poll's predicted end in X-Next-Update: a poll a little slower than the last one still lands before it */
+const BODY_SLACK_MS = 250;
 const CONN_MEMO = 256;
 const CONN_MEMO_MS = 60_000;
 /** a tapped vehicle opens at zoom 16 (~0.6 x 1.2 km on a phone): its road match starts with this much around it */
@@ -314,10 +318,10 @@ function around(lat: number, lon: number, m: number): LatLonBox {
   return { s: lat - dLat, w: lon - dLon, n: lat + dLat, e: lon + dLon };
 }
 
-/** ms until 3 s past the next 20 s grid point, never under 1 s. */
-export function nextPollDelay(nowMs: number): number {
-  const d = (POLL_PHASE_MS - (nowMs % POLL_MS) + POLL_MS) % POLL_MS;
-  return d < 1000 ? d + POLL_MS : d;
+/** ms until `phase` past the next `every` grid point (epoch ms), never under 1 s. */
+export function nextPollDelay(nowMs: number, every = POLL_MS, phase = POLL_PHASE_MS): number {
+  const d = (phase - (nowMs % every) + every) % every;
+  return d < 1000 ? d + every : d;
 }
 
 /** A response body as text, refused past `max` bytes. */
@@ -400,7 +404,11 @@ export class GzmLive {
   /** keys whose SDIP position changed in the last SDIP poll */
   sdipMoved = 0;
   private lastWatch = 0;
-  private readonly connMemo = new Map<string, { at: number; feed: GzmFeed; res: ConnectionItinerary[] }>();
+  /** epoch ms the next zbiorkom / SDIP body should be ready: the next poll's start + the last one's duration */
+  private zbNextAt = 0;
+  private sdipNextAt = 0;
+  /** per feed: searches of a swapped-out feed must not keep it alive until 256 newer ones push them out */
+  private readonly connMemo = new WeakMap<GzmFeed, Map<string, { at: number; res: ConnectionItinerary[] }>>();
   /** the feed's metro trips (route_type 1), picked once per feed */
   private sched: { feed: GzmFeed; trips: GzmTrip[] } | null = null;
 
@@ -444,8 +452,9 @@ export class GzmLive {
         const fed = !!this.getFeed();
         await this.pollOnce();
         let wait = nextPollDelay(this.now());
+        this.zbNextAt = this.now() + wait + this.pollMs + BODY_SLACK_MS;
         // a poll made while the feed parsed shows bare positions: the next one joins the trips as soon as it lands,
-        // not a grid step (20 s) later
+        // not a grid step (10 s) later
         for (; !fed && wait > 0 && !this.getFeed(); wait -= 1000) await interruptibleSleep(Math.min(1000, wait), ac.signal);
         if (fed) await interruptibleSleep(wait, ac.signal);
       }
@@ -453,9 +462,13 @@ export class GzmLive {
     if (!this.sdipUrl) return;
     void (async () => {
       while (!ac.signal.aborted) {
-        const now = this.now();
-        if (now - this.lastWatch <= WATCH_MS && now >= this.sdipPausedUntil) await this.pollSdipOnce();
-        await interruptibleSleep(SDIP_MS, ac.signal);
+        const t0 = this.now();
+        const run = this.watched && t0 >= this.sdipPausedUntil;
+        if (run) await this.pollSdipOnce();
+        const end = this.now();
+        const wait = nextPollDelay(end, SDIP_MS, SDIP_PHASE_MS);
+        if (run) this.sdipNextAt = end + wait + (end - t0) + BODY_SLACK_MS;
+        await interruptibleSleep(wait, ac.signal);
       }
     })();
   }
@@ -605,7 +618,7 @@ export class GzmLive {
     for (const rec of recs) {
       const prev = this.tracks.get(rec.key);
       const tsS = rec.ts / 1000;
-      // zbiorkom's timestamp is its 20 s snapshot, so the fix lies inside the window before it: its midpoint
+      // zbiorkom's timestamp is its 10 s snapshot, so the fix lies inside the window before it: its midpoint
       const zbFixAt = prev ? estimateFixAt({ fixAt: prev.zbFixAt, updatedAt: prev.rec.ts / 1000 }, tsS, rec.ts !== prev.rec.ts, 60) : tsS - POLL_MS / 2000;
       const fix = this.fixFor(rec.key, undefined, nowS) ?? { lat: rec.lat, lon: rec.lon, bearing: rec.bearing, fixAt: zbFixAt };
       const t = this.track(rec, prev, feed, days, nowS, fix, zbFixAt);
@@ -862,7 +875,7 @@ export class GzmLive {
       schedTripId: trip.tripId,
       nextStopSeq: next,
       fixAt: nowS,
-      // the timetable speed of the leg, so the client glides between 20 s polls; 0 while it stands at a stop
+      // the timetable speed of the leg, so the client glides between 10 s polls; 0 while it stands at a stop
       speed: next === i || legS <= 0 ? 0 : legM / legS,
       speedAt: nowS,
       ...(g && distM !== null ? { shapeKey: trip.shapeId, distM, distRev: g.rev } : {}),
@@ -921,6 +934,18 @@ export class GzmLive {
   }
 
   /** GET /api/vehicles?city=gzm body (prebuilt per poll; empty once the last good poll is stale). */
+  /**
+   * Epoch ms the next body should be ready, for the client to poll right after it (X-Next-Update): SDIP's 5 s grid
+   * while it runs (zbiorkom's 10 s update rides along on the next one), else zbiorkom's. A poll running late = 1 s
+   * from now; a loop idle for TIMEOUT_MS (SDIP paused, nobody watching) = null.
+   */
+  nextBodyAt(): number | null {
+    const now = this.now();
+    const t = this.sdipNextAt > now - TIMEOUT_MS ? this.sdipNextAt : this.zbNextAt;
+    if (t <= now - TIMEOUT_MS) return null;
+    return t > now ? t : now + 1000;
+  }
+
   vehiclesBody(): string {
     const nowMs = this.now();
     this.lastWatch = nowMs;
@@ -1082,8 +1107,10 @@ export class GzmLive {
     const avoidRoutes = avoidTypes.length ? feed.lines.filter((l) => avoidTypes.includes(l.type)).map((l) => l.id) : undefined;
     const query: RouteQuery = { ...q, afterSecs, fromIds: [q.from], toIds: [q.to], fallbackDays: 1, avoidRoutes };
     const key = JSON.stringify(query);
-    const hit = this.connMemo.get(key);
-    if (hit && hit.feed === feed && now - hit.at <= CONN_MEMO_MS) return hit.res;
+    let memo = this.connMemo.get(feed);
+    if (!memo) this.connMemo.set(feed, (memo = new Map()));
+    const hit = memo.get(key);
+    if (hit && now - hit.at <= CONN_MEMO_MS) return hit.res;
     const byTrip = this.byTrip;
     const live = this.fresh(now / 1000)
       ? (id: string, d: string) => {
@@ -1100,9 +1127,9 @@ export class GzmLive {
         if (id) leg.shape_id = id;
       }
     }
-    this.connMemo.delete(key);
-    this.connMemo.set(key, { at: now, feed, res });
-    if (this.connMemo.size > CONN_MEMO) this.connMemo.delete(this.connMemo.keys().next().value!);
+    memo.delete(key);
+    memo.set(key, { at: now, res });
+    if (memo.size > CONN_MEMO) memo.delete(memo.keys().next().value!);
     return res;
   }
 
@@ -1243,20 +1270,41 @@ function zbState(): ZbGlobal {
   return ((globalThis as ZbG)[ZB_KEY] ??= { cities: new Map(), timer: null });
 }
 
+/** never-started stand-ins for cities waiting for a resident slot: feed always loading, so every route answers warming() */
+const parked = new Map<string, GzmLive>();
+let parkedRequests = 0;
+/** a resident city requested within this is on screen somewhere: a viewer polls its vehicles at most 20 s apart */
+const ACTIVE_MS = 30_000;
+/** at most one city still on screen is dropped for a newcomer per this */
+const FORCED_DROP_MS = 60_000;
+let lastForcedDrop = -Infinity;
+
 /** The live layer of a zbiorkom city (a registry slug): GZM's resident one, or a per-slug one created now.
- *  Each call marks the city watched; past KB_ZB_RESIDENT cities the least recently used one is dropped. */
+ *  Each call marks the city watched; past KB_ZB_RESIDENT cities the least recently used one is dropped. One still
+ *  on screen only once per FORCED_DROP_MS: until then this city waits as a parked stand-in. */
 export function getZb(slug: string): GzmLive {
   if (slug === "gzm") return getGzm();
   const s = zbState();
   const now = Date.now();
   let e = s.cities.get(slug);
   if (!e) {
-    // ponytail: eviction = whoever was quiet longest; a user still on that city gets a 503 until its zip reparses (~5 s)
     while (s.cities.size >= config.ZB_RESIDENT) {
       let lru: string | null = null;
       for (const [k, v] of s.cities) if (lru === null || v.lastUsed < s.cities.get(lru)!.lastUsed) lru = k;
-      dropZb(lru!, "resident cap");
+      // ponytail: N+1 viewed cities used to evict each other on every request (a reparse each, no city ever
+      // served); now they take turns, one slot a minute, and a viewer waits up to a minute on 503s. Raise
+      // KB_ZB_RESIDENT when /api/health zb.parked_requests keeps growing.
+      const viewed = now - s.cities.get(lru!)!.lastUsed <= ACTIVE_MS;
+      if (viewed && now - lastForcedDrop < FORCED_DROP_MS) {
+        parkedRequests++;
+        let p = parked.get(slug);
+        if (!p) parked.set(slug, (p = new GzmLive({ slug, feed: () => null })));
+        return p;
+      }
+      if (viewed) lastForcedDrop = now;
+      dropZb(lru!, viewed ? "resident cap, still viewed" : "resident cap");
     }
+    parked.delete(slug);
     e = { live: new GzmLive({ slug }), lastUsed: now };
     s.cities.set(slug, e);
     if (!s.timer) {
@@ -1294,14 +1342,19 @@ export async function startZb(slug: string): Promise<void> {
   if (slug === "gzm") return startGzm();
   if (!config.ZB_ENABLED) return;
   const live = getZb(slug);
-  if (live.running) return;
+  if (live.running || zbState().cities.get(slug)?.live !== live) return;
   void startGzmFeed(slug).catch((err: unknown) => log.error("gzm", `${slug}: feed start failed: ${err}`));
   live.start();
 }
 
 /** Health of the resident non-GZM cities for /api/health (informational, never flips status); never throws. */
 export function safeZbHealth(): Record<string, unknown> {
-  const out: Record<string, unknown> = { enabled: config.ZB_ENABLED, resident_max: config.ZB_RESIDENT, idle_min: config.ZB_IDLE_MIN };
+  const out: Record<string, unknown> = {
+    enabled: config.ZB_ENABLED,
+    resident_max: config.ZB_RESIDENT,
+    idle_min: config.ZB_IDLE_MIN,
+    parked_requests: parkedRequests,
+  };
   for (const [slug, e] of zbState().cities) {
     try {
       out[slug] = e.live.health();

@@ -26,10 +26,11 @@ describe("places store", () => {
     assert.deepEqual(read("bb"), {
       work: { designator: "123" },
       routes: [{ from: { designator: "1" }, to: { designator: "2" } }],
+      recent: [],
       home: { lat: 50, lon: 19, label: "Dom" },
     });
     setPlace("gzm", "work", { designator: "gzm:1" });
-    assert.deepEqual(read("gzm"), { routes: [], work: { designator: "gzm:1" } });
+    assert.deepEqual(read("gzm"), { routes: [], recent: [], work: { designator: "gzm:1" } });
   });
 
   it("toggles a route, newest first, at most 10", async () => {
@@ -41,5 +42,19 @@ describe("places store", () => {
     toggleRoute("gzm", { from: { designator: "f11" }, to: { designator: "t" } });
     assert.equal(hasRoute(read("gzm"), { from: { designator: "f11" }, to: { designator: "t" } }), false);
     assert.equal(read("gzm").routes.length, 9);
+  });
+
+  it("remembers searched routes newest first, once each, at most 5", async () => {
+    const { pushRecent } = await places();
+    const route = (f: string) => ({ from: { designator: f }, to: { lat: 50, lon: 19, label: "Adres" } });
+    for (const f of ["a", "b", "c", "d", "e", "f"]) pushRecent("bb", route(f));
+    pushRecent("bb", route("c"));
+    const before = store.get("kb:places");
+    pushRecent("bb", route("c"));
+    assert.equal(store.get("kb:places"), before);
+    assert.deepEqual(
+      read("bb").recent.map((r: { from: { designator: string } }) => r.from.designator),
+      ["c", "f", "e", "d", "b"],
+    );
   });
 });

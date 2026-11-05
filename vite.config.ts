@@ -24,6 +24,15 @@ function pages(): Plugin {
       },
     },
     configureServer(server) {
+      // /brygady is a module URL to Vite (app/brygady.ts) unless the browser sends Sec-Fetch-Dest: document, which it
+      // omits on a non-secure origin (http://<LAN IP>:8080 from a phone): name the page, as server/static.ts does
+      server.middlewares.use((req, _res, next) => {
+        const url = req.url ?? "/";
+        const cut = url.search(/[?#]/);
+        const path = cut < 0 ? url : url.slice(0, cut);
+        if (Object.hasOwn(PAGES, `${path.slice(1)}.html`)) req.url = `${path}.html${cut < 0 ? "" : url.slice(cut)}`;
+        next();
+      });
       server.middlewares.use("/manifest.webmanifest", (_req, res) => {
         res.setHeader("content-type", "application/manifest+json");
         res.end(body());

@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 
 import { LIVE_FETCH_TIMEOUT_MS } from "../lib/client/live-poll";
 import { createLivePoll } from "../lib/client/live-poll";
-import { getConnections, getTripsBatch, HttpError } from "../lib/client/api";
+import { fetchJSON, getConnections, getTripsBatch, HttpError, vehiclesFetcher } from "../lib/client/api";
 import { getAnnouncementsSnapshot, refreshAnnouncements } from "../lib/client/announcements";
 
 /** Deterministic clock: timers fire in order as `advance` moves time; microtasks are flushed between them. */
@@ -251,6 +251,28 @@ describe("getConnections — a failed search is not an empty result", () => {
     globalThis.fetch = async () => new Response("bad gateway", { status: 502 });
     try {
       await assert.rejects(getConnections("1", "2"), (e: unknown) => e instanceof HttpError && e.status === 502);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+});
+
+describe("swr fetchers: a hung socket never wedges the poll chain", () => {
+  it("gives vehiclesFetcher and a signal-less fetchJSON a timeout, keeps a caller's own signal", async () => {
+    const realFetch = globalThis.fetch;
+    const seen: (AbortSignal | null | undefined)[] = [];
+    globalThis.fetch = async (_u: string | URL | Request, init?: RequestInit) => {
+      seen.push(init?.signal);
+      return Response.json({ vehicles: [] });
+    };
+    try {
+      const own = new AbortController().signal;
+      await vehiclesFetcher("/api/vehicles");
+      await fetchJSON("/api/stops");
+      await fetchJSON("/api/line", { signal: own });
+      assert.ok(seen[0] instanceof AbortSignal);
+      assert.ok(seen[1] instanceof AbortSignal);
+      assert.equal(seen[2], own);
     } finally {
       globalThis.fetch = realFetch;
     }

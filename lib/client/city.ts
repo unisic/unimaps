@@ -56,7 +56,7 @@ function zbConfig(slug: ZbSlug): CityConfig {
     logo: LOGO_SVG.has(slug) ? `/logos/${slug}.svg` : LOGO_PNG.has(slug) ? `/logos/${slug}.png` : null,
     color: c.color ?? "#475569",
     lineColors: c.lineColors,
-    // zbiorkom publishes positions on a 20 s grid and the server polls it only while a page asks
+    // zbiorkom publishes positions on a 10 s grid and the server polls it only while a page asks
     vehiclesRefreshMs: 10_000,
     attribution: c.agency,
   };

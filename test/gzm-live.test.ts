@@ -241,9 +241,9 @@ describe("GzmLive", () => {
     const ts = at("08:02", 40);
     const calls: Array<[number, string]> = [[1, "08:05"], [2, "08:10"]];
     const both = await poll(at("08:03"), [rec({ ts, calls, lon: 19.004 }), rec({ key: "283_1", ts, calls: [[1, "08:06"]], brigade: "4" })]);
-    assert.deepEqual(both.vehicles.map((x) => [x.id, x.fix_at]), [["gzm:283_4285", ts - 10], ["gzm:283_1", ts - 10]]);
+    assert.deepEqual(both.vehicles.map((x) => [x.id, x.fix_at]), [["gzm:283_4285", ts - 5], ["gzm:283_1", ts - 5]]); // the middle of zbiorkom's 10 s window
     let v = only(await poll(at("08:03", 20), [rec({ ts, calls, lon: 19.004 })]));
-    assert.equal(v.fix_at, ts - 10, "same snapshot: same fix");
+    assert.equal(v.fix_at, ts - 5, "same snapshot: same fix");
     v = only(await poll(at("08:03", 40), [rec({ ts: ts + 20, calls, lon: 19.006 })]));
     assert.equal(v.fix_at, ts + 10);
     assert.notEqual(v.fix_at, at("08:03", 40));
@@ -325,7 +325,7 @@ describe("GzmLive", () => {
     const live = new GzmLive({
       slug: "warsaw",
       feed: () => f,
-      now: () => at("08:03", 4) * 1000, // the next grid step is 19 s away
+      now: () => at("08:03", 4) * 1000, // the next grid step is 9 s away
       fetchImpl: async (u) => {
         urls.push(String(u));
         return new Response(JSON.stringify({ positions: [rec({ ts: at("08:02", 40), calls: [[1, "08:05"]], lat: 52.23, lon: 21.01 })] }));
@@ -343,6 +343,23 @@ describe("GzmLive", () => {
       f = feed;
       await until(() => urls.length === 2);
       assert.doesNotMatch(urls[1], /14,49,24\.2,55$/);
+    } finally {
+      live.stop();
+    }
+  });
+
+  it("tells the client when its next body lands, and nothing once the loop went idle", async () => {
+    let nowMs = at("08:03", 4) * 1000;
+    const live = new GzmLive({ feed: () => feed, now: () => nowMs, sdipUrl: null, fetchImpl: async () => new Response(JSON.stringify({ positions: [] })) });
+    assert.equal(live.nextBodyAt(), null);
+    live.start();
+    try {
+      for (const t0 = Date.now(); live.nextBodyAt() === null; await new Promise((r) => setTimeout(r, 20))) assert.ok(Date.now() - t0 < 3000, "timed out");
+      assert.equal(live.nextBodyAt(), nowMs + 9000 + 250); // 3 s past the next 10 s step, plus the slack
+      nowMs += 9300; // that poll runs late: ask again in a second
+      assert.equal(live.nextBodyAt(), nowMs + 1000);
+      nowMs += 10_000;
+      assert.equal(live.nextBodyAt(), null);
     } finally {
       live.stop();
     }
@@ -415,11 +432,15 @@ describe("scheduled metro (a zbiorkom city)", () => {
 });
 
 describe("nextPollDelay", () => {
-  it("wakes 3 s past the next 20 s grid point, never sooner than 1 s", () => {
+  it("wakes 3 s past the next 10 s grid point, never sooner than 1 s", () => {
     assert.equal(nextPollDelay(1_000_000), 3000);
-    assert.equal(nextPollDelay(1_002_500), 500 + 20000);
-    assert.equal(nextPollDelay(1_003_000), 20000);
-    assert.equal(nextPollDelay(1_010_000), 13000);
+    assert.equal(nextPollDelay(1_002_500), 500 + 10000);
+    assert.equal(nextPollDelay(1_003_000), 10000);
+    assert.equal(nextPollDelay(1_007_000), 6000);
+  });
+  it("follows SDIP's 5 s grid at its own phase", () => {
+    assert.equal(nextPollDelay(1_000_000, 5000, 2500), 2500);
+    assert.equal(nextPollDelay(1_002_600, 5000, 2500), 4900);
   });
 });
 

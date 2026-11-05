@@ -6,10 +6,11 @@
     LightningIcon,
     ArrowsLeftRightIcon,
     PersonSimpleWalkIcon,
+    type IconDef,
   } from "@/components/icon-paths";
   import type { Place, PlaceSlot } from "@/lib/client/places";
   import type { TransitMode } from "@/lib/client/format";
-  import type { Stop } from "@/lib/client/types";
+  import type { ConnectionItinerary, Stop } from "@/lib/client/types";
 
   /** walk radius of a search from a point, metres; the choice is kept per browser */
   const WALK_OPTIONS: readonly number[] = [400, 800, 1200];
@@ -69,6 +70,34 @@
     { id: "arrive", label: "Przyjazd do", title: "Połączenia z przyjazdem najpóźniej o wybranej godzinie" },
   ];
   const WHEN_TODAY: { id: When; label: string; title?: string }[] = [{ id: "now", label: "Teraz" }, ...WHEN_LATER];
+
+  /** The dialog mounts per opening: its last search stays here for the page's life, so a sheet closed by
+   *  mistake reopens on it. Older than RESTORE_MS it opens fresh (the route is in "Ostatnie wyszukiwania");
+   *  answers older than RESULTS_MS are not shown while the reopened search runs again. */
+  const RESTORE_MS = 30 * 60_000;
+  const RESULTS_MS = 2 * 60_000;
+  let last: {
+    at: number;
+    day: string;
+    fromStop: Stop | null;
+    fromGeo: GeoPoint | null;
+    toStop: Stop | null;
+    toGeo: GeoPoint | null;
+    dateMode: "today" | "tomorrow" | "custom";
+    selectedDate: string;
+    timeMode: "now" | "custom";
+    arriveBy: boolean;
+    hour: string;
+    minute: string;
+    directOnly: boolean;
+    minTransfer5: boolean;
+    sortBy: SortBy;
+    avoidTypes: readonly string[];
+    avoidLines: readonly string[];
+    connections: ConnectionItinerary[] | null;
+    answerLines: readonly string[];
+    expandedIdx: number | null;
+  } | null = null;
 </script>
 
 <script lang="ts">
@@ -102,7 +131,7 @@
   import ModeIcon from "@/components/ui/ModeIcon.svelte";
   import Segmented from "@/components/ui/Segmented.svelte";
   import StarIcon from "@/components/ui/StarIcon.svelte";
-  import { geocode, getConnections, isWarming, type GeoHit } from "@/lib/client/api";
+  import { geocode, getConnections, HttpError, isWarming, type GeoHit } from "@/lib/client/api";
   import { CITY, getPageCity, GZM_LOADING } from "@/lib/client/city";
   import { favorites } from "@/lib/client/favorites";
   import {
@@ -119,8 +148,7 @@
     todayISO,
   } from "@/lib/client/format";
   import { formatDistance, haversineMeters, nearestStops } from "@/lib/client/geo";
-  import { hasRoute, placesOf, setPlace, toggleRoute, type SavedRoute } from "@/lib/client/places";
-  import type { ConnectionItinerary } from "@/lib/client/types";
+  import { hasRoute, placesOf, pushRecent, setPlace, toggleRoute, type SavedRoute } from "@/lib/client/places";
   import { indexVehicles, legVehicle, transferAtRisk } from "@/lib/client/vehicleIndex";
   import { gzmStopKey } from "@/lib/shared/gzm-stop-key";
 
@@ -181,7 +209,7 @@
 
   let connections = $state.raw<ConnectionItinerary[] | null>(null);
   /* "warming": the server is still loading the GZM data (503) */
-  let connErr = $state<false | "error" | "warming">(false);
+  let connErr = $state<false | "error" | "warming" | "busy">(false);
   const city = getPageCity();
   const lineData = useLines();
   const modes = $derived.by(() => {
@@ -190,6 +218,16 @@
   });
   let searchTick = $state(0);
   let expandedIdx = $state<number | null>(null);
+
+  // svelte-ignore state_referenced_locally
+  if (!initialFrom && !initialTo && last && last.day === todayStr && performance.now() - last.at < RESTORE_MS) {
+    ({ fromStop, toStop, toGeo, dateMode, selectedDate, timeMode, arriveBy, hour, minute } = last);
+    ({ directOnly, minTransfer5, sortBy, avoidTypes, avoidLines } = last);
+    // a GPS origin follows the rider
+    fromGeo = last.fromGeo && !last.fromGeo.label && geoPos ? { lat: geoPos.lat, lon: geoPos.lon } : last.fromGeo;
+    if (performance.now() - last.at < RESULTS_MS) ({ connections, answerLines, expandedIdx } = last);
+    activeInput = !last.fromStop && !last.fromGeo ? "from" : !last.toStop && !last.toGeo ? "to" : null;
+  }
 
   let fromInput: HTMLInputElement | undefined = $state();
   let toInput: HTMLInputElement | undefined = $state();
@@ -225,7 +263,31 @@
       }
     };
     document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      last = {
+        at: performance.now(),
+        day: todayStr,
+        fromStop,
+        fromGeo: fromGeo === "pending" ? null : fromGeo,
+        toStop,
+        toGeo,
+        dateMode,
+        selectedDate,
+        timeMode,
+        arriveBy,
+        hour,
+        minute,
+        directOnly,
+        minTransfer5,
+        sortBy,
+        avoidTypes,
+        avoidLines,
+        connections,
+        answerLines,
+        expandedIdx,
+      };
+    };
   });
 
   // Derived effective time parameter (HH:MM in 24h format); null while the
@@ -283,10 +345,13 @@
             a.localeCompare(b, "pl", { numeric: true }),
           );
           connErr = false;
+          // read after the await: no dependency of this effect
+          if (curRoute) pushRecent(city, curRoute);
         }
       } catch (err) {
         if (!cancelled && !ac.signal.aborted) {
-          connErr = city !== "bb" && isWarming(err) ? "warming" : "error";
+          // 429: the server's search budget (or this client's share) is spent for a few seconds
+          connErr = city !== "bb" && isWarming(err) ? "warming" : err instanceof HttpError && err.status === 429 ? "busy" : "error";
         }
       }
     })();
@@ -420,6 +485,17 @@
       list.push({ key: JSON.stringify(r), from: r.from, to: r.to, label: `${fromName} → ${toName}`, fromName, toName });
     }
     return list;
+  });
+  /* searched routes that are not already a saved one */
+  const recentRoutes = $derived.by(() => {
+    const saved = new Set(quickRoutes.map((q) => JSON.stringify({ from: q.from, to: q.to })));
+    return places.recent
+      .map((r) => {
+        const fromName = placeName(r.from);
+        const toName = placeName(r.to);
+        return { key: JSON.stringify(r), from: r.from, to: r.to, label: `${fromName} → ${toName}`, fromName, toName };
+      })
+      .filter((q) => !saved.has(q.key));
   });
 
   function handlePickGeo() {
@@ -1039,6 +1115,28 @@
       </div>
     </div>
 
+    {#snippet routeList(title: string, list: typeof quickRoutes, icon: IconDef)}
+      {#if list.length > 0}
+        <div class="mb-2">
+          <p class="mb-1.5 px-1 text-[12px] font-medium text-text-faint">{title}</p>
+          <ul>
+            {#each list as r (r.key)}
+              <li>
+                <button
+                  type="button"
+                  onclick={() => applyRoute(r.from, r.to, r.fromName, r.toName)}
+                  class="flex min-h-11 w-full items-center gap-3 rounded-xl px-3 py-2 text-left transition-colors hover:bg-tint/6 active:bg-tint/10"
+                >
+                  <Icon {icon} class="w-4 shrink-0 text-[15px] text-primary" />
+                  <span class="truncate text-[14px] text-text">{r.label}</span>
+                </button>
+              </li>
+            {/each}
+          </ul>
+        </div>
+      {/if}
+    {/snippet}
+
     <!-- Modal body -->
     <div class="kb-scroll p-4 md:min-h-0 md:flex-1 md:overflow-y-auto">
       <!-- Autocomplete suggestion list when user is picking stops -->
@@ -1100,6 +1198,10 @@
                 </span>
               </span>
             </button>
+          {/if}
+          {#if target === "from" && !typed && !assign}
+            {@render routeList("Zapisane trasy", quickRoutes, PathIcon)}
+            {@render routeList("Ostatnie wyszukiwania", recentRoutes, ClockIcon)}
           {/if}
           {#if suggestions.length === 0}
             {#if typed && addrHits.length === 0}
@@ -1191,7 +1293,10 @@
           {/each}
         </div>
       {:else if connErr}
-        <ErrorState onRetry={handleRefresh} message={connErr === "warming" ? GZM_LOADING : undefined} />
+        <ErrorState
+          onRetry={handleRefresh}
+          message={connErr === "warming" ? GZM_LOADING : connErr === "busy" ? "Wyszukiwarka jest teraz zajęta, spróbuj za kilka sekund." : undefined}
+        />
       {:else if connections}
         {#if connections.length === 0}
           <div class="px-4 py-10 text-center animate-fade">
@@ -1468,25 +1573,8 @@
       {:else}
         <!-- Initial state before picking stops -->
         <div class="animate-fade">
-          {#if quickRoutes.length > 0}
-            <div class="mb-2">
-              <p class="mb-1.5 px-1 text-[12px] font-medium text-text-faint">Zapisane trasy</p>
-              <ul>
-                {#each quickRoutes as r (r.key)}
-                  <li>
-                    <button
-                      type="button"
-                      onclick={() => applyRoute(r.from, r.to, r.fromName, r.toName)}
-                      class="flex min-h-11 w-full items-center gap-3 rounded-xl px-3 py-2 text-left transition-colors hover:bg-tint/6 active:bg-tint/10"
-                    >
-                      <Icon icon={PathIcon} class="w-4 shrink-0 text-[15px] text-primary" />
-                      <span class="truncate text-[14px] text-text">{r.label}</span>
-                    </button>
-                  </li>
-                {/each}
-              </ul>
-            </div>
-          {/if}
+          {@render routeList("Zapisane trasy", quickRoutes, PathIcon)}
+          {@render routeList("Ostatnie wyszukiwania", recentRoutes, ClockIcon)}
           <div class="px-4 py-10 text-center">
             <span class="mx-auto grid h-12 w-12 place-items-center rounded-full bg-tint/5 text-[22px] text-text-faint">
               <Icon icon={PathIcon} />

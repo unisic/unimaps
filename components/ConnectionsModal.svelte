@@ -25,7 +25,7 @@
   let { open, ...rest }: ConnectionsModalProps = $props();
 </script>
 
-<!-- the dialog mounts per opening: its search state starts fresh each time -->
+<!-- the dialog mounts per opening; its module script keeps the last search to reopen on -->
 {#if open}
   <ConnectionsDialog {...rest} />
 {/if}
