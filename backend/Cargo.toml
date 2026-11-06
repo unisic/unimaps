@@ -9,9 +9,12 @@ rust-version = "1.88"
 bytes = "1.12.1"
 dotenvy = "0.15.7"
 http-body-util = "0.1.5"
-indexmap = "2.14.2"
 hyper = { version = "1.12.0", features = ["http1", "server", "client"] }
 hyper-util = { version = "0.1.21", features = ["tokio", "client-legacy", "http1"] }
+icu_collator = "2.4.0"
+icu_locale_core = { version = "2.4.0", default-features = false }
+icu_normalizer = { version = "2.4.0", default-features = false, features = ["compiled_data"] }
+indexmap = "2.14.2"
 jiff = { version = "0.2.39", features = ["tzdb-bundle-always"] }
 libc = "0.2"
 serde = { version = "1.0.229", features = ["derive"] }

@@ -1,5 +1,12 @@
 //! JavaScript semantics the ported code depends on, where Rust's own differ.
 
+use std::cmp::Ordering;
+use std::sync::LazyLock;
+
+use icu_collator::options::CollatorOptions;
+use icu_collator::preferences::CollationNumericOrdering;
+use icu_collator::{Collator, CollatorBorrowed, CollatorPreferences};
+
 /// `Math.round`: halves go up (`-2.5` -> `-2`), where `f64::round` goes away from zero.
 pub fn round(x: f64) -> f64 {
     let f = x.floor();
@@ -14,6 +21,29 @@ pub fn is_space(c: char) -> bool {
         '\t' | '\n' | '\u{0B}' | '\u{0C}' | '\r' | ' ' | '\u{A0}' | '\u{1680}' | '\u{2000}'
             ..='\u{200A}' | '\u{2028}' | '\u{2029}' | '\u{202F}' | '\u{205F}' | '\u{3000}' | '\u{FEFF}'
     )
+}
+
+fn pl_collator(numeric: bool) -> CollatorBorrowed<'static> {
+    let mut prefs = CollatorPreferences::from(&icu_locale_core::langid!("pl"));
+    prefs.numeric_ordering = Some(if numeric {
+        CollationNumericOrdering::True
+    } else {
+        CollationNumericOrdering::False
+    });
+    Collator::try_new(prefs, CollatorOptions::default()).expect("compiled pl collation data")
+}
+
+static PL: LazyLock<CollatorBorrowed<'static>> = LazyLock::new(|| pl_collator(false));
+static PL_NUMERIC: LazyLock<CollatorBorrowed<'static>> = LazyLock::new(|| pl_collator(true));
+
+/// `a.localeCompare(b, "pl")`
+pub fn compare_pl(a: &str, b: &str) -> Ordering {
+    PL.compare(a, b)
+}
+
+/// `new Intl.Collator("pl", { numeric: true }).compare`: digit runs by value ("2" < "10", "01" == "1").
+pub fn compare_pl_numeric(a: &str, b: &str) -> Ordering {
+    PL_NUMERIC.compare(a, b)
 }
 
 #[cfg(test)]
