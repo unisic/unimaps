@@ -23,6 +23,21 @@ pub fn full(b: impl Into<Bytes>) -> Body {
     Full::new(b.into()).map_err(|never| match never {}).boxed()
 }
 
+/// `Headers.get` of a Web Request: every value of `name` read as Latin-1 (Node's header strings), joined by ", ";
+/// None when the header is absent.
+pub fn header_str(h: &HeaderMap, name: &str) -> Option<String> {
+    let mut vals = h.get_all(name).iter().peekable();
+    vals.peek()?;
+    let mut out = String::new();
+    for (i, v) in vals.enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.extend(v.as_bytes().iter().map(|&b| char::from(b)));
+    }
+    Some(out)
+}
+
 pub struct App {
     pub statics: Static,
     node: Client<HttpConnector, Incoming>,
@@ -60,7 +75,7 @@ fn strip_hop(h: &mut HeaderMap) {
     }
 }
 
-fn json(status: StatusCode, body: &'static str) -> Response<Body> {
+pub fn json(status: StatusCode, body: impl Into<Bytes>) -> Response<Body> {
     Response::builder()
         .status(status)
         .header(CONTENT_TYPE, "application/json")

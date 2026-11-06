@@ -9,9 +9,10 @@ rust-version = "1.88"
 bytes = "1.12.1"
 dotenvy = "0.15.7"
 http-body-util = "0.1.5"
+indexmap = "2.14.2"
 hyper = { version = "1.12.0", features = ["http1", "server", "client"] }
 hyper-util = { version = "0.1.21", features = ["tokio", "client-legacy", "http1"] }
-jiff = "0.2.39"
+jiff = { version = "0.2.39", features = ["tzdb-bundle-always"] }
 libc = "0.2"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.154", features = ["preserve_order"] }
@@ -19,3 +20,7 @@ tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "s
 
 [profile.release]
 strip = true
+
+[lints.clippy]
+# a route helper's Err is the Response the route returns right away; boxing it only adds an allocation
+result_large_err = "allow"

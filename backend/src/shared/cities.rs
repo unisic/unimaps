@@ -26,12 +26,16 @@ pub fn zb_city(slug: &str) -> Option<&'static ZbCity> {
     ZB_CITIES.iter().find(|(s, _)| s == slug).map(|(_, c)| c)
 }
 
+/// `v` as the registry's own slug, None when it is not one.
+pub fn zb_slug(v: &str) -> Option<&'static str> {
+    ZB_CITIES.iter().find(|(s, _)| s == v).map(|(s, _)| s.as_str())
+}
+
 pub fn is_zb_slug(v: &str) -> bool {
-    zb_city(v).is_some()
+    zb_slug(v).is_some()
 }
 
 /// The zbiorkom city of a prefixed id ("krakow:1234", "gzm:283_4285"); None for a BB id (kb:, mzk:, plain).
 pub fn zb_city_of(id: &str) -> Option<&'static str> {
-    let (p, _) = id.split_once(':')?;
-    ZB_CITIES.iter().find(|(s, _)| s == p).map(|(s, _)| s.as_str())
+    zb_slug(id.split_once(':')?.0)
 }
