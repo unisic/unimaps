@@ -32,3 +32,6 @@ yarn-error.log*
 __pycache__/
 *.pyc
 /dist/
+
+# rust build output
+/backend/target/

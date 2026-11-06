@@ -74,11 +74,17 @@ Docker:
 docker compose up -d --build
 ```
 
+In the image the Rust server (`backend/`, binary `/app/unimaps`) listens on
+8080, serves the frontend and passes `/api` to the Node API it starts on
+127.0.0.1:8090; the backend moves to Rust stage by stage. If either process
+exits, the container stops.
+
 The healthcheck marks the container `unhealthy` when the scan loop stalls or
 upstream goes stale (`/api/health` answers 503). `restart: unless-stopped`
 acts only on process exit, so point an uptime monitor at `/api/health`.
 
-Checks: `npm run typecheck`, `npm run lint`, `npm test`.
+Checks: `npm run typecheck`, `npm run lint`, `npm test`; in `backend/`:
+`cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`.
 
 ## API
 
