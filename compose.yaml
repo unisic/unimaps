@@ -28,7 +28,7 @@ services:
     # Docker itself never restarts on that (restart only acts on process exit).
     # Watch it from outside, e.g. an uptime monitor on /api/health.
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/api/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      test: ["CMD", "/app/unimaps", "healthcheck"]
       interval: 30s
       timeout: 5s
       start_period: 20s
