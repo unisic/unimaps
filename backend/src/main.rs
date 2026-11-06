@@ -3,10 +3,6 @@
 //! set (the Docker image), else expected on 127.0.0.1:KB_NODE_PORT. `unimaps healthcheck` exits 0 when
 //! /api/health answers 2xx (Docker / compose healthcheck).
 
-mod http;
-mod logger;
-mod static_files;
-
 use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
@@ -22,6 +18,7 @@ use tokio::net::TcpListener;
 use tokio::process::{Child, Command};
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::Semaphore;
+use unimaps::{http, logger, static_files};
 
 /// ponytail: one cap for every open connection (idle keep-alive ones included, ~8 KB of buffers each).
 const MAX_CONNECTIONS: usize = 1024;
