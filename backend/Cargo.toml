@@ -14,11 +14,12 @@ hyper-util = { version = "0.1.21", features = ["tokio", "client-legacy", "http1"
 icu_collator = "2.4.0"
 icu_locale_core = { version = "2.4.0", default-features = false }
 icu_normalizer = { version = "2.4.0", default-features = false, features = ["compiled_data"] }
-indexmap = "2.14.2"
+icu_properties = { version = "2.4.0", default-features = false, features = ["compiled_data"] }
+indexmap = { version = "2.14.2", features = ["serde"] }
 jiff = { version = "0.2.39", features = ["tzdb-bundle-always"] }
 libc = "0.2"
 serde = { version = "1.0.229", features = ["derive"] }
-serde_json = { version = "1.0.154", features = ["preserve_order"] }
+serde_json = { version = "1.0.154", features = ["float_roundtrip", "preserve_order"] }
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "signal", "process", "time", "io-util"] }
 
 [profile.release]
