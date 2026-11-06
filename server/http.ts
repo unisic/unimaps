@@ -23,9 +23,11 @@ function readBody(req: http.IncomingMessage): Promise<Buffer | null> {
     const chunks: Buffer[] = [];
     let size = 0;
     req.on("data", (c: Buffer) => {
+      // past the cap the rest is read and dropped: destroying the socket here would lose the 413 itself
+      if (size > MAX_BODY) return;
       size += c.length;
       if (size > MAX_BODY) {
-        req.destroy();
+        chunks.length = 0;
         resolve(null);
       } else chunks.push(c);
     });
@@ -66,7 +68,7 @@ async function api(req: http.IncomingMessage, res: http.ServerResponse, pathname
   let body: Buffer | null = null;
   if (method !== "GET") {
     body = await readBody(req);
-    if (!body) return plain(res, 413, '{"error":"Body too large"}');
+    if (!body) return plain(res, 413, '{"error":"Body too large"}', { connection: "close" });
   }
   const url = `http://${req.headers.host ?? "localhost"}${req.url}`;
   let request: Request;
