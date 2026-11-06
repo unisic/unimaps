@@ -7,12 +7,13 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { hhmm, preSortRows, type TimingRow } from "../lib/shared/departures";
+import { cleanStopName, mergeStops, type FormattedStop } from "../lib/stop-merge";
 
 const OUT = "backend/tests/vectors";
 
-function write(name: string, data: unknown): void {
+function write(name: string, data: unknown, indent = 1): void {
   fs.mkdirSync(OUT, { recursive: true });
-  fs.writeFileSync(path.join(OUT, `${name}.json`), `${JSON.stringify(data, null, 1)}\n`);
+  fs.writeFileSync(path.join(OUT, `${name}.json`), `${JSON.stringify(data, null, indent)}\n`);
 }
 
 // lib/lines.ts, lib/gzm-feed.ts and lib/shared/departures.ts sort line names with the numeric "pl" collator,
@@ -59,6 +60,62 @@ write("collation", {
   const instants = [0, -0.0005, -1.5, 59.999, 1_774_745_999, 1_774_746_000, 1_774_749_599.9, 1_792_889_999, 1_792_890_000, 1_792_893_600, now];
   for (let i = 0; i < 100; i++) instants.push(1_760_000_000 + Math.floor(rnd() * 90_000_000) + pick([0, 0.4, 0.9999]));
   write("departures", { now, boards, hhmm: instants.map((t) => [t, hhmm(t)]) });
+}
+
+// lib/stop-merge.ts: the whole merged list (the TS tests check only the pairing) on the captured fixture and on
+// seeded clusters (twins, hubs, opposite carriageways, request stops, learned MZK bearings), plus cleanStopName
+{
+  let seed = 7;
+  const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  const int = (n: number) => Math.floor(rnd() * n);
+  const pick = <T>(xs: readonly T[]): T => xs[int(xs.length)];
+  const fx = JSON.parse(fs.readFileSync("test/fixtures/stop-merge-live.json", "utf8")) as { kb: FormattedStop[]; mzk: FormattedStop[] };
+  const kbAll = fx.kb.map((k) => ({ ...k, operator: "KB" as const }));
+  const mzkAll = fx.mzk.map((m) => ({ ...m, operator: "MZK" as const }));
+  const learned = new Map(mzkAll.filter((m) => m.dirs?.length).map((m) => [m.symbol!, m.dirs!] as const));
+  const bare = mzkAll.map((m) => ({ ...m, dirs: undefined }));
+  const cases: unknown[] = [
+    { kb: kbAll, mzk: mzkAll, result: mergeStops(kbAll, mzkAll) },
+    { kb: kbAll, mzk: bare, mzkDirs: Object.fromEntries(learned), result: mergeStops(kbAll, bare, { mzkDirs: learned }) },
+  ];
+  const NAMES = ["Testowa", "Dworzec", "Warszawska Dworzec", "D.A.", "Dworzec Autobusowy", "Strefa", "AB", "Szkoła Podstawowa", "Szkoła NŻ"];
+  const bearing = () => (rnd() < 0.5 ? int(360) : Math.round(rnd() * 36000) / 100);
+  const off = () => (rnd() - 0.5) * 0.0016; // about +-90 m of latitude: dense clusters, big components
+  for (let i = 0; i < 400; i++) {
+    const kb: FormattedStop[] = Array.from({ length: 1 + int(5) }, (_, j) => {
+      const s: FormattedStop = { id: String(10000 + j), designator: `d${j}`, name: (rnd() < 0.8 ? "BIELSKO-BIAŁA " : "") + pick(NAMES), lat: 49.8 + off(), lon: 19 + off(), operator: "KB" };
+      if (rnd() < 0.6) s.dirs = rnd() < 0.3 ? [bearing(), bearing()] : [bearing()];
+      if (rnd() < 0.25) s.isStation = true;
+      if (rnd() < 0.3) s.showPlatforms = rnd() < 0.5;
+      if (rnd() < 0.15) s.onRequest = true;
+      return s;
+    });
+    // a bus station with its poles close by: the hub fan-out
+    if (i % 3 === 0) Object.assign(kb[0], { name: pick(["BIELSKO-BIAŁA D.A.", "KOZY DWORZEC AUTOBUSOWY", "BYSTRA DWORZEC"]), isStation: true });
+    const near = () => (rnd() - 0.5) * 0.0004;
+    const mzkDirs = new Map<string, number[]>();
+    const mzk: FormattedStop[] = Array.from({ length: i % 3 === 0 ? 3 + int(8) : int(8) }, (_, j) => {
+      const sym = rnd() < 0.05 ? "" : String(100 + j);
+      const s: FormattedStop = { id: `mzk:${100 + j}`, designator: `mzk:${100 + j}`, name: pick(NAMES), lat: 49.8 + off(), lon: 19 + off(), operator: "MZK", symbol: sym };
+      if (i % 3 === 0 && rnd() < 0.7) Object.assign(s, { lat: kb[0].lat + near(), lon: kb[0].lon + near(), name: pick(["Dworzec", "Warszawska Dworzec", "Testowa"]) });
+      // a KB bearing give or take 70 degrees half the time: arrows that collapse or stay apart
+      const b = () => (rnd() < 0.5 ? bearing() : ((pick(kb).dirs?.[0] ?? 0) + int(140) - 70 + 360) % 360);
+      if (rnd() < 0.3) s.dirs = [b()];
+      else if (rnd() < 0.5) mzkDirs.set(sym, rnd() < 0.2 ? [] : [b()]);
+      if (rnd() < 0.1) s.isStation = true;
+      if (rnd() < 0.15) s.onRequest = true;
+      if (rnd() < 0.15) s.gettingOut = true;
+      return s;
+    });
+    cases.push({ kb, mzk, mzkDirs: Object.fromEntries(mzkDirs), result: mergeStops(kb, mzk, { mzkDirs }) });
+  }
+  const names = [
+    ...kbAll.map((s) => s.name), ...mzkAll.map((s) => s.name),
+    "bielsko-biała d.a.", "BIELSKO-BIAŁAD.A.", "XD.A.", "Kozy\u00a0D.A", "Dworzec\tautobusowy", "dworzec  AUTOBUSOWY ",
+    "KOZYDWORZEC AUTOBUSOWY", " Jaworze  Centrum ", "JAWORZE", "Szczyrk Biła NŻ", "ß-straße", "Plac Żwirki i Wigury",
+    "BYSTRA\u2003Szkoła", "Porąbka (Kościół)", "", "D.A", "a.D.A.", "BESTWINA D.A. D.A.",
+  ];
+  write("stop_merge", { clean: names.map((n) => [n, cleanStopName(n)]), cases }, 0);
 }
 
 // lib/router.ts: connection search and the line view on the fixture feed (KB + the captured MZK

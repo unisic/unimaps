@@ -103,7 +103,7 @@ pub fn sort_object_keys<V>(map: &mut indexmap::IndexMap<String, V>) {
 }
 
 /// A number as `JSON.stringify` writes it: an integral value goes out without the `.0` serde_json adds.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct JsNum(pub f64);
 
 impl serde::Serialize for JsNum {
@@ -114,6 +114,12 @@ impl serde::Serialize for JsNum {
         } else {
             s.serialize_f64(x)
         }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for JsNum {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        f64::deserialize(d).map(JsNum)
     }
 }
 

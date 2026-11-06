@@ -13,4 +13,5 @@ pub mod rate_limit;
 pub mod router;
 pub mod shared;
 pub mod static_files;
+pub mod stop_merge;
 pub mod time;
