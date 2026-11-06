@@ -15,11 +15,13 @@ RUN npm run build
 
 # ---- rust: the server front (backend/), a static musl binary ----
 FROM rust:1.98-alpine AS rust
-WORKDIR /src
+WORKDIR /src/backend
 COPY backend/Cargo.toml backend/Cargo.lock ./
 COPY backend/src ./src
+# data shared with the TypeScript side, compiled in with include_str!
+COPY lib/shared/cities.json /src/lib/shared/
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/src/target \
+    --mount=type=cache,target=/src/backend/target \
     cargo build --release --locked && cp target/release/unimaps /unimaps
 
 # ---- runner: the bundle needs no node_modules ----
