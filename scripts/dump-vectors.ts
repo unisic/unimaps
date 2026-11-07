@@ -21,7 +21,18 @@ import { mzkRemapDist, mzkShapeFromCourseDetails, mzkStopIndices } from "../lib/
 import { clampPlannedMonotone, hasPlannedDip, isMzkNotStarted, mzkRowTiming } from "../lib/mzk-state";
 import { estimateFixAt, kbAheadM, kbDistAlong, nextSpeed, schedSpeed } from "../lib/route-info";
 import { finalizeShape, type ShapeSrc } from "../lib/shape-store";
-import { hhmm, preSortRows, type TimingRow } from "../lib/shared/departures";
+import { ALERT_LEADS, alertAction, alertMessage, type Alert } from "../lib/shared/alerts";
+import {
+  enrichKbRow,
+  hhmm,
+  kbAnchorTs,
+  mzkWireFields,
+  parseClockNear,
+  parseRelMinutes,
+  preSortRows,
+  rowKey,
+  type TimingRow,
+} from "../lib/shared/departures";
 import { pointAt, preparePolyline, type LatLng } from "../lib/shared/polyline";
 import { cleanStopName, mergeStops, type FormattedStop } from "../lib/stop-merge";
 
@@ -790,3 +801,129 @@ void (async () => {
   ];
   write("web_push", cases.map(([name, v]) => ({ name, in: v, out: isPushSub(v) })));
 })();
+
+// lib/shared/departures.ts row normalisers (KB enrichKbRow, MZK mzkWireFields, rowKey) and lib/shared/alerts.ts.
+// test/rust-vectors.test.ts reads the same files back through the TS, so client and server cannot drift apart.
+{
+  let seed = 29;
+  const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  const pick = <T>(xs: readonly T[]): T => xs[Math.floor(rnd() * xs.length)];
+  const rt = <T>(x: T): T => JSON.parse(JSON.stringify(x));
+  const strs = [
+    "5 min", "< 1 min", "<1 min", " 12 min ", "5 Min.", "0 min", "999 min", "1000 min", "007 min", "1 h 5 min", "",
+    "min", "<2 min", "< 1min", "<1", " 3 min　", "3 min", "３ min", "23:12", "04:05", "4:05",
+    " 23:59:30 ", "24:00", "23:60", "123:45", "12:345", "12:34:5", "12:34:", "12:34: ", "00:00", "12:30\n", "﻿1:07", "1:7", "12:3o",
+    null, undefined, 5, true,
+  ];
+  // spring and autumn DST switches of 2026, Warsaw midnights, and plain days
+  const anchors = [1_774_746_000, 1_774_742_400, 1_774_749_600, 1_792_890_000, 1_792_886_400, 1_792_893_600, 1_791_324_000, 1_791_000_000.5];
+  const anchor = () => pick(anchors) + pick([0, -3600, 3600, -7200, 1800]) + Math.floor(rnd() * 600) + pick([0, 0.25, 0.999]);
+
+  const rel = strs.map((s) => [s ?? null, parseRelMinutes(s)]);
+  const clock = [];
+  for (const s of strs) for (let i = 0; i < 4; i++) {
+    const a = anchor();
+    clock.push([s ?? null, a, parseClockNear(s, a)]);
+  }
+  for (let i = 0; i < 300; i++) {
+    const a = anchor();
+    const s = `${Math.floor(rnd() * 24)}:${String(Math.floor(rnd() * 60)).padStart(2, "0")}`;
+    clock.push([s, a, parseClockNear(s, a)]);
+  }
+
+  const directions = [
+    JSON.parse('{"1":"Os. Polskie","2":"","1.5":"Half","__proto__":"Proto","0":"Zero","true":"T","x":5}'),
+    ["Zero", "One"],
+    {},
+    null,
+    "x",
+    7,
+    undefined,
+  ];
+  const kb = [];
+  for (let i = 0; i < 400; i++) {
+    const row: Record<string, unknown> = {};
+    if (rnd() < 0.2) row.direction = pick(["Wapienica", "", 5, null]);
+    if (rnd() < 0.15) row.row_key = "old";
+    if (rnd() < 0.9) row.trip_execution_id = pick(["e1", "ZXhlYw==", "", null, 7]);
+    if (rnd() < 0.9) row.trip_index = pick([0, 3, 12, null, "4"]);
+    row.line_name = pick(["17", "119", "N1"]);
+    row.time = pick(strs);
+    row.static_time = pick(strs);
+    row.time_diff = pick([0, 2, -1, 0.5, 1.25, -0.5, 2.5, -0.01, "3", null, undefined]);
+    row.is_estimated = pick([true, false, "true", 1, undefined]);
+    row.at_stop = pick([true, false, false, false, 1, undefined]);
+    row.canceled = pick([true, false, false, undefined, "true"]);
+    row.direction_id = pick([undefined, null, 1, "1", 2, 1.5, "__proto__", "toString", "0", 0, true, "length", "01", " 1"]);
+    if (rnd() < 0.2) row.operator = "X";
+    if (rnd() < 0.1) row.plan_ts = 1;
+    const dirs = pick(directions);
+    const a = anchor();
+    kb.push({ row: rt(row), directions: dirs === undefined ? undefined : rt(dirs), anchor: a, out: rt(enrichKbRow(rt(row), dirs === undefined ? undefined : rt(dirs), a)) });
+  }
+  const anchorTs = [];
+  for (let i = 0; i < 40; i++) {
+    const local = pick(anchors) + Math.floor(rnd() * 100) + pick([0, 0.5]);
+    const b = pick([local - 30, local + 119.9, local - 120, local + 120, local - 119.5, local + 500, "x", null, undefined, true]);
+    anchorTs.push([b ?? null, local, kbAnchorTs(b, local)]);
+  }
+
+  const mzk = [];
+  for (let i = 0; i < 200; i++) {
+    const ms = Math.floor(pick(anchors)) * 1000 + Math.floor(rnd() * 3_600_000);
+    const d: Record<string, unknown> = {
+      courseId: pick([123, "77", 0, 1.5, null, undefined]),
+      orderInCourse: pick([0, 4, null, undefined, "3"]),
+      scheduledDeparture: pick([ms, ms, 0, -5, null, "1791000000000", undefined]),
+      realDeparture: pick([ms + Math.floor(rnd() * 600_000) - 60_000, ms - 30_500, ms + 499, 0, null]),
+      lack: pick([false, false, true, undefined, 0, 1, "", "false", null]),
+      onStopPoint: pick([true, false]),
+    };
+    mzk.push({ d: rt(d), out: rt(mzkWireFields(rt(d) as never)) });
+  }
+
+  const keys = [];
+  for (let i = 0; i < 60; i++) {
+    const row: Record<string, unknown> = {};
+    if (rnd() < 0.3) row.row_key = pick(["k", "", null, 0]);
+    if (rnd() < 0.8) row.trip_execution_id = pick(["e", "", null, 0, 5]);
+    if (rnd() < 0.8) row.trip_id = pick([12, "t", null, 0]);
+    if (rnd() < 0.8) row.trip_index = pick([3, 0, null]);
+    if (rnd() < 0.8) row.static_time = pick(["12:00", "5 min", "", null]);
+    keys.push([rt(row), rowKey(rt(row) as TimingRow)]);
+  }
+
+  const alerts = [];
+  const akeys = ["e1#3", "mzk:77#4", "gzm:t1#2", "e#3#12:00", "#"];
+  for (let i = 0; i < 300; i++) {
+    const now = 1_791_000_000 + Math.floor(rnd() * 1000) + pick([0, 0.5]);
+    const plan = now + Math.floor(rnd() * 1500) - 300;
+    const alert: Alert = {
+      key: pick(akeys),
+      designator: pick(["1234", "kb:12:3", "a b/c?d&e=f#", "Żywiec ąę", "~!*'()-_.", "\u{1f68c}", "gzm:5_1"]),
+      stopName: pick(["Dworzec", "Os. Polskie NŻ"]),
+      line: pick(["17", "N1", "M1"]),
+      dest: pick(["Wapienica", "Katowice Brynów"]),
+      leadMin: pick(ALERT_LEADS),
+      until: rnd() < 0.1 ? now : plan + pick([1800, -400, 0]),
+    };
+    const rows: Record<string, unknown>[] = [];
+    for (let j = 0, n = Math.floor(rnd() * 4); j < n; j++) {
+      const row: Record<string, unknown> = {
+        operator: pick(["KB", "MZK", "GZM"]),
+        plan_ts: pick([plan, plan, null]),
+        eta_ts: pick([plan + Math.floor(rnd() * 600) - 60 + pick([0, 0.5, 29]), null]),
+        at_stop: rnd() < 0.15,
+        canceled: rnd() < 0.15,
+        not_started: rnd() < 0.15,
+      };
+      if (rnd() < 0.85) row.row_key = pick([alert.key, alert.key, "other"]);
+      else Object.assign(row, { trip_execution_id: "e", trip_index: 3, static_time: "12:00" });
+      rows.push(row);
+    }
+    const action = alertAction(alert, rows as TimingRow[], now);
+    alerts.push({ alert, rows, now, action, message: alertMessage(alert, action) });
+  }
+  write("board_rows", { rel, clock, kb, anchor: anchorTs, mzk, keys }, 0);
+  write("alerts", rt(alerts), 0);
+}

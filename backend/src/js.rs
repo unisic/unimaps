@@ -292,6 +292,40 @@ impl<'de> serde::Deserialize<'de> for JsNum {
     }
 }
 
+/// A number as a JSON value that serializes like `JSON.stringify` (see [`JsNum`]); NaN and infinities are `null`.
+pub fn num_value(x: f64) -> serde_json::Value {
+    if x.fract() == 0.0 && x.abs() < 9_007_199_254_740_992.0 {
+        (x as i64).into()
+    } else {
+        x.into()
+    }
+}
+
+/// JS truthiness of a parsed JSON value (`None` = undefined).
+pub fn truthy(v: Option<&serde_json::Value>) -> bool {
+    use serde_json::Value;
+    match v {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(b)) => *b,
+        Some(Value::Number(n)) => n.as_f64().is_some_and(|x| x != 0.0),
+        Some(Value::String(s)) => !s.is_empty(),
+        Some(Value::Array(_) | Value::Object(_)) => true,
+    }
+}
+
+/// `encodeURIComponent` (a Rust string has no lone surrogate, so it never throws).
+pub fn encode_uri_component(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || b"-_.!~*'()".contains(&b) {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
