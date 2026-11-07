@@ -729,3 +729,64 @@ void (async () => {
   }
   write("route_info", { geoms, dist, sched, speed, fix, mzkShapes, remap, indices, finals }, 0);
 }
+
+// lib/web-push.ts isPushSub: the URL allowlist (WHATWG parsing), UTF-16 lengths, Buffer's lenient base64url and the
+// point encodings OpenSSL accepts (hybrid included). Imported late: lib/web-push loads lib/config, see the router block
+void (async () => {
+  const { isPushSub } = await import("../lib/web-push");
+  const P = "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4";
+  const A = "BTBZMqHH6r4Tts7J_aSIgg";
+  const raw = Buffer.from(P, "base64url");
+  const b64 = (b: Buffer) => b.toString("base64url");
+  const retag = (t: number) => b64(Buffer.concat([Buffer.from([t]), raw.subarray(1)]));
+  const odd = raw[64] & 1;
+  const E = "https://fcm.googleapis.com/fcm/send/x";
+  const pad = (n: number) => E + "\u{1F600}".repeat((n - E.length) >> 1) + "a".repeat((n - E.length) & 1);
+  const k = (p256dh: unknown, auth: unknown = A) => ({ p256dh, auth });
+  const cases: [string, unknown][] = [
+    ["ok", { endpoint: E, keys: k(P) }],
+    ["apple", { endpoint: "https://web.push.apple.com/x", keys: k(P) }],
+    ["wns", { endpoint: "https://wns2-par02p.notify.windows.com/w/?token=1", keys: k(P) }],
+    ["mozilla", { endpoint: "https://updates.push.services.mozilla.com/wpush/v2/x", keys: k(P) }],
+    ["http", { endpoint: "http://fcm.googleapis.com/x", keys: k(P) }],
+    ["ip", { endpoint: "https://127.0.0.1/x", keys: k(P) }],
+    ["suffix", { endpoint: "https://evilfcm.googleapis.com.example/x", keys: k(P) }],
+    ["glued", { endpoint: "https://xfcm.googleapis.com/x", keys: k(P) }],
+    ["port", { endpoint: "https://fcm.googleapis.com:8443/x", keys: k(P) }],
+    ["port 443", { endpoint: "https://fcm.googleapis.com:443/x", keys: k(P) }],
+    ["upper", { endpoint: "HTTPS://FCM.GoogleApis.com/x", keys: k(P) }],
+    ["trailing dot", { endpoint: "https://fcm.googleapis.com./x", keys: k(P) }],
+    ["userinfo", { endpoint: "https://u:p@fcm.googleapis.com/x", keys: k(P) }],
+    ["spaces", { endpoint: "  https://fcm.googleapis.com/x\t", keys: k(P) }],
+    ["backslash", { endpoint: "https:\\\\fcm.googleapis.com\\x", keys: k(P) }],
+    ["ideographic dot", { endpoint: "https://fcm\u3002googleapis\u3002com/x", keys: k(P) }],
+    ["not a url", { endpoint: "fcm.googleapis.com/x", keys: k(P) }],
+    ["len 1024", { endpoint: E + "a".repeat(1024 - E.length), keys: k(P) }],
+    ["len 1025", { endpoint: E + "a".repeat(1025 - E.length), keys: k(P) }],
+    ["1024 utf-16 units", { endpoint: pad(1024), keys: k(P) }],
+    ["1025 utf-16 units", { endpoint: pad(1025), keys: k(P) }],
+    ["p256dh AAAA", { endpoint: E, keys: k("AAAA") }],
+    ["auth AAAA", { endpoint: E, keys: k(P, "AAAA") }],
+    ["auth spaced", { endpoint: E, keys: k(P, "BTBZ MqHH 6r4T ts7J _aSI gg") }],
+    ["auth padded", { endpoint: E, keys: k(P, A + "==") }],
+    ["auth number", { endpoint: E, keys: k(P, 1) }],
+    ["auth missing", { endpoint: E, keys: { p256dh: P } }],
+    ["p256dh standard alphabet", { endpoint: E, keys: k(raw.toString("base64")) }],
+    ["p256dh split array", { endpoint: E, keys: k([P.slice(0, 40), P.slice(40)]) }],
+    ["p256dh number", { endpoint: E, keys: k(12345) }],
+    ["p256dh missing", { endpoint: E, keys: { auth: A } }],
+    ["p256dh compressed", { endpoint: E, keys: k(retag(2 + odd).slice(0, 44)) }],
+    ["p256dh hybrid", { endpoint: E, keys: k(retag(6 + odd)) }],
+    ["p256dh hybrid wrong parity", { endpoint: E, keys: k(retag(7 - odd)) }],
+    ["p256dh tag 5", { endpoint: E, keys: k(retag(5)) }],
+    ["p256dh off curve", { endpoint: E, keys: k(b64(Buffer.concat([raw.subarray(0, 64), Buffer.from([raw[64] ^ 1])]))) }],
+    ["p256dh trailing junk", { endpoint: E, keys: k(P + "A") }],
+    ["keys array", { endpoint: E, keys: [P, A] }],
+    ["keys null", { endpoint: E, keys: null }],
+    ["keys string", { endpoint: E, keys: "x" }],
+    ["endpoint number", { endpoint: 1, keys: k(P) }],
+    ["null", null],
+    ["array", [E]],
+  ];
+  write("web_push", cases.map(([name, v]) => ({ name, in: v, out: isPushSub(v) })));
+})();

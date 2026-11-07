@@ -44,3 +44,8 @@ pub static GTFS_DIR: LazyLock<String> = LazyLock::new(|| env_str("KB_GTFS_DIR", 
 /// MZK static timetable built from OnTime for the connection search (lib/mzk-timetable.ts).
 pub static MZK_TIMETABLE_FILE: LazyLock<String> =
     LazyLock::new(|| env_str("KB_MZK_TIMETABLE_FILE", &in_output("mzk-timetable.v1.json")));
+
+/// Web push: the VAPID pair and pending alerts; the subject is the contact push services see (mailto: or https:).
+pub static PUSH_DIR: LazyLock<String> = LazyLock::new(|| env_str("KB_PUSH_DIR", &in_output("push")));
+pub static PUSH_SUBJECT: LazyLock<String> =
+    LazyLock::new(|| env_str("KB_PUSH_SUBJECT", "https://github.com/unisic/unimaps"));

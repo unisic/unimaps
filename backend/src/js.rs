@@ -115,6 +115,48 @@ fn even_tie(x: f64, digits: &str, exp: i32) -> Option<String> {
     None
 }
 
+/// `Buffer.from(s, "base64url")` (Node reads both alphabets for either name): each UTF-16 unit counts as its low
+/// byte, bytes outside the alphabet are skipped, the first `=` ends the input, leftover bits are dropped.
+pub fn buffer_from_base64(s: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(s.len() * 3 / 4);
+    let (mut acc, mut bits) = (0u32, 0u32);
+    for u in s.encode_utf16() {
+        let c = u as u8;
+        let v = match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' | b'-' => 62,
+            b'/' | b'_' => 63,
+            b'=' => break,
+            _ => continue,
+        };
+        acc = (acc << 6 | u32::from(v)) & 0x3fff;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+        }
+    }
+    out
+}
+
+/// `buf.toString("base64url")`: no padding.
+pub fn to_base64url(b: &[u8]) -> String {
+    const ABC: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let mut out = String::with_capacity(b.len().div_ceil(3) * 4);
+    for c in b.chunks(3) {
+        let n = c
+            .iter()
+            .enumerate()
+            .fold(0u32, |n, (i, &x)| n | u32::from(x) << (16 - 8 * i));
+        for k in 0..=c.len() {
+            out.push(ABC[(n >> (18 - 6 * k) & 63) as usize] as char);
+        }
+    }
+    out
+}
+
 /// `String(v)` of a parsed JSON value (`None` = undefined).
 pub fn value_to_string(v: Option<&serde_json::Value>) -> String {
     use serde_json::Value;
@@ -253,6 +295,42 @@ impl<'de> serde::Deserialize<'de> for JsNum {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn base64_matches_node_buffer() {
+        // Buffer.from(s, "base64url").toString("hex") in Node 24
+        for (s, hex) in [
+            ("AB=CD", "00"),
+            ("A B C D", "001083"),
+            ("AAAAA", "000000"),
+            ("+/+/", "fbffbf"),
+            ("-_-_", "fbffbf"),
+            ("AA==AA", "00"),
+            ("A*AAA", "000000"),
+            ("QQ", "41"),
+            ("QQ==", "41"),
+            ("QR", "41"),
+            ("QQ=Q", "41"),
+            ("Q", ""),
+            ("", ""),
+            ("QUJD\nREVG", "414243444546"),
+            ("QUJD.REVG", "414243444546"),
+            ("a\u{e9}bc", "69b7"),
+            ("\u{141}\u{141}\u{141}\u{141}", "000000"),
+            ("QUJD\u{141}REVG", "414243011115"),
+            ("\u{c1}AAA", "0000"),
+            ("QUJD\u{1F600}REVG", "414243"),
+            ("QUJD\0REVG", "414243444546"),
+        ] {
+            let got: String = buffer_from_base64(s).iter().map(|b| format!("{b:02x}")).collect();
+            assert_eq!(got, hex, "{s:?}");
+        }
+        for len in 0..40u8 {
+            let b: Vec<u8> = (0..len).map(|i| i.wrapping_mul(97) ^ 0xa5).collect();
+            assert_eq!(buffer_from_base64(&to_base64url(&b)), b);
+        }
+        assert_eq!(to_base64url(b"\xfb\xff\xbf\x41"), "-_-_QQ");
+    }
 
     #[test]
     fn round_matches_math_round() {

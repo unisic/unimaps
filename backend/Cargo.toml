@@ -6,8 +6,10 @@ edition = "2024"
 rust-version = "1.88"
 
 [dependencies]
+aes-gcm = "0.10.3"
 bytes = "1.12.1"
 dotenvy = "0.15.7"
+hkdf = "0.12.4"
 http-body-util = "0.1.5"
 hyper = { version = "1.12.0", features = ["http1", "server", "client"] }
 hyper-util = { version = "0.1.21", features = ["tokio", "client-legacy", "http1"] }
@@ -18,10 +20,14 @@ icu_properties = { version = "2.4.0", default-features = false, features = ["com
 indexmap = { version = "2.14.2", features = ["serde"] }
 jiff = { version = "0.2.39", features = ["tzdb-bundle-always"] }
 libc = "0.2"
+p256 = { version = "0.13.2", default-features = false, features = ["ecdh", "ecdsa", "jwk", "std"] }
+rand_core = { version = "0.6.4", features = ["getrandom"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.154", features = ["float_roundtrip", "preserve_order"] }
 sha1 = "0.10.6"
+sha2 = "0.10.9"
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "signal", "process", "time", "io-util"] }
+url = "2.5.8"
 
 [profile.release]
 strip = true

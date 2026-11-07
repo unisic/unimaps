@@ -1,0 +1,460 @@
+[
+ {
+  "name": "ok",
+  "in": {
+   "endpoint": "https://fcm.googleapis.com/fcm/send/x",
+   "keys": {
+    "p256dh": "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
+    "auth": "BTBZMqHH6r4Tts7J_aSIgg"
+   }
+  },
+  "out": true
+ },
+ {
+  "name": "apple",
+  "in": {
+   "endpoint": "https://web.push.apple.com/x",
+   "keys": {
+    "p256dh": "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
+    "auth": "BTBZMqHH6r4Tts7J_aSIgg"
+   }
+  },
+  "out": true
+ },
+ {
+  "name": "wns",
+  "in": {
+   "endpoint": "https://wns2-par02p.notify.windows.com/w/?token=1",
+   "keys": {
+    "p256dh": "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
+    "auth": "BTBZMqHH6r4Tts7J_aSIgg"
+   }
+  },
+  "out": true
+ },
+ {
+  "name": "mozilla",
+  "in": {
+   "endpoint": "https://updates.push.services.mozilla.com/wpush/v2/x",
+   "keys": {
+    "p256dh": "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
+    "auth": "BTBZMqHH6r4Tts7J_aSIgg"
+   }
+  },
+  "out": true
+ },
+ {
+  "name": "http",
+  "in": {
+   "endpoint": "http://fcm.googleapis.com/x",
+   "keys": {
+    "p256dh": "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
+    "auth": "BTBZMqHH6r4Tts7J_aSIgg"
+   }
+  },
+  "out": false
+ },
+ {
+  "name": "ip",
+  "in": {
+   "endpoint": "https://127.0.0.1/x",
+   "keys": {
+    "p256dh": "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
+    "auth": "BTBZMqHH6r4Tts7J_aSIgg"
+   }
+  },
+  "out": false
+ },
+ {
+  "name": "suffix",
+  "in": {
+   "endpoint": "https://evilfcm.googleapis.com.example/x",
+   "keys": {
+    "p256dh": "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
+    "auth": "BTBZMqHH6r4Tts7J_aSIgg"
+   }
+  },
+  "out": false
+ },
+ {
+  "name": "glued",
+  "in": {
+   "endpoint": "https://xfcm.googleapis.com/x",
+   "keys": {
+    "p256dh": "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
+    "auth": "BTBZMqHH6r4Tts7J_aSIgg"
+   }
+  },
+  "out": false
+ },
+ {
+  "name": "port",
+  "in": {
+   "endpoint": "https://fcm.googleapis.com:8443/x",
+   "keys": {
+    "p256dh": "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
+    "auth": "BTBZMqHH6r4Tts7J_aSIgg"
+   }
+  },
+  "out": false
+ },
+ {
+  "name": "port 443",
+  "in": {
+   "endpoint": "https://fcm.googleapis.com:443/x",
+   "keys": {
+    "p256dh": "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
+    "auth": "BTBZMqHH6r4Tts7J_aSIgg"
+   }
+  },
+  "out": true
+ },
+ {
+  "name": "upper",
+  "in": {
+   "endpoint": "HTTPS://FCM.GoogleApis.com/x",
+   "keys": {
+    "p256dh": "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
+    "auth": "BTBZMqHH6r4Tts7J_aSIgg"
+   }
+  },
+  "out": true
+ },
+ {
+  "name": "trailing dot",
+  "in": {
+   "endpoint": "https://fcm.googleapis.com./x",
+   "keys": {
+    "p256dh": "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
+    "auth": "BTBZMqHH6r4Tts7J_aSIgg"
+   }
+  },
+  "out": false
+ },
+ {
+  "name": "userinfo",
+  "in": {
+   "endpoint": "https://u:p@fcm.googleapis.com/x",
+   "keys": {
+    "p256dh": "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
+    "auth": "BTBZMqHH6r4Tts7J_aSIgg"
+   }
+  },
+  "out": true
+ },
+ {
+  "name": "spaces",
+  "in": {
+   "endpoint": "  https://fcm.googleapis.com/x\t",
+   "keys": {
+    "p256dh": "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
+    "auth": "BTBZMqHH6r4Tts7J_aSIgg"
+   }
+  },
+  "out": true
+ },
+ {
+  "name": "backslash",
+  "in": {
+   "endpoint": "https:\\\\fcm.googleapis.com\\x",
+   "keys": {
+    "p256dh": "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
+    "auth": "BTBZMqHH6r4Tts7J_aSIgg"
+   }
+  },
+  "out": true
+ },
+ {
+  "name": "ideographic dot",
+  "in": {
+   "endpoint": "https://fcm。googleapis。com/x",
+   "keys": {
+    "p256dh": "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
+    "auth": "BTBZMqHH6r4Tts7J_aSIgg"
+   }
+  },
+  "out": true
+ },
+ {
+  "name": "not a url",
+  "in": {
+   "endpoint": "fcm.googleapis.com/x",
+   "keys": {
+    "p256dh": "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
+    "auth": "BTBZMqHH6r4Tts7J_aSIgg"
+   }
+  },
+  "out": false
+ },
+ {
+  "name": "len 1024",
+  "in": {
+   "endpoint": "https://fcm.googleapis.com/fcm/send/xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "keys": {
+    "p256dh": "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
+    "auth": "BTBZMqHH6r4Tts7J_aSIgg"
+   }
+  },
+  "out": true
+ },
+ {
+  "name": "len 1025",
+  "in": {
+   "endpoint": "https://fcm.googleapis.com/fcm/send/xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "keys": {
+    "p256dh": "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
+    "auth": "BTBZMqHH6r4Tts7J_aSIgg"
+   }
+  },
+  "out": false
+ },
+ {
+  "name": "1024 utf-16 units",
+  "in": {
+   "endpoint": "https://fcm.googleapis.com/fcm/send/x😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀a",
+   "keys": {
+    "p256dh": "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
+    "auth": "BTBZMqHH6r4Tts7J_aSIgg"
+   }
+  },
+  "out": true
+ },
+ {
+  "name": "1025 utf-16 units",
+  "in": {
+   "endpoint": "https://fcm.googleapis.com/fcm/send/x😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+   "keys": {
+    "p256dh": "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
+    "auth": "BTBZMqHH6r4Tts7J_aSIgg"
+   }
+  },
+  "out": false
+ },
+ {
+  "name": "p256dh AAAA",
+  "in": {
+   "endpoint": "https://fcm.googleapis.com/fcm/send/x",
+   "keys": {
+    "p256dh": "AAAA",
+    "auth": "BTBZMqHH6r4Tts7J_aSIgg"
+   }
+  },
+  "out": false
+ },
+ {
+  "name": "auth AAAA",
+  "in": {
+   "endpoint": "https://fcm.googleapis.com/fcm/send/x",
+   "keys": {
+    "p256dh": "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
+    "auth": "AAAA"
+   }
+  },
+  "out": false
+ },
+ {
+  "name": "auth spaced",
+  "in": {
+   "endpoint": "https://fcm.googleapis.com/fcm/send/x",
+   "keys": {
+    "p256dh": "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
+    "auth": "BTBZ MqHH 6r4T ts7J _aSI gg"
+   }
+  },
+  "out": true
+ },
+ {
+  "name": "auth padded",
+  "in": {
+   "endpoint": "https://fcm.googleapis.com/fcm/send/x",
+   "keys": {
+    "p256dh": "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
+    "auth": "BTBZMqHH6r4Tts7J_aSIgg=="
+   }
+  },
+  "out": true
+ },
+ {
+  "name": "auth number",
+  "in": {
+   "endpoint": "https://fcm.googleapis.com/fcm/send/x",
+   "keys": {
+    "p256dh": "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
+    "auth": 1
+   }
+  },
+  "out": false
+ },
+ {
+  "name": "auth missing",
+  "in": {
+   "endpoint": "https://fcm.googleapis.com/fcm/send/x",
+   "keys": {
+    "p256dh": "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4"
+   }
+  },
+  "out": false
+ },
+ {
+  "name": "p256dh standard alphabet",
+  "in": {
+   "endpoint": "https://fcm.googleapis.com/fcm/send/x",
+   "keys": {
+    "p256dh": "BCVxsr7N/eNgVRqvHtD0zTZsEc6+VV+JvLexhqUzORcxaOzi6+AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4=",
+    "auth": "BTBZMqHH6r4Tts7J_aSIgg"
+   }
+  },
+  "out": true
+ },
+ {
+  "name": "p256dh split array",
+  "in": {
+   "endpoint": "https://fcm.googleapis.com/fcm/send/x",
+   "keys": {
+    "p256dh": [
+     "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUz",
+     "ORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4"
+    ],
+    "auth": "BTBZMqHH6r4Tts7J_aSIgg"
+   }
+  },
+  "out": true
+ },
+ {
+  "name": "p256dh number",
+  "in": {
+   "endpoint": "https://fcm.googleapis.com/fcm/send/x",
+   "keys": {
+    "p256dh": 12345,
+    "auth": "BTBZMqHH6r4Tts7J_aSIgg"
+   }
+  },
+  "out": false
+ },
+ {
+  "name": "p256dh missing",
+  "in": {
+   "endpoint": "https://fcm.googleapis.com/fcm/send/x",
+   "keys": {
+    "auth": "BTBZMqHH6r4Tts7J_aSIgg"
+   }
+  },
+  "out": false
+ },
+ {
+  "name": "p256dh compressed",
+  "in": {
+   "endpoint": "https://fcm.googleapis.com/fcm/send/x",
+   "keys": {
+    "p256dh": "AiVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcx",
+    "auth": "BTBZMqHH6r4Tts7J_aSIgg"
+   }
+  },
+  "out": false
+ },
+ {
+  "name": "p256dh hybrid",
+  "in": {
+   "endpoint": "https://fcm.googleapis.com/fcm/send/x",
+   "keys": {
+    "p256dh": "BiVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
+    "auth": "BTBZMqHH6r4Tts7J_aSIgg"
+   }
+  },
+  "out": true
+ },
+ {
+  "name": "p256dh hybrid wrong parity",
+  "in": {
+   "endpoint": "https://fcm.googleapis.com/fcm/send/x",
+   "keys": {
+    "p256dh": "ByVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
+    "auth": "BTBZMqHH6r4Tts7J_aSIgg"
+   }
+  },
+  "out": false
+ },
+ {
+  "name": "p256dh tag 5",
+  "in": {
+   "endpoint": "https://fcm.googleapis.com/fcm/send/x",
+   "keys": {
+    "p256dh": "BSVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
+    "auth": "BTBZMqHH6r4Tts7J_aSIgg"
+   }
+  },
+  "out": false
+ },
+ {
+  "name": "p256dh off curve",
+  "in": {
+   "endpoint": "https://fcm.googleapis.com/fcm/send/x",
+   "keys": {
+    "p256dh": "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw8",
+    "auth": "BTBZMqHH6r4Tts7J_aSIgg"
+   }
+  },
+  "out": false
+ },
+ {
+  "name": "p256dh trailing junk",
+  "in": {
+   "endpoint": "https://fcm.googleapis.com/fcm/send/x",
+   "keys": {
+    "p256dh": "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4A",
+    "auth": "BTBZMqHH6r4Tts7J_aSIgg"
+   }
+  },
+  "out": false
+ },
+ {
+  "name": "keys array",
+  "in": {
+   "endpoint": "https://fcm.googleapis.com/fcm/send/x",
+   "keys": [
+    "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
+    "BTBZMqHH6r4Tts7J_aSIgg"
+   ]
+  },
+  "out": false
+ },
+ {
+  "name": "keys null",
+  "in": {
+   "endpoint": "https://fcm.googleapis.com/fcm/send/x",
+   "keys": null
+  },
+  "out": false
+ },
+ {
+  "name": "keys string",
+  "in": {
+   "endpoint": "https://fcm.googleapis.com/fcm/send/x",
+   "keys": "x"
+  },
+  "out": false
+ },
+ {
+  "name": "endpoint number",
+  "in": {
+   "endpoint": 1,
+   "keys": {
+    "p256dh": "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
+    "auth": "BTBZMqHH6r4Tts7J_aSIgg"
+   }
+  },
+  "out": false
+ },
+ {
+  "name": "null",
+  "in": null,
+  "out": false
+ },
+ {
+  "name": "array",
+  "in": [
+   "https://fcm.googleapis.com/fcm/send/x"
+  ],
+  "out": false
+ }
+]

@@ -20,3 +20,4 @@ pub mod shared;
 pub mod static_files;
 pub mod stop_merge;
 pub mod time;
+pub mod web_push;
