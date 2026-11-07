@@ -11,6 +11,7 @@ pub mod js;
 pub mod kb_progress;
 pub mod lines;
 pub mod logger;
+pub mod micro_cache;
 pub mod mzk_shape;
 pub mod mzk_state;
 pub mod mzk_timetable;
