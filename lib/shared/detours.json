@@ -1,0 +1,39 @@
+{
+  "detours": [
+    {
+      "id": "bielsko-piastowska",
+      "note": "Remont ul. Piastowskiej, etap od 29.09.2026 do odwołania, tylko w kierunku Hulanki (KB announcement 15375). Waypoints: GRUNWALDZKA SZPITAL MIEJSKI (replacement stop 11072), KONOPNICKIEJ SZPITAL PEDIATRYCZNY (replacement stop 11082).",
+      "lines": ["121", "122", "123", "124", "125", "127", "129", "131", "132", "133", "134"],
+      "title": "Objazd: remont ul. Piastowskiej",
+      "description": "W kierunku Ronda Hulanka trasa ulicami Listopadową, Grunwaldzką, 3 Pułku Strzelców Podhalańskich i Konopnickiej.",
+      "triggerArea": [49.815, 19.03, 49.835, 19.055],
+      "viaWaypoints": [
+        [49.823333, 19.034472],
+        [49.820083, 19.029194]
+      ],
+      "oneWay": true
+    },
+    {
+      "id": "osiek-beskidzka",
+      "note": "Remont ul. Karolina w Osieku od 23.03.2026 do odwołania (KB announcement 12172); the announcement names no detour streets, the waypoints (ul. Zielona first) are the pre-existing ones.",
+      "lines": ["141", "143"],
+      "title": "Objazd w Osieku",
+      "description": "Remont ul. Karolina: przystanki Włosień i Malec Granica nieobsługiwane, Włosień Bar przeniesiony na ul. Włosieńską.",
+      "triggerArea": [49.93, 19.24, 49.97, 19.29],
+      "viaWaypoints": [
+        [49.9455, 19.2612],
+        [49.9498, 19.2685]
+      ]
+    }
+  ],
+  "stopAdjustments": {
+    "21181": {
+      "at": [49.70298, 19.00137],
+      "note": "SZCZYRK WODOSPAD: the pole snapped onto the Olimpijska residential alley; centre of DW942 (ul. Myśliwska / Salmopolska)"
+    },
+    "21231": {
+      "at": [49.70051, 18.99644],
+      "note": "SZCZYRK WIDOKOWA: the pole snapped onto a side driveway; centre of DW942"
+    }
+  }
+}

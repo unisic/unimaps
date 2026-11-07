@@ -248,6 +248,45 @@ pub fn number(s: &str) -> f64 {
     }
 }
 
+/// `x.toFixed(digits)`: the exact binary value rounded to `digits` places, an exact tie to the larger magnitude
+/// (Rust's `{:.N}` breaks it to even: 2.5 -> "2", toFixed "3"), -0 as "0", |x| >= 1e21 and non-finite as `String(x)`.
+pub fn to_fixed(x: f64, digits: usize) -> String {
+    if !x.is_finite() || x.abs() >= 1e21 {
+        return number_to_string(x);
+    }
+    let x = x + 0.0;
+    let s = format!("{x:.digits$}");
+    // a tie shows a 5 one place further; 1100 places spell out every f64 in full
+    if !format!("{x:.p$}", p = digits + 1).ends_with('5') {
+        return s;
+    }
+    let exact = format!("{x:.1100}");
+    let dot = exact.find('.').unwrap_or(exact.len());
+    let (head, tail) = exact.split_at(dot + 1 + digits);
+    // at or past half: up in magnitude, the same as `s` except on an exact tie
+    if !tail.starts_with('5') {
+        return s;
+    }
+    let mut out = head.trim_end_matches('.').as_bytes().to_vec();
+    let mut i = out.len();
+    loop {
+        if i == 0 || !out[i - 1].is_ascii_digit() && out[i - 1] != b'.' {
+            out.insert(i, b'1');
+            break;
+        }
+        i -= 1;
+        match out[i] {
+            b'.' => {}
+            b'9' => out[i] = b'0',
+            _ => {
+                out[i] += 1;
+                break;
+            }
+        }
+    }
+    String::from_utf8(out).unwrap_or(s)
+}
+
 /// ToInt32 (an `Int32Array` store, `x | 0`): truncated, wrapped mod 2^32, NaN and infinities 0.
 pub fn to_int32(x: f64) -> i32 {
     if !x.is_finite() {

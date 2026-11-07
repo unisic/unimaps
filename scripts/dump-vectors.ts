@@ -4,6 +4,7 @@
  *   node --import tsx scripts/dump-vectors.ts
  */
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 import {
@@ -20,8 +21,10 @@ import {
 import { mzkRemapDist, mzkShapeFromCourseDetails, mzkStopIndices } from "../lib/mzk-shape";
 import { clampPlannedMonotone, hasPlannedDip, isMzkNotStarted, mzkRowTiming } from "../lib/mzk-state";
 import { estimateFixAt, kbAheadM, kbDistAlong, nextSpeed, schedSpeed } from "../lib/route-info";
+import { buildKbPattern, rawTripId, readGtfsPatternSeeds, type ResolvedStop } from "../lib/shape-patterns";
 import { finalizeShape, type ShapeSrc } from "../lib/shape-store";
 import { ALERT_LEADS, alertAction, alertMessage, type Alert } from "../lib/shared/alerts";
+import { adjustStopRoutePoint, injectDetourPoints } from "../lib/shared/detours";
 import {
   enrichKbRow,
   hhmm,
@@ -926,4 +929,108 @@ void (async () => {
   }
   write("board_rows", { rel, clock, kb, anchor: anchorTs, mzk, keys }, 0);
   write("alerts", rt(alerts), 0);
+}
+
+// Number#toFixed, lib/shared/detours.ts and lib/shape-patterns.ts: the pattern key and wpSig name every stored road
+// shape (output/shapes), so a drift here reroutes every pattern through OSRM.
+{
+  let seed = 31;
+  const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  const pick = <T>(xs: readonly T[]): T => xs[Math.floor(rnd() * xs.length)];
+
+  const fixed: Array<[number, number, string]> = [];
+  for (const x of [0.015625, 49.015625, 2.5, -2.5, 0.5, -0.5, 1.5, 9.5, 99.5, -99.5, 0.125, 0.375, 1.005, -0, 0, 1e21, 1e20, 123.456, 9.999995, -0.000001, 49.703, 19.002])
+    for (const d of [0, 1, 2, 5, 6]) fixed.push([x, d, x.toFixed(d)]);
+  for (let i = 0; i < 400; i++) {
+    const m = 1 + Math.floor(rnd() * 12);
+    const x = (Math.floor(rnd() * 200) - 100 + (2 * Math.floor(rnd() * 2 ** (m - 1)) + 1) / 2 ** m) * pick([1, 1, -1]);
+    const d = Math.floor(rnd() * 9);
+    fixed.push([x, d, x.toFixed(d)]);
+  }
+  for (let i = 0; i < 200; i++) {
+    const x = pick([49.8, 19.0, 49.95, 19.26]) + rnd() * 0.1;
+    fixed.push([x, 5, x.toFixed(5)]);
+  }
+
+  const areas: LatLng[] = [[49.825, 19.0425], [49.95, 19.265]];
+  const near: LatLng[] = [[49.823333, 19.034472], [49.820083, 19.029194], [49.9455, 19.2612], [49.9498, 19.2685]];
+  const pt = (): LatLng => {
+    if (rnd() < 0.15) {
+      const w = pick(near);
+      return [w[0] + (rnd() - 0.5) * 0.004, w[1] + (rnd() - 0.5) * 0.004];
+    }
+    const c = pick(areas);
+    return [c[0] + (rnd() - 0.5) * 0.06, c[1] + (rnd() - 0.5) * 0.08];
+  };
+  const lines = ["121", "134", " 134\t", "141", "143", "999", "", undefined];
+  const dirs = [undefined, "", "Hulanka", "BIELSKO-BIAŁA D.A."];
+  const detours = [];
+  for (let i = 0; i < 400; i++) {
+    const points = Array.from({ length: Math.floor(rnd() * 9) }, pt);
+    const line = pick(lines);
+    const dir = pick(dirs);
+    const res = injectDetourPoints(points, line, dir);
+    detours.push({ points, line: line ?? null, dir: dir ?? null, out: res.points === points ? null : res.points, id: res.detour?.id ?? null });
+  }
+  // edges of the trigger box, a segment starting and ending at one point (the forward test ties)
+  for (const points of [
+    [[49.83, 19.06], [49.82, 19.04], [49.815, 19.04], [49.81, 19.04]],
+    [[49.83, 19.06], [49.835, 19.05], [49.82, 19.03], [49.81, 19.02]],
+    [[49.84, 19.06], [49.83, 19.055], [49.82, 19.04], [49.81, 19.04]],
+    [[49.81, 19.04], [49.82, 19.04], [49.825, 19.045], [49.82, 19.04], [49.81, 19.04]],
+  ] as LatLng[][]) {
+    const res = injectDetourPoints(points, "121");
+    detours.push({ points, line: "121", dir: null, out: res.points === points ? null : res.points, id: res.detour?.id ?? null });
+  }
+  const adjust = ["21181", "21231", "1", "", undefined].map((id) => [id ?? null, adjustStopRoutePoint(id, [49.8, 19.0])]);
+
+  const stops: Record<string, ResolvedStop> = {};
+  for (let id = 1; id <= 40; id++) {
+    const [lat, lon] = pt();
+    stops[id] = { id: String(id), lat, lon };
+  }
+  stops[21181] = { id: "21181", lat: 49.703, lon: 19.002 };
+  stops[21231] = { id: "21231", lat: 49.7005, lon: 18.9965 };
+  // on the Osiek via-points: the detour applies as a banner only
+  stops[41] = { id: "41", lat: 49.9455, lon: 19.2612 };
+  stops[42] = { id: "42", lat: 49.9498, lon: 19.2685 };
+  const ids = Object.keys(stops).map(Number);
+  const resolve = (t: Record<string, unknown>): ResolvedStop | null =>
+    typeof t.designator === "number" && Object.hasOwn(stops, t.designator) ? stops[t.designator] : null;
+  const patterns = [];
+  for (let i = 0; i < 300; i++) {
+    const times = Array.from({ length: Math.floor(rnd() * 10) }, () =>
+      pick<unknown>([{ designator: pick(ids) }, { designator: pick(ids) }, { designator: pick(ids) }, { designator: "5" }, null, 5, [], {}]),
+    );
+    const line = pick(lines) ?? "17";
+    const dir = pick(dirs) ?? "X";
+    patterns.push({ times, line, dir, out: buildKbPattern(times, line, dir, resolve) });
+  }
+  for (const line of ["141", "999"]) {
+    const times = [{ designator: 41 }, { designator: 42 }];
+    patterns.push({ times, line, dir: "", out: buildKbPattern(times, line, "", resolve) });
+  }
+
+  const feed = {
+    "routes.txt": 'route_id,route_short_name\r\nR1,17\r\nR2,"1,7"\r\nR3\r\n',
+    "trips.txt":
+      'route_id,service_id,trip_id,trip_headsign\nR1,S,100_KB_SAT,Wapienica\nR1,S,100_KB_SUN,Other\nR2,S,200,"Os. ""Polskie"""\n' +
+      "R3,S,300,\nR9,S,400,Ghost\nR1,S,_500,Lead\n\nR1,S,600,Wapienica\nR1,S,800,Wapienica\nR1,S,900,Far\nR1,S,950,Shuffled\n",
+    "stop_times.txt":
+      "trip_id,arrival_time,departure_time,stop_id,stop_sequence\n" +
+      ["100_KB_SAT,,,11,0", "100_KB_SAT,,,12,1", "100_KB_SUN,,,13,1", "100_KB_SUN,,,x,0", "200,,,21,0", "200,,,23,2",
+        "300,,,31,1.5", "300,,,32,-1", "300,,,33,501", "300,,,34, 3 ", "300,,,,4", "300,,,0x1F,5", "300,,,abc,6",
+        "400,,,41,0", "400,,,42,1", "_500,,,51,0", "_500,,,52,1", "600,,,11,0", "600,,,13,1", "700,,,71,0", "800,,,11,0",
+        "800,,,13,1", "800,,,1.5,2", "800,,,-0,3", "800,,,1e3,4", "900,,,91,0", "900,,,92,500",
+        // duplicate sequences in shuffled order: only a stable sort keeps the last row per sequence
+        ...Array.from({ length: 60 }, (_, i) => `950,,,${100 + i},${(i * 7) % 30}`)].join("\r\n") + "\r\n",
+  };
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "kb-seeds-"));
+  for (const [name, text] of Object.entries(feed)) fs.writeFileSync(path.join(dir, name), text);
+  const crafted = readGtfsPatternSeeds(dir);
+  fs.rmSync(dir, { recursive: true });
+  const fixture = readGtfsPatternSeeds(path.join("test", "fixtures", "gtfs"));
+  const raw = ["35678182_KB_SATURDAY", "35678182", "_5", "", "a_b_c"].map((t) => [t, rawTripId(t)]);
+
+  write("shape_patterns", { fixed, detours, adjust, stops, patterns, feed, crafted, fixture, raw }, 0);
 }

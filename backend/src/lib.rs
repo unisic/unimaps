@@ -15,6 +15,7 @@ pub mod mzk_timetable;
 pub mod rate_limit;
 pub mod route_info;
 pub mod router;
+pub mod shape_patterns;
 pub mod shape_store;
 pub mod shared;
 pub mod static_files;

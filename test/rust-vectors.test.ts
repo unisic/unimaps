@@ -1,6 +1,6 @@
 /**
  * The golden vectors backend/tests/*.rs check the Rust port against, read back through the TS: a change to the
- * shared departure or alert logic fails here until `node --import tsx scripts/dump-vectors.ts` is rerun, and the
+ * shared departure, alert or detour logic fails here until `node --import tsx scripts/dump-vectors.ts` is rerun, and the
  * regenerated vectors then fail the Rust tests until backend/src/shared is changed the same way.
  */
 import assert from "node:assert/strict";
@@ -19,6 +19,8 @@ import {
   rowKey,
   type TimingRow,
 } from "@/lib/shared/departures";
+import { injectDetourPoints } from "@/lib/shared/detours";
+import type { LatLng } from "@/lib/shared/polyline";
 
 const read = (name: string) => JSON.parse(fs.readFileSync(`backend/tests/vectors/${name}.json`, "utf8"));
 const json = (x: unknown) => JSON.stringify(x);
@@ -50,5 +52,14 @@ test("alerts vectors: alertAction and alertMessage", () => {
     const action = alertAction(c.alert as Alert, c.rows as TimingRow[], c.now);
     assert.deepEqual(action, c.action);
     assert.equal(json(alertMessage(c.alert as Alert, action)), json(c.message));
+  }
+});
+
+test("shape_patterns vectors: injectDetourPoints", () => {
+  for (const c of read("shape_patterns").detours) {
+    const points = c.points as LatLng[];
+    const res = injectDetourPoints(points, c.line ?? undefined, c.dir ?? undefined);
+    assert.deepEqual(res.points === points ? null : res.points, c.out, json(c));
+    assert.equal(res.detour?.id ?? null, c.id, json(c));
   }
 });

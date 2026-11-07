@@ -3,6 +3,7 @@
 pub mod alerts;
 pub mod cities;
 pub mod departures;
+pub mod detours;
 pub mod fleet;
 pub mod gzm_stop_key;
 pub mod polyline;
