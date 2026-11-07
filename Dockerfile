@@ -19,7 +19,8 @@ WORKDIR /src/backend
 COPY backend/Cargo.toml backend/Cargo.lock ./
 COPY backend/src ./src
 # data shared with the TypeScript side, compiled in with include_str!
-COPY lib/shared/cities.json /src/lib/shared/
+COPY lib/shared/cities.json lib/shared/detours.json /src/lib/shared/
+COPY lib/mzk-fleet.json /src/lib/
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/backend/target \
     cargo build --release --locked && cp target/release/unimaps /unimaps
