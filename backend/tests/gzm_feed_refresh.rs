@@ -129,7 +129,7 @@ async fn downloads_once_restarts_from_the_kept_zip_and_reports_a_failing_city() 
     start_gzm_feed("broken");
     wait_for("the failure", || !gzm_feed_health("broken")["last_error"].is_null()).await;
     let h = gzm_feed_health("broken");
-    assert_eq!(h["last_error"], "GZM GTFS HTTP 500");
+    assert_eq!(h["last_error"], "Error: GZM GTFS HTTP 500");
     assert_eq!(h["version"], Value::Null);
     assert!(get_gzm_feed("broken").is_none());
     stop_gzm_feed("broken");

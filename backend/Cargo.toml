@@ -22,7 +22,8 @@ jiff = { version = "0.2.39", features = ["tzdb-bundle-always"] }
 libc = "0.2"
 p256 = { version = "0.13.2", default-features = false, features = ["ecdh", "ecdsa", "jwk", "std"] }
 rand_core = { version = "0.6.4", features = ["getrandom"] }
-reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider"] }
+# brotli, gzip, deflate: Node's fetch asks for and decodes them (zbiorkom answers ~8.6x smaller)
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider", "brotli", "gzip", "deflate"] }
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.154", features = ["float_roundtrip", "preserve_order"] }

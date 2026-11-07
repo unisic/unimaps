@@ -23,6 +23,7 @@ use serde_json::{Value, json};
 use sha1::{Digest, Sha1};
 
 use crate::config;
+use crate::fetch::{fetch_error, string_err};
 use crate::gtfs_csv::{DROP_OFF_ON_REQUEST, PICKUP_ON_REQUEST, col, field, parse_csv_line, pickup_flags};
 use crate::gzm_match::MATCHER;
 use crate::js::{self, JsNum};
@@ -1378,7 +1379,10 @@ pub async fn download_gzm_zip(
             .map_err(|e| e.to_string())?;
         req = req.header("If-Modified-Since", date);
     }
-    let mut res = req.send().await.map_err(|e| e.to_string())?;
+    let mut res = req
+        .send()
+        .await
+        .map_err(|e| fetch_error(&e, "TypeError: fetch failed"))?;
     let status = res.status().as_u16();
     if status == 304 {
         return Ok(None);
@@ -1399,7 +1403,11 @@ pub async fn download_gzm_zip(
     let mut out = BufWriter::with_capacity(64 * 1024, File::create(&tmp).map_err(|e| e.to_string())?);
     let mut bytes = 0u64;
     let body: Result<(), String> = async {
-        while let Some(chunk) = res.chunk().await.map_err(|e| e.to_string())? {
+        while let Some(chunk) = res
+            .chunk()
+            .await
+            .map_err(|e| fetch_error(&e, "TypeError: terminated"))?
+        {
             bytes += chunk.len() as u64;
             if bytes > max_bytes {
                 return Err(size_cap());
@@ -1582,6 +1590,7 @@ async fn refresh(slug: &str, epoch: u64) {
             s.last_error = None;
         }
         Err(e) => {
+            let e = string_err(e);
             s.refresh.retry_at = now + RETRY_MS;
             warn(
                 "gzm-feed",

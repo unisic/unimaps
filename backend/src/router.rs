@@ -79,6 +79,11 @@ pub struct ConnectionLeg {
     /// the trip's live delay (s) its times already include: the vehicle is running
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delay_sec: Option<i32>,
+    /// set by a zbiorkom city's search ("GZM" = the seconds dialect)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operator: Option<&'static str>,
+    #[serde(rename = "shape_id", skip_serializing_if = "Option::is_none")]
+    pub shape_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -1672,6 +1677,8 @@ fn to_itinerary(
                 stops: build_leg_stops(trip, board, alight, idx, dep),
                 walk_mins: (i > 0).then(|| mins(ride.walk_secs)),
                 delay_sec: delay,
+                operator: None,
+                shape_id: None,
             }
         })
         .collect();

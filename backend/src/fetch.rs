@@ -13,3 +13,24 @@ pub fn client() -> &'static reqwest::Client {
             .expect("the TLS client config is static")
     })
 }
+
+/// `String(err)` of undici's fetch (Node 22) when it gave up on a request or a body read.
+pub fn fetch_error(e: &reqwest::Error, otherwise: &str) -> String {
+    if e.is_timeout() {
+        "TimeoutError: The operation was aborted due to timeout".into()
+    } else {
+        otherwise.into()
+    }
+}
+
+/// `String(err)` of the TS catch: a bare message is a thrown `Error`'s; a fetch or JSON failure names its class.
+pub fn string_err(err: String) -> String {
+    if ["TypeError: ", "TimeoutError: ", "SyntaxError: "]
+        .iter()
+        .any(|class| err.starts_with(class))
+    {
+        err
+    } else {
+        format!("Error: {err}")
+    }
+}

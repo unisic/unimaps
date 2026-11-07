@@ -1,9 +1,13 @@
 //! Per-vehicle route math the pollers attach to positions for the client motion engine, port of the pure part of
-//! `lib/route-info.ts` (`vehicleExtras` comes with the vehicle positions).
+//! `lib/route-info.ts`.
 
-use crate::js::round1;
+use serde_json::{Map, Value};
+
+use crate::js::{num_value, round, round1};
+use crate::kb_progress::DelaySrc;
 use crate::shape_store::{ShapeGeometry, ShapeSrc};
 use crate::shared::polyline::project_on_polyline;
+use crate::vehicle::VehiclePos;
 
 /// The previous fix of a vehicle as `estimate_fix_at` reads it.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -167,4 +171,68 @@ pub fn sched_speed(stops: &[Option<f64>], times: &[Option<f64>], d: f64) -> Opti
     }
     let v = (at(j).unwrap().0 - at(i).unwrap().0) / span(i, j);
     (v > 0.0 && v <= 30.0).then_some(v)
+}
+
+/// Maps a shape key to its wire id (`<key>.<rev6>`).
+pub type WireIdFn<'a> = dyn Fn(&str) -> Option<String> + 'a;
+
+/// `vehicleExtras`: the route-info wire fields appended to `vehicle_to_json`, keys in its order.
+pub fn vehicle_extras(v: &VehiclePos, wire_id: Option<&WireIdFn>, now_epoch: f64) -> Map<String, Value> {
+    let mut out = Map::new();
+    if let Some(f) = v.fix_at.filter(|f| f.is_finite()) {
+        out.insert("fix_at".into(), num_value(round1(f)));
+    }
+    if let Some(s) = v.next_stop_seq {
+        out.insert("next_stop_seq".into(), s.into());
+    }
+    let src = match v.delay_src {
+        Some(DelaySrc::Gps) => Some("gps"),
+        Some(DelaySrc::GpsHeld) => Some("gps-held"),
+        Some(DelaySrc::Unknown) => Some("unknown"),
+        Some(DelaySrc::Est) | None => None,
+    };
+    if let Some(s) = src {
+        out.insert("delay_src".into(), s.into());
+    }
+    if let Some(g) = v.geo_last_seq.filter(|&g| g >= 0) {
+        out.insert("geo_seq".into(), g.into());
+    }
+    if v.not_started {
+        out.insert("not_started".into(), true.into());
+    }
+    if let Some(s) = v.sched_trip_id.as_ref().filter(|s| !s.is_empty()) {
+        out.insert("sched_trip_id".into(), s.clone().into());
+    }
+    if let Some(a) = v.agency.as_ref().filter(|a| !a.is_empty()) {
+        out.insert("agency".into(), a.clone().into());
+    }
+    if v.scheduled {
+        out.insert("scheduled".into(), true.into());
+    }
+    // a course not begun is not on its shape yet (a layover, the run from the depot): no along-route motion
+    if v.not_started {
+        return out;
+    }
+    if let (Some(s), Some(at)) = (v.speed.filter(|s| s.is_finite()), v.speed_at)
+        && now_epoch - at <= 90.0
+    {
+        out.insert("speed".into(), num_value(round1(s)));
+    }
+    if let Some(s) = v.sched_speed.filter(|s| s.is_finite()) {
+        out.insert("sched_speed".into(), num_value(round1(s)));
+    }
+    if let (Some(wire_id), Some(key)) = (wire_id, v.shape_key.as_deref().filter(|k| !k.is_empty()))
+        && let Some(id) = wire_id(key).filter(|id| !id.is_empty())
+    {
+        // `id.slice(-6)`: the rev is ASCII hex
+        let tail = id.char_indices().rev().nth(5).map_or(id.as_str(), |(i, _)| &id[i..]);
+        let dist = v
+            .dist_m
+            .filter(|d| d.is_finite() && v.dist_rev.as_deref() == Some(tail));
+        out.insert("shape".into(), id.into());
+        if let Some(d) = dist {
+            out.insert("dist_m".into(), num_value(round(d)));
+        }
+    }
+    out
 }
