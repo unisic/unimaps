@@ -24,11 +24,12 @@ export interface GtfsTripMeta {
 const CACHE_KEY = Symbol.for("kb-gtfs.gtfs-trips-cache");
 const g = globalThis as typeof globalThis & { [CACHE_KEY]?: Map<string, GtfsTripMeta> | null };
 
-function compute(): Map<string, GtfsTripMeta> {
+/** Upstream trip id -> line + headsign of the feed in `dir`; empty while its trips.txt is missing. */
+export function readGtfsTrips(dir: string): Map<string, GtfsTripMeta> {
   const out = new Map<string, GtfsTripMeta>();
   let text: string;
   try {
-    text = fs.readFileSync(path.join(config.GTFS_DIR, "trips.txt"), "utf-8");
+    text = fs.readFileSync(path.join(dir, "trips.txt"), "utf-8");
   } catch {
     return out; // no feed → no lookup
   }
@@ -59,7 +60,7 @@ function compute(): Map<string, GtfsTripMeta> {
 
 /** Line + headsign of an upstream KB trip id; null when the feed doesn't know it (new trip, no feed yet). */
 export function gtfsTripMeta(tripId: string | number): GtfsTripMeta | null {
-  return (g[CACHE_KEY] ??= compute()).get(String(tripId)) ?? null;
+  return (g[CACHE_KEY] ??= readGtfsTrips(config.GTFS_DIR)).get(String(tripId)) ?? null;
 }
 
 /** Drop the cache after a GTFS rebuild so the next read sees the new feed. */

@@ -26,10 +26,11 @@ export interface LineInfo {
 const CACHE_KEY = Symbol.for("kb-gtfs.lines-cache");
 const g = globalThis as typeof globalThis & { [CACHE_KEY]?: LineInfo[] | null };
 
-function compute(): LineInfo[] {
+/** The catalog of the feed in `dir`, sorted by line number; [] while its routes.txt is missing. */
+export function readLines(dir: string): LineInfo[] {
   let text: string;
   try {
-    text = fs.readFileSync(path.join(config.GTFS_DIR, "routes.txt"), "utf-8");
+    text = fs.readFileSync(path.join(dir, "routes.txt"), "utf-8");
   } catch {
     return []; // no feed → no catalog
   }
@@ -52,7 +53,7 @@ function compute(): LineInfo[] {
 
 /** Lazily computed, process-lifetime cache of the GTFS line catalog. */
 export function getLines(): LineInfo[] {
-  return (g[CACHE_KEY] ??= compute());
+  return (g[CACHE_KEY] ??= readLines(config.GTFS_DIR));
 }
 
 /** Drop the cache after a GTFS rebuild so the next read sees the new feed. */

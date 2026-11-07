@@ -89,8 +89,8 @@ function clusterRoadDirections(bearings: number[]): number[] {
 const CACHE_KEY = Symbol.for("kb-gtfs.stop-directions-cache");
 const g = globalThis as typeof globalThis & { [CACHE_KEY]?: Map<string, number[]> | null };
 
-function compute(): Map<string, number[]> {
-  const dir = config.GTFS_DIR;
+/** stop_id -> up to two bearings of the feed in `dir`; empty while its stops or stop_times are missing. */
+export function readStopDirections(dir: string): Map<string, number[]> {
   const result = new Map<string, number[]>();
   let stopsTxt: string;
   let timesTxt: string;
@@ -193,7 +193,7 @@ function compute(): Map<string, number[]> {
 
 /** Lazily computed, process-lifetime cache of stop_id → up to two bearings. */
 export function getStopDirections(): Map<string, number[]> {
-  return (g[CACHE_KEY] ??= compute());
+  return (g[CACHE_KEY] ??= readStopDirections(config.GTFS_DIR));
 }
 
 /** Drop the cache after a GTFS rebuild so the next read sees the new feed. */

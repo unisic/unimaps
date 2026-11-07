@@ -1034,3 +1034,123 @@ void (async () => {
 
   write("shape_patterns", { fixed, detours, adjust, stops, patterns, feed, crafted, fixture, raw }, 0);
 }
+
+// lib/lines.ts, lib/gtfs-trips.ts, lib/stop-directions.ts: the three feed readers on the fixture feed and on crafted
+// feeds (CRLF, quotes, short rows, BOM headers, missing columns, odd stop_sequence cells, station names, seeded hubs
+// whose trips leave the main way and the opposite way in varying numbers). Dynamic imports: lib/config must load after
+// the router block set KB_GTFS_DIR.
+void (async () => {
+  const { readLines } = await import("../lib/lines");
+  const { readGtfsTrips } = await import("../lib/gtfs-trips");
+  const { readStopDirections } = await import("../lib/stop-directions");
+  let seed = 37;
+  const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  const int = (n: number) => Math.floor(rnd() * n);
+  const read = (dir: string) => ({
+    lines: readLines(dir),
+    trips: Object.fromEntries(readGtfsTrips(dir)),
+    dirs: Object.fromEntries(readStopDirections(dir)),
+  });
+
+  const edge: Record<string, string> = {
+    "routes.txt": [
+      "route_id,agency_id,route_short_name,route_long_name",
+      "L_10,KB,10,KANIÓW", "L_2,KB,2,\"BYSTRA, SZKOŁA\"", ",KB,7,NO ID", "L_X,KB,,NO NAME", "L_S,KB,8",
+      "L_1A,KB,1A,A", "L_01,KB,01,B", "L_N1,KB,N1,C", "L_Z,KB,Ż1,D", "L_a,KB,a,E", "L_B,KB,B,F", "L_10b,KB,10,DUP",
+      "", "L_100,KB,100,\"Q \"\"X\"\"\"",
+    ].join("\r\n"),
+    "trips.txt": [
+      "route_id,service_id,trip_id,trip_headsign,trip_short_name",
+      "L_5,KB_SAT,123_KB_SAT,A,", "L_5,KB_SAT,124_KB_X,B,", "L_5,S,_S,C,", "X_L_5,S,200,D,", "L_,S,201,E,",
+      "L_,S,202,F,", "L_7,S,202,G,", "L_7,S,202,H,77", "L_9,KB_SUN,123_KB_SUN,I,9", "L_9", "L_9,S,203",
+      "L_9,S,,J,9", "L_9,S,\"204,5\",\"K, L\",9", "L_9,,205_,M,", "L_1,KB,300_KB,N,1x", "L_L_5,S,206,O,",
+    ].join("\r\n"),
+    "stops.txt": [
+      "stop_id,stop_name,stop_lat,stop_lon,location_type",
+      "1,PLAIN,49.800000,19.000000,0", "2,EAST,49.800000,19.010000,0", "3,NORTH,49.810000,19.000000,0",
+      "4,BIELSKO-BIAŁA D.A.,49.805000,19.005000,0", "5,KĘTY D.A,49.806000,19.006000,0",
+      "6,X (D.A.),49.807000,19.007000,0", "7,dworzec  autobusowy,49.808000,19.008000,0",
+      "8,Dworzec Autobusowy Bystra,49.809000,19.009000,0", "9,XD.A.,49.801000,19.001000,0",
+      "10,D.A.B,49.802000,19.002000,0", "11,a.D.A.,49.803000,19.003000,0", "12,DWORZEC AUTOBUSOWYX,49.804000,19.004000,0",
+      "13,HUB,49.799000,18.999000,1", "14,EMPTY LAT,,19.000000,0", "15,NAN,abc,19.000000,0", "16,SHORT,49.79",
+      "17,DUP,49.700000,19.000000,0", "17,DUP,49.790000,19.020000,0", ",NO ID,49.8,19.0,0", "18,\"Q, D.A.\",49.811,19.011,0",
+      "19,D.A.),49.812,19.012,0", "20,(DWORZEC\tAUTOBUSOWY),49.813,19.013,0", "21,D.A..,49.814,19.014,0",
+      "22, 49.815 ,  49.815 , 19.015 ,0", "23,KĘTY D.A.\u2003X,49.816,19.016,0", "24,DWORZECAUTOBUSOWY,49.817,19.017,0",
+      "30,M0,49.75,19.1", "31,M1,49.76,19.1", "32,M2,49.76,19.11", "33,N0,49.74,19.1", "34,N1,49.74,19.12", "35,L0,49.73,19.1",
+      // 40: one trip at ~52 degrees, its mirror at ~308 and one due north, which is 52 off both cluster means
+      "40,T,49.9,19.5", "41,,49.89,19.48", "42,,49.91,19.52", "43,,49.89,19.52", "44,,49.91,19.48", "45,,49.89,19.5",
+      "46,,49.91,19.5",
+    ].join("\r\n"),
+    "stop_times.txt": [
+      "trip_id,arrival_time,departure_time,stop_id,stop_sequence",
+      "a,,,1,0", "a,,,2,1", "a,,,3,2", "b,,,3,0", "b,,,1,1", "b,,,2,2", "c,,,2,5", "c,,,1,0x1", "c,,,17,1e1",
+      "d,,,1,", "d,,,2,1.5", "d,,,3, 2 ", "d,,,1,-1", "e,,,1,0", "e,,,1,1", "e,,,2,2", "f,,,1,0", "f,,,9,1", "f,,,2,2",
+      "g,,,4,0", "g,,,5,1", "g,,,6,2", "g,,,7,3", "g,,,8,4", "g,,,9,5", "g,,,10,6", "g,,,11,7", "g,,,12,8", "g,,,13,9",
+      "g,,,18,10", "g,,,19,11", "g,,,20,12", "g,,,21,13", "g,,,22,14", "g,,,1,15", "h,,,14,0", "h,,,15,1", "h,,,16,2",
+      "h,,,99,3", "h,,,3,4", "i,,,2,1", "i,,,3,1", "i,,,1,1", ",,,1,0", "j,,,,0", "j,,,2,x", "k,,,3,0",
+      "g,,,23,16", "g,,,24,17", "g,,,2,18", "l,,,35,0", "l,,,14,1", "m,,,30,0", "m,,,31,", "m,,,32,1", "n,,,34,0",
+      "n,,,33,-0", "o1,,,41,0", "o1,,,40,1", "o1,,,42,2", "o2,,,43,0", "o2,,,40,1", "o2,,,44,2", "o3,,,45,0", "o3,,,40,1",
+      "o3,,,46,2",
+    ].join("\r\n"),
+  };
+  const sparse: Record<string, string> = {
+    "routes.txt": "route_short_name,route_id\n5,L_5\n4,L_4\n",
+    "trips.txt": "trip_id,route_id\n1,L_5\n2,5\n3,L_\n",
+    "stops.txt": "stop_lat,stop_lon,stop_id\n49.8,19.0,a\n49.81,19.0,b\n49.82,19.01,c\n",
+    "stop_times.txt": "stop_sequence,stop_id,trip_id\n0,a,t\n1,b,t\n2,c,t\n",
+  };
+  const bom: Record<string, string> = Object.fromEntries(Object.entries(sparse).map(([k, v]) => [k, `﻿${v}`]));
+  const routesOnly: Record<string, string> = { "routes.txt": "route_id,route_short_name\nL_1,1\n", "stops.txt": "stop_id\n" };
+  const empty: Record<string, string> = { "routes.txt": "", "trips.txt": "", "stops.txt": "", "stop_times.txt": "" };
+
+  // hubs: `main` trips through the hub at one heading, `opp` 60-180 degrees off it, `noise` anywhere
+  const hubStops: string[] = ["stop_id,stop_name,stop_lat,stop_lon"];
+  const hubTimes: string[] = ["trip_id,stop_id,stop_sequence"];
+  const hubTrips: string[] = ["route_id,service_id,trip_id,trip_headsign,trip_short_name"];
+  let next = 1000;
+  for (let h = 0; h < 60; h++) {
+    const lat = 49.7 + int(3000) / 10000;
+    const lon = 18.9 + int(3000) / 10000;
+    hubStops.push(`H${h},HUB ${h},${lat.toFixed(6)},${lon.toFixed(6)}`);
+    const heading = int(360);
+    const groups: Array<[number, number]> = [
+      [1 + int(25), heading],
+      [int(7), heading + 60 + int(241)],
+      [int(4), int(360)],
+    ];
+    for (const [n, base] of groups) {
+      for (let k = 0; k < n; k++) {
+        const a = ((base + int(41) - 20) * Math.PI) / 180;
+        const d = 0.002 + int(20) / 10000;
+        const trip = `${int(1000)}t${next++}`;
+        const [p, q] = [`p${next}`, `q${next}`];
+        hubStops.push(`${p},P,${(lat - d * Math.cos(a)).toFixed(6)},${(lon - d * Math.sin(a)).toFixed(6)}`);
+        hubStops.push(`${q},Q,${(lat + d * Math.cos(a)).toFixed(6)},${(lon + d * Math.sin(a)).toFixed(6)}`);
+        const calls = int(5) === 0 ? [`H${h}`, q] : int(5) === 0 ? [p, `H${h}`] : [p, `H${h}`, q];
+        // shuffled rows: the reader orders a trip by stop_sequence, file order breaks ties
+        const rows = calls.map((s, i) => `${trip},${s},${i * (1 + int(3))}`);
+        for (let i = rows.length - 1; i > 0; i--) {
+          const j = int(i + 1);
+          [rows[i], rows[j]] = [rows[j], rows[i]];
+        }
+        hubTimes.push(...rows);
+        hubTrips.push(`L_${int(40)},S${int(3)},${int(4) === 0 ? `${trip}_S1` : trip},HEAD ${int(9)},${int(3) === 0 ? "" : int(40)}`);
+      }
+    }
+  }
+  const hubs: Record<string, string> = {
+    "routes.txt": `route_id,route_short_name,route_long_name\n${Array.from({ length: 40 }, (_, i) => `L_${i},${int(3) === 0 ? `N${int(4)}` : int(12)},T${i}`).join("\n")}\n`,
+    "trips.txt": `${hubTrips.join("\n")}\n`,
+    "stops.txt": `${hubStops.join("\n")}\n`,
+    "stop_times.txt": `${hubTimes.join("\n")}\n`,
+  };
+
+  const feeds = [edge, sparse, bom, routesOnly, empty, hubs].map((files) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "kb-tables-"));
+    for (const [name, text] of Object.entries(files)) fs.writeFileSync(path.join(dir, name), text);
+    const out = { files, ...read(dir) };
+    fs.rmSync(dir, { recursive: true });
+    return out;
+  });
+  write("gtfs_tables", { fixture: read(path.join("test", "fixtures", "gtfs")), feeds }, 0);
+})();

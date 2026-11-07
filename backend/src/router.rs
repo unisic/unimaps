@@ -12,7 +12,7 @@ use icu_properties::props::{GeneralCategory, GeneralCategoryGroup};
 use indexmap::{IndexMap, IndexSet};
 use serde::Serialize;
 
-use crate::gtfs_csv::{NO_DROP_OFF, NO_PICKUP, col, parse_csv_line, split_lines};
+use crate::gtfs_csv::{NO_DROP_OFF, NO_PICKUP, col, field, parse_csv_line, read_text, split_lines};
 use crate::js::{self, JsNum};
 use crate::shared::fleet::fold_text;
 
@@ -498,17 +498,6 @@ pub fn call_columns(trip: &mut TripEntry, mut calls: Vec<TripStopEntry>, pool: &
     trip.dep = dep;
     trip.stop_ids = stop_ids;
     trip.seqs = seqs;
-}
-
-fn read_text(file: &Path) -> Option<String> {
-    std::fs::read(file)
-        .ok()
-        .map(|b| String::from_utf8_lossy(&b).into_owned())
-}
-
-/// `f[i]` of a CSV row, None for a missing column or a short row.
-fn field(f: &[String], i: Option<usize>) -> Option<&str> {
-    f.get(i?).map(String::as_str)
 }
 
 /// `Number(f) || 0`

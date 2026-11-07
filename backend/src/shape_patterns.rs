@@ -4,14 +4,13 @@
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
-use std::fs;
 use std::path::Path;
 
 use indexmap::IndexMap;
 use serde_json::{Map, Value};
 use sha1::{Digest as _, Sha1};
 
-use crate::gtfs_csv::{col, parse_csv_line, split_lines};
+use crate::gtfs_csv::{col, field, read_text, table};
 use crate::js::{self, num_value, number_to_string, to_fixed};
 use crate::shared::detours::{adjust_stop_route_point, inject_detour_points};
 use crate::shared::polyline::LatLng;
@@ -114,30 +113,12 @@ pub fn raw_trip_id(gtfs_trip_id: &str) -> &str {
     }
 }
 
-/// `f[i]` of a parsed row: None for a missing column or a short row (undefined in the TS).
-fn field(f: &[String], i: Option<usize>) -> Option<&str> {
-    f.get(i?).map(String::as_str)
-}
-
-/// One parsed table: the header and every non-empty row.
-fn table(text: &str) -> (Vec<String>, Vec<Vec<String>>) {
-    let lines = split_lines(text);
-    let header = parse_csv_line(lines.first().copied().unwrap_or(""));
-    let rows = lines
-        .iter()
-        .skip(1)
-        .filter(|l| !l.is_empty())
-        .map(|l| parse_csv_line(l))
-        .collect();
-    (header, rows)
-}
-
 /// `readGtfsPatternSeeds`: distinct stop patterns of a built GTFS feed (grouped by line, headsign and stop
 /// sequence), in first-seen stop_times order. Missing files yield []. Reads the three files whole (BB stop_times is
 /// a few MB) and holds one row list per trip until grouped.
 pub fn read_gtfs_pattern_seeds(gtfs_dir: &Path) -> Vec<GtfsSeed> {
-    let read = |name: &str| fs::read(gtfs_dir.join(name)).map(|b| String::from_utf8_lossy(&b).into_owned());
-    let (Ok(trips_txt), Ok(times_txt), Ok(routes_txt)) =
+    let read = |name: &str| read_text(&gtfs_dir.join(name));
+    let (Some(trips_txt), Some(times_txt), Some(routes_txt)) =
         (read("trips.txt"), read("stop_times.txt"), read("routes.txt"))
     else {
         return Vec::new();
