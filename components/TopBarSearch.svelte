@@ -156,6 +156,7 @@
     EyeSlashIcon,
     FunnelSimpleXIcon,
     GpsFixIcon,
+    HeartIcon,
     LeafIcon,
     LightningIcon,
     MagnifyingGlassIcon,
@@ -385,6 +386,15 @@
         icon: BugIcon,
         run: () => {
           window.open("https://github.com/unisic/unimaps/issues/new", "_blank", "noopener");
+        },
+      },
+      {
+        id: "donate",
+        label: "Wesprzyj nas",
+        keywords: "wesprzyj wsparcie wspomoz dotacja darowizna donate kawa buy me a coffee",
+        icon: HeartIcon,
+        run: () => {
+          window.open("https://buymeacoffee.com/unisic", "_blank", "noopener,noreferrer");
         },
       },
     ];

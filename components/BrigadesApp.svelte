@@ -38,7 +38,7 @@
   import { onMount, type Snippet } from "svelte";
 
   import Icon from "@/components/Icon.svelte";
-  import { CaretLeftIcon } from "@/components/icon-paths";
+  import { CaretLeftIcon, HeartIcon } from "@/components/icon-paths";
   import { localUpdatedAt, readBrygadyCity, type FleetStats } from "@/lib/client/fleet";
   import { useFleet } from "@/lib/client/fleet.svelte";
 
@@ -258,6 +258,16 @@
       {#if fleet.data}
         {@render liveClock(localUpdatedAt(fleet.data))}
       {/if}
+      <a
+        href="https://buymeacoffee.com/unisic"
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label="Wesprzyj nas"
+        title="Wesprzyj nas"
+        class="grid h-11 w-11 shrink-0 place-items-center rounded-full text-primary transition-colors hover:bg-tint/8"
+      >
+        <Icon icon={HeartIcon} weight="fill" />
+      </a>
     </div>
   </header>
   <main class="mx-auto w-full max-w-6xl px-4 pb-[max(2.5rem,env(safe-area-inset-bottom))] pt-4">
