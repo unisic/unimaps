@@ -13,6 +13,31 @@ pub fn round(x: f64) -> f64 {
     if x - f >= 0.5 { f + 1.0 } else { f }
 }
 
+/// `Math.hypot(a, b)` as V8 computes it: scaled to the larger value, squares summed with Kahan compensation.
+/// `f64::hypot` (libm) differs in the last bit, which shifts polyline chainages and every value derived from them.
+pub fn hypot(a: f64, b: f64) -> f64 {
+    let (a, b) = (a.abs(), b.abs());
+    if a.is_infinite() || b.is_infinite() {
+        return f64::INFINITY;
+    }
+    if a.is_nan() || b.is_nan() {
+        return f64::NAN;
+    }
+    let max = a.max(b);
+    if max == 0.0 {
+        return 0.0;
+    }
+    let (mut sum, mut comp) = (0.0_f64, 0.0_f64);
+    for v in [a, b] {
+        let n = v / max;
+        let summand = n * n - comp;
+        let pre = sum + summand;
+        comp = (pre - sum) - summand;
+        sum = pre;
+    }
+    sum.sqrt() * max
+}
+
 /// `\s` of a JS regular expression (WhiteSpace + LineTerminator). `char::is_whitespace` differs: it takes U+0085
 /// and not U+FEFF.
 pub fn is_space(c: char) -> bool {
@@ -143,6 +168,26 @@ mod tests {
         }
         assert!(round(f64::NAN).is_nan());
         assert_eq!(round(f64::INFINITY), f64::INFINITY);
+    }
+
+    /// values from node 22, each pair one where `sqrt(a*a + b*b)` misses V8's last bit
+    #[test]
+    fn hypot_matches_math_hypot() {
+        for (a, b, want) in [
+            (970.5605571952469, -2007.3521123301946, 2229.6749310291043),
+            (422.9199911574466, 4870.918993778024, 4889.244641339615),
+            (1721.8542130300095, 292.0293832626331, 1746.4429826415599),
+            (4240.134958755289, 3095.7877673654766, 5250.013939888964),
+            (2412.2369323914118, -4362.870454491522, 4985.331044240511),
+            (-2961.0133161586773, 3923.189942223574, 4915.182517591103),
+            (0.0, -0.0, 0.0),
+            (-3.0, 4.0, 5.0),
+            (1e300, 1e300, 1.4142135623730952e300),
+        ] {
+            assert_eq!(hypot(a, b), want, "{a} {b}");
+        }
+        assert_eq!(hypot(f64::NAN, f64::INFINITY), f64::INFINITY);
+        assert!(hypot(f64::NAN, 1.0).is_nan());
     }
 
     #[test]

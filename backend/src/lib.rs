@@ -7,6 +7,7 @@ pub mod geo;
 pub mod gtfs_csv;
 pub mod http;
 pub mod js;
+pub mod kb_progress;
 pub mod logger;
 pub mod mzk_timetable;
 pub mod rate_limit;

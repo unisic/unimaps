@@ -237,7 +237,7 @@ pub fn project_on_polyline(
             s = s.max(lo).min(hi);
             t = if seg_len > 0.0 { (s - pl.cum[i]) / seg_len } else { 0.0 };
         }
-        let d = (px - t * dx).hypot(py - t * dy);
+        let d = js::hypot(px - t * dx, py - t * dy);
         if d < best_d {
             best_d = d;
         }
@@ -315,7 +315,7 @@ fn project_segment(pl: &Polyline, i: usize, lat: f64, lon: f64) -> (f64, f64) {
     };
     (
         pl.cum[i] + t * (pl.cum[i + 1] - pl.cum[i]),
-        (px - t * dx).hypot(py - t * dy),
+        js::hypot(px - t * dx, py - t * dy),
     )
 }
 
@@ -361,7 +361,7 @@ pub fn simplify_polyline(pts: &[LatLng], tol_m: f64) -> Vec<LatLng> {
             } else {
                 0.0
             };
-            let d = (px - t * dx).hypot(py - t * dy);
+            let d = js::hypot(px - t * dx, py - t * dy);
             if d > max_d {
                 max_d = d;
                 idx = Some(i);
@@ -438,7 +438,7 @@ fn dist_to_path(pts: &[LatLng], from: usize, to: usize, q: LatLng) -> f64 {
         } else {
             0.0
         };
-        best = best.min((px - t * dx).hypot(py - t * dy));
+        best = best.min(js::hypot(px - t * dx, py - t * dy));
     }
     best
 }

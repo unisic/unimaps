@@ -6,7 +6,19 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import {
+  plannedAt,
+  progressAt,
+  scheduleDelay,
+  stepArrivals,
+  stepKbProgress,
+  straightGeom,
+  trackAlong,
+  type KbArrivals,
+  type KbProgState,
+} from "../lib/kb-progress";
 import { hhmm, preSortRows, type TimingRow } from "../lib/shared/departures";
+import type { LatLng } from "../lib/shared/polyline";
 import { cleanStopName, mergeStops, type FormattedStop } from "../lib/stop-merge";
 
 const OUT = "backend/tests/vectors";
@@ -330,4 +342,189 @@ void (async () => {
     line_views: lineViews,
     synthetic: { stops: gStops, trips: gTrips, live, queries: synthetic, events: gEvents, lines: gLines, foot },
   });
+})();
+
+// lib/kb-progress.ts: stepKbProgress replayed over the real captures (test/fixtures/kb-delay) and seeded variants of
+// them: a stalled upstream index, dropped polls (cold starts), GPS noise and off-route fixes, shifted clocks,
+// unresolved stops and unknown plan times, a bus parked at or driving away from its terminus. After the router block:
+// lib/poller loads lib/config, which reads the KB_GTFS_DIR set there at module load
+void (async () => {
+  const { kbNextStopIndex } = await import("../lib/poller");
+  let seed = 5;
+  const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  const int = (n: number) => Math.floor(rnd() * n);
+  const secs = (s: string | null): number | null => {
+    if (!s) return null;
+    const [h, m] = s.split(":").map(Number);
+    return h * 3600 + m * 60;
+  };
+  const wrap = (x: number): number => (x > 43200 ? x - 86400 : x < -43200 ? x + 86400 : x);
+  const hm = (x: number): string => `${String(Math.floor(x / 3600) % 24).padStart(2, "0")}:${String(Math.floor(x / 60) % 60).padStart(2, "0")}`;
+  interface Sample { t: number; local: number; lat: number; lon: number; vti: number | null; ndi: number | null; at: boolean; est0: string | null }
+  interface Fx { stops: { lat: number | null; lon: number | null; plan: string }[]; samples: Sample[] }
+  const cases = [];
+  for (const name of ["healthy-120-loop", "spur-136", "stall-116", "stall-116-b"]) {
+    const fx = JSON.parse(fs.readFileSync(`test/fixtures/kb-delay/${name}.json`, "utf8")) as Fx;
+    for (let v = 0; v < 24; v++) {
+      const pts: (LatLng | null)[] = fx.stops.map((s) => (s.lat !== null && s.lon !== null ? [s.lat, s.lon] : null));
+      const plan = fx.stops.map((s) => secs(s.plan));
+      let samples = fx.samples.map((s) => ({ ...s }));
+      if (v > 0) {
+        if (v % 6 === 3) for (let k = 0; k < 2; k++) pts[1 + int(pts.length - 2)] = null;
+        if (v % 6 === 4) for (let k = 0; k < 3; k++) plan[int(plan.length)] = null;
+        if (v % 3 === 1) {
+          const shift = (int(2) ? 1 : -1) * (300 + int(3000));
+          for (const s of samples) s.local = (s.local + shift + 86400) % 86400;
+        }
+        if (rnd() < 0.7) {
+          // upstream's index freezes from some poll on, estimates[0] clamped to the current minute
+          const from = int(samples.length);
+          const vti = int(2) ? samples[from].vti : int(fx.stops.length - 1);
+          for (const s of samples.slice(from)) Object.assign(s, { vti, ndi: vti === null ? null : vti + 1, at: false, est0: hm(s.local) });
+        }
+        if (rnd() < 0.5) {
+          const a = int(samples.length);
+          samples.splice(a, 4 + int(10));
+        }
+        if (v % 2 === 0) samples = samples.filter(() => rnd() > 0.15);
+        for (const s of samples) {
+          s.lat += ((rnd() - 0.5) * 60) / 111_320;
+          s.lon += ((rnd() - 0.5) * 60) / 71_800;
+          if (rnd() < 0.04) s.lat += 0.02;
+        }
+        const last = samples[samples.length - 1];
+        const end = pts.filter((p): p is LatLng => p !== null).at(-1);
+        if (last && end && v % 4 === 2) {
+          // parked X m before the terminus and Y m to the side of it (values around END_LEFT_M / END_NEAR_M), then
+          // gone off the route
+          const before = pts.filter((p): p is LatLng => p !== null).at(-2)!;
+          const segM = Math.hypot((end[0] - before[0]) * 111_320, (end[1] - before[1]) * 71_800);
+          const f = Math.min(1, ([0, 60, 92, 97, 103, 112, 150][int(7)] + rnd() * 6) / segM);
+          const side = ([0, 40, 80, 112, 118, 124, 140][int(7)] + rnd() * 4) / 111_320;
+          let { t, local } = last;
+          for (let k = 1; k <= 10; k++) {
+            const dt = 5 + int(k > 4 ? 40 : 20);
+            t += dt * 1000;
+            local = (local + dt) % 86400;
+            const pt: LatLng = k > 4 ? [end[0] + 0.01 * (k - 4), end[1]] : [end[0] + (before[0] - end[0]) * f + side, end[1] + (before[1] - end[1]) * f];
+            samples.push({ ...last, t, local, lat: pt[0], lon: pt[1], est0: hm(local) });
+          }
+        }
+        if (v % 4 === 1) {
+          // a run of off-route fixes mid-route: the held delay expires after HOLD_CARRY_S
+          const a = int(Math.max(1, samples.length - 20));
+          for (const s of samples.slice(a, a + 20)) s.lat += 0.02;
+        }
+      }
+      const geom = straightGeom(pts);
+      if (!geom) continue;
+      let st: KbProgState | null = null;
+      const steps = samples.map((s) => {
+        const tgt = s.ndi !== null && s.ndi >= 0 && s.ndi < plan.length ? s.ndi : s.vti;
+        const arr = secs(s.est0);
+        const sched = tgt !== null ? plan[tgt] : null;
+        const delayUp = arr !== null && sched !== null && sched !== undefined ? Math.trunc(wrap(arr - sched)) : null;
+        const inp = { lat: s.lat, lon: s.lon, tEpoch: s.t / 1000, localSecs: s.local, vti: s.vti, nextUp: kbNextStopIndex(s.vti, s.ndi, s.at, plan.length), delayUp };
+        const out = stepKbProgress({ geom, plan, ...inp }, st);
+        st = out.state;
+        return { in: inp, out };
+      });
+      cases.push({ name: `${name}#${v}`, pts, plan, steps });
+    }
+  }
+
+  // the pure helpers on random stop/plan arrays: midnight wraps and big backward plan jumps, unplaced stops,
+  // positions around the origin (ORIGIN_TOL_M) and around upstream's next stop (PASS_TOL_M / STALE_PAST_M)
+  const helpers = [];
+  for (let k = 0; k < 800; k++) {
+    const n = 2 + int(8);
+    const stops: (number | null)[] = [];
+    const plan: (number | null)[] = [];
+    let s = 0;
+    let p = int(86400);
+    for (let i = 0; i < n; i++) {
+      stops.push(rnd() < 0.15 ? null : s);
+      plan.push(rnd() < 0.1 ? null : rnd() < 0.1 ? int(86400) : p % 86400);
+      s += 50 + int(1500);
+      p += 30 + int(400);
+    }
+    const d = rnd() < 0.25 ? rnd() * 60 : -100 + rnd() * (s + 200);
+    const nextUp = rnd() < 0.2 ? null : int(n + 1) - 1;
+    const base = plannedAt(stops, plan, d);
+    const localSecs = base === null || rnd() < 0.2 ? int(86400) : Math.round(base + 86400 + (rnd() - 0.5) * 1200) % 86400;
+    helpers.push({ stops, plan, d, nextUp, localSecs, planned: base, delay: scheduleDelay(stops, plan, d, localSecs), progress: progressAt(stops, d, nextUp) });
+  }
+
+  // trackAlong on random out-and-back routes (twin stops 5-60 m apart): cold starts that have to pick a leg
+  // (COLD_MARGIN_S, the 60 m candidate merge, the distance term of the score), warm windows, lower bounds
+  const K = 111_320 * Math.cos((49.8 * Math.PI) / 180);
+  const P = (e: number, n: number): LatLng => [49.8 + n / 111_320, 19 + e / K];
+
+  // sweeps across END_LEFT_M (a stale bus last placed x m before the terminus goes off the route) and END_NEAR_M
+  // (a warm arrival y m to the side of the last stop) on a straight 3 km route, stops every km from 10:00
+  {
+    const pts = [0, 1000, 2000, 3000].map((e) => P(e, 0));
+    const plan = [36000, 36120, 36240, 36360];
+    const geom = straightGeom(pts)!;
+    const run = (name: string, fixes: { at: LatLng; t: number }[]) => {
+      let st: KbProgState | null = null;
+      const steps = fixes.map(({ at, t }) => {
+        const inp = { lat: at[0], lon: at[1], tEpoch: t, localSecs: 36300 + (t - 1000), vti: 0, nextUp: 1, delayUp: 300 };
+        const out = stepKbProgress({ geom, plan, ...inp }, st);
+        st = out.state;
+        return { in: inp, out };
+      });
+      cases.push({ name, pts, plan, steps });
+    };
+    const around = (from: number, to: number, step: number, edge: number) => [
+      ...Array.from({ length: Math.floor((to - from) / step) + 1 }, (_, i) => from + i * step),
+      ...[-3, -2, -1, -0.5, -0.2, -0.1, 0.1, 0.5, 1, 2].map((e) => edge + e),
+    ];
+    for (const x of around(80, 160, 4, 100)) run(`end-left-${x}`, [{ at: P(3000 - x, 3), t: 1000 }, { at: P(3000 - x, 3000), t: 1030 }]);
+    for (const y of around(90, 150, 3, 120)) run(`end-near-${y}`, [{ at: P(2900, 3), t: 1000 }, { at: P(3000, y), t: 1010 }]);
+  }
+  const tracks = [];
+  for (let k = 0; k < 2500; k++) {
+    const len = 500 + int(2500);
+    const twin = 5 + int(55);
+    const m = 1 + int(5);
+    const pts: (LatLng | null)[] = [];
+    for (let i = 0; i <= m; i++) pts.push(P((len * i) / m, 0));
+    for (let i = m - 1; i >= 0; i--) pts.push(P((len * i) / m, twin));
+    if (rnd() < 0.2) pts[1 + int(pts.length - 2)] = null;
+    const pace = 30 + int(200);
+    const start = int(86400);
+    const plan = pts.map((_, i) => (rnd() < 0.05 ? null : (start + i * pace) % 86400));
+    const geom = straightGeom(pts);
+    if (!geom) continue;
+    const back = rnd() < 0.5;
+    const x = rnd() * len;
+    const off = rnd() < 0.05 ? 300 : (rnd() - 0.5) * 2 * (rnd() < 0.5 ? 10 : 45);
+    const [lat, lon] = P(back ? len - x : x, (back ? twin : 0) + off);
+    const along = back ? len + twin + x : x;
+    const localSecs = (start + Math.round((along / (2 * len)) * pts.length * pace + (rnd() - 0.5) * 2 * pace * (1 + int(4))) + 86400) % 86400;
+    const vti = rnd() < 0.15 ? null : int(pts.length + 1) - 1;
+    const nextUp = rnd() < 0.15 ? null : vti === null ? int(pts.length) : Math.min(pts.length - 1, vti + int(2));
+    const tEpoch = 1_790_000_000 + int(100_000);
+    const prev = rnd() < 0.5 ? null : { D: Math.max(0, along + (rnd() - 0.6) * 400), t: tEpoch - int(260) };
+    tracks.push({ pts, plan, lat, lon, tEpoch, localSecs, vti, nextUp, prev, out: trackAlong(geom, lat, lon, tEpoch, localSecs, plan, vti, nextUp, prev) });
+  }
+
+  // stepArrivals over random index walks: polls 5-125 s apart, steps of 0-6 stops and an occasional step back
+  const arrivals = [];
+  for (let k = 0; k < 80; k++) {
+    let reached = -1 + int(3);
+    let t = 1_790_000_000 + int(100_000);
+    let st: KbArrivals | undefined;
+    const steps = [];
+    for (let i = 0; i < 40; i++) {
+      reached = Math.max(-1, reached + (rnd() < 0.35 ? 0 : rnd() < 0.1 ? -1 : 1 + int(rnd() < 0.8 ? 2 : 6)));
+      t += 5 + int(rnd() < 0.85 ? 60 : 120);
+      const fixAt = t - int(10);
+      st = stepArrivals(st, reached, t, fixAt);
+      steps.push({ reached, t, fixAt, out: structuredClone(st) });
+    }
+    arrivals.push(steps);
+  }
+  write("kb_progress", { cases, helpers, tracks, arrivals }, 0);
 })();

@@ -7,7 +7,7 @@ pub const RAD: f64 = std::f64::consts::PI / 180.0;
 pub fn meters_between(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
     let d_lat = (lat2 - lat1) * 111_320.0;
     let d_lon = (lon2 - lon1) * 111_320.0 * (((lat1 + lat2) / 2.0) * RAD).cos();
-    d_lat.hypot(d_lon)
+    crate::js::hypot(d_lat, d_lon)
 }
 
 /// The items of `all` within `max_m` of `from`, nearest first (ties keep their order), at most `max`. O(n log n).

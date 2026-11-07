@@ -103,7 +103,7 @@ pub fn clean_stop_name(name: &str) -> String {
 pub fn stop_distance_meters(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
     let dlat = (lat2 - lat1) * 111_139.0;
     let dlon = (lon2 - lon1) * 111_139.0 * (((lat1 + lat2) / 2.0) * crate::geo::RAD).cos();
-    dlat.hypot(dlon)
+    crate::js::hypot(dlat, dlon)
 }
 
 /// Alias -> index into `stops`: every id / designator / MZK symbol (bare and "mzk:"-prefixed) of every stop, a
