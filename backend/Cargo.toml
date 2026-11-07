@@ -20,6 +20,7 @@ jiff = { version = "0.2.39", features = ["tzdb-bundle-always"] }
 libc = "0.2"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.154", features = ["float_roundtrip", "preserve_order"] }
+sha1 = "0.10.6"
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "signal", "process", "time", "io-util"] }
 
 [profile.release]

@@ -17,9 +17,12 @@ import {
   type KbArrivals,
   type KbProgState,
 } from "../lib/kb-progress";
+import { mzkRemapDist, mzkShapeFromCourseDetails, mzkStopIndices } from "../lib/mzk-shape";
 import { clampPlannedMonotone, hasPlannedDip, isMzkNotStarted, mzkRowTiming } from "../lib/mzk-state";
+import { estimateFixAt, kbAheadM, kbDistAlong, nextSpeed, schedSpeed } from "../lib/route-info";
+import { finalizeShape, type ShapeSrc } from "../lib/shape-store";
 import { hhmm, preSortRows, type TimingRow } from "../lib/shared/departures";
-import type { LatLng } from "../lib/shared/polyline";
+import { pointAt, preparePolyline, type LatLng } from "../lib/shared/polyline";
 import { cleanStopName, mergeStops, type FormattedStop } from "../lib/stop-merge";
 
 const OUT = "backend/tests/vectors";
@@ -581,4 +584,148 @@ void (async () => {
     rows.push({ in: inp, out: mzkRowTiming(inp) });
   }
   write("mzk_state", { notStarted, clamps, rows }, 0);
+}
+
+// lib/route-info.ts, lib/mzk-shape.ts and finalizeShape (lib/shape-store.ts): random geometries and fixes; the
+// shape rev is part of the wire id, so it must match byte for byte
+{
+  let seed = 53;
+  const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  const pick = <T>(xs: T[]): T => xs[Math.floor(rnd() * xs.length)];
+  const int = (n: number) => Math.floor(rnd() * n);
+  const rt = <T>(x: T): T => JSON.parse(JSON.stringify(x));
+  const KX = 111_320 * Math.cos((49.8 * Math.PI) / 180);
+  const at = (o: LatLng, east: number, north: number): LatLng => [o[0] + north / 111_320, o[1] + east / KX];
+  // a random walk, sometimes folded back on itself 5-40 m to the side (out-and-back, U-turn, loop)
+  const walk = (): LatLng[] => {
+    const o: LatLng = [49.6 + rnd() * 0.4, 18.8 + rnd() * 0.4];
+    const pts: LatLng[] = [o];
+    let [x, y, h] = [0, 0, rnd() * 2 * Math.PI];
+    for (let k = int(12) + 1; k > 0; k--) {
+      h += (rnd() - 0.5) * 1.6;
+      const len = 20 + rnd() * 600;
+      x += len * Math.cos(h);
+      y += len * Math.sin(h);
+      pts.push(at(o, x, y));
+    }
+    if (rnd() < 0.5) {
+      const side = 5 + rnd() * 35;
+      const back = pts.slice(0, -1).reverse().map(([la, lo]) => [la + side / 111_320, lo] as LatLng);
+      pts.push(at(pts[pts.length - 1], 0, side), ...back);
+    }
+    return rt(pts);
+  };
+  const geoms = [];
+  const dist = [];
+  for (let g = 0; g < 60; g++) {
+    const pts = walk();
+    const pl = preparePolyline(pts)!;
+    const nStops = int(10) + 2;
+    const stops = rt(
+      Array.from({ length: nStops }, (_, k) => (rnd() < 0.15 ? null : Math.round((pl.length * k) / (nStops - 1) + (rnd() - 0.5) * 40))),
+    );
+    const src: ShapeSrc = pick(["osrm", "straight", "gtfs", "partial"]);
+    geoms.push({ pts, stops, src });
+    const geom = { pl, stops, rev: "000000", src };
+    for (let n = 0; n < 60; n++) {
+      const s = rnd() * pl.length;
+      const pa = pointAt(pl, s);
+      const off = pick([0, 3, 10, 30, 39, 41, 59, 61, 100, 149, 151, 300, rnd() * 200]);
+      const ang = rnd() * 2 * Math.PI;
+      const [lat, lon] = rt(at([pa.lat, pa.lon], off * Math.cos(ang), off * Math.sin(ang)));
+      const vti = pick([null, null, -1, 0, int(nStops), int(nStops), nStops - 1, nStops + 2]);
+      const next = pick([null, vti === null ? null : vti + 1, vti === null ? 1 : vti, vti === null ? 2 : vti + 3, int(nStops)]);
+      const hint = pick([undefined, undefined, s, s - 30, s - 100, s + 20, s - 700, s + 700, rnd() * pl.length].map((h) => (h === undefined ? h : rt(h))));
+      const aheadM = pick([undefined, kbAheadM(rnd() * 120), 2000]);
+      const inp = { g, lat, lon, vti, next, ...(hint === undefined ? {} : { hint }), ...(aheadM === undefined ? {} : { aheadM }) };
+      dist.push({ in: inp, out: kbDistAlong(geom, lat, lon, vti, next, hint, aheadM === undefined ? {} : { aheadM }) });
+    }
+  }
+  const sched = [];
+  for (let n = 0; n < 800; n++) {
+    const len = int(9) + 1;
+    let [c, t] = [0, rnd() < 0.2 ? 86_400 - int(600) : int(80_000)];
+    const stops: Array<number | null> = [];
+    const times: Array<number | null> = [];
+    for (let k = 0; k < len; k++) {
+      stops.push(rnd() < 0.1 ? null : c);
+      times.push(rnd() < 0.1 ? null : t % 86_400);
+      c += pick([0, 50, 300, 800, rnd() * 2000]);
+      t += pick([0, 60, 60, 120, 180, 600]);
+    }
+    const d = pick([-5, 0, c / 2, rnd() * c, c, c + 10, stops[int(len)] ?? 0]);
+    const inp = rt({ stops, times: rnd() < 0.1 ? times.slice(0, -1) : times, d });
+    sched.push({ in: inp, out: schedSpeed(inp.stops, inp.times, inp.d) });
+  }
+  // EMA chains: each step feeds the previous answer back, as the pollers do (Math.exp parity)
+  const speed = [];
+  for (let n = 0; n < 150; n++) {
+    let prev: number | null = pick([null, 8.5, rnd() * 25]);
+    for (let k = 0; k < 10; k++) {
+      const inp = rt({
+        prevSpeed: prev,
+        ...(rnd() < 0.05 ? {} : { prevMoveDs: pick([19.9, 20, 120, 20 + rnd() * 300, 20 + rnd() * 300]) }),
+        ds: pick([19.9, 20, 150, rnd() * 600, 20 + rnd() * 300, 20 + rnd() * 300]),
+        dt: pick([2.9, 3, 10, 12, 44.5, 45, 46, rnd() * 50, 6 + rnd() * 20, 6 + rnd() * 20]),
+        prevHeldSec: pick([0, 0, 0, 0, 30, 31, rnd() * 40]),
+        inStopZone: rnd() < 0.05,
+      });
+      const out = nextSpeed(inp.prevSpeed, inp.prevMoveDs, inp.ds, inp.dt, inp.prevHeldSec, inp.inStopZone);
+      speed.push({ in: inp, out });
+      if (out !== null) prev = out;
+    }
+  }
+  const fix = [];
+  for (let n = 0; n < 300; n++) {
+    const prev = pick([undefined, { updatedAt: 1000 }, { fixAt: 990 + rnd() * 10, updatedAt: 1000 }]);
+    const inp = rt({ ...(prev ? { prev } : {}), updatedAt: pick([990, 1000, 1010 + rnd() * 100, 1500]), moved: rnd() < 0.7, capSec: pick([30, 60, 2.5]) });
+    fix.push({ in: inp, out: estimateFixAt(inp.prev, inp.updatedAt, inp.moved, inp.capSec) });
+  }
+  const junk = () => pick<unknown>(["49.8", null, true, undefined]);
+  const course = () => {
+    const pts = walk();
+    const ll = ([latitude, longitude]: LatLng) => (rnd() < 0.05 ? { latitude: junk(), longitude } : { latitude, longitude });
+    const cut = [0, ...Array.from({ length: int(5) }, () => int(pts.length)).sort((a, b) => a - b), pts.length - 1];
+    const segments = cut.slice(1).map((e, k) => (rnd() < 0.05 ? pick([null, {}, { nodes: [] }]) : { nodes: pts.slice(cut[k], e + 1).map(ll) }));
+    const stopCount = rnd() < 0.7 ? segments.length + 1 : int(segments.length + 3);
+    const stopPoints = Array.from({ length: stopCount }, (_, k) => ll(at(pts[Math.min(pts.length - 1, cut[Math.min(k, cut.length - 1)])], rnd() * 30, rnd() * 30)));
+    return rt(rnd() < 0.03 ? pick([{}, { segments: "x" }, { stopPoints }]) : { segments, stopPoints });
+  };
+  const mzkShapes = [];
+  for (let n = 0; n < 150; n++) {
+    const raw = course();
+    mzkShapes.push({ in: raw, out: mzkShapeFromCourseDetails(raw) });
+  }
+  const remap = [];
+  for (let n = 0; n < 800; n++) {
+    const len = int(7);
+    let c = 0;
+    const stops = Array.from({ length: len }, () => (rnd() < 0.1 ? null : (c += rnd() * 900)));
+    const segDist = Array.from({ length: len + pick([0, 0, 0, -1]) }, (_, k) => (k === 0 ? 0 : rnd() < 0.05 ? pick<unknown>([null, -3, "500"]) : rnd() * 900));
+    const reached = pick([-1, 0, rnd() * 3000, rnd() * 3000, rnd() * 6000, 450]);
+    const inp = rt({ reached, segDist, stops });
+    remap.push({ in: inp, out: mzkRemapDist(inp.reached, inp.segDist as number[], inp.stops) });
+  }
+  const indices = [];
+  for (let n = 0; n < 1000; n++) {
+    const len = int(7);
+    const syms = ["a", "b", "c", 2, "2", null, 0, "0"];
+    const stopPoints = Array.from({ length: len }, () => (rnd() < 0.05 ? pick<unknown>([null, 3, {}]) : { symbol: pick(syms) }));
+    const v = rt({
+      onStopPoint: pick<unknown>([undefined, null, false, "", true, 0, "0", 2, "2", "a", "b", "c", "x"]),
+      orderInCourse: pick<unknown>([undefined, null, -1, 0, 1, 2, 1.5, "1", len, len + 3]),
+      nearestSymbolOrderNo: pick<unknown>([undefined, null, -1, 0, 1, 2, 3, 2.5, "2", len]),
+      stopPoints: rnd() < 0.05 ? pick<unknown>([undefined, null, "x"]) : stopPoints,
+    });
+    indices.push({ in: v, out: mzkStopIndices(v as Parameters<typeof mzkStopIndices>[0]) });
+  }
+  const finals = [];
+  for (let n = 0; n < 200; n++) {
+    const pts = walk();
+    const refs = Array.from({ length: int(8) }, () => (rnd() < 0.1 ? null : at(pts[int(pts.length)], (rnd() - 0.5) * 200, (rnd() - 0.5) * 200)));
+    const src: ShapeSrc = pick(["osrm", "partial", "straight", "mzk", "gtfs"]);
+    const inp = rt({ pts: rnd() < 0.03 ? pts.slice(0, 1) : pts, refs, src });
+    finals.push({ in: inp, out: finalizeShape(inp.pts, inp.refs, inp.src) });
+  }
+  write("route_info", { geoms, dist, sched, speed, fix, mzkShapes, remap, indices, finals }, 0);
 }

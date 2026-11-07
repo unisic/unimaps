@@ -13,6 +13,17 @@ pub fn round(x: f64) -> f64 {
     if x - f >= 0.5 { f + 1.0 } else { f }
 }
 
+/// `Math.round(x * 10) / 10`
+pub fn round1(x: f64) -> f64 {
+    round(x * 10.0) / 10.0
+}
+
+// ponytail: cos, sin, exp, ln and atan2 stay Rust's libm. V8 differs from it in the last bit for 4-14 % of inputs
+// (measured 2026-11-07 against V8 12.4; V8 carries its own fdlibm and glibc-derived copies). Every wire value built
+// on them is rounded first (dist_m, speed, sched_speed, shape stops, len), so only an exact rounding boundary could
+// show it; the golden tests compare unrounded floats within 1e-12. Bit-exact path needed: the `libm` crate matches
+// V8's exp and atan2 exactly, sin/cos/ln would need V8's own sources.
+
 /// `Math.hypot(a, b)` as V8 computes it: scaled to the larger value, squares summed with Kahan compensation.
 /// `f64::hypot` (libm) differs in the last bit, which shifts polyline chainages and every value derived from them.
 pub fn hypot(a: f64, b: f64) -> f64 {
@@ -36,6 +47,97 @@ pub fn hypot(a: f64, b: f64) -> f64 {
         sum = pre;
     }
     sum.sqrt() * max
+}
+
+/// `String(x)` of a number: the shortest round-trip digits, positional for exponents -7 < e < 21, else `1.5e-7` /
+/// `1e+21`.
+pub fn number_to_string(x: f64) -> String {
+    if x.is_nan() {
+        return "NaN".into();
+    }
+    if x == 0.0 {
+        return "0".into();
+    }
+    if x < 0.0 {
+        return format!("-{}", number_to_string(-x));
+    }
+    if x.is_infinite() {
+        return "Infinity".into();
+    }
+    // `{:e}` writes the shortest round-trip digits: "1.2345e3"
+    let sci = format!("{x:e}");
+    let (mant, exp) = sci.split_once('e').expect("{:e} has an exponent");
+    let mut digits = mant.replace('.', "");
+    let k = digits.len() as i32;
+    let n = exp.parse::<i32>().expect("{:e} exponent") + 1;
+    if let Some(even) = even_tie(x, &digits, n - 1) {
+        digits = even;
+    }
+    if k <= n && n <= 21 {
+        format!("{digits}{}", "0".repeat((n - k) as usize))
+    } else if 0 < n && n <= 21 {
+        format!("{}.{}", &digits[..n as usize], &digits[n as usize..])
+    } else if -6 < n && n <= 0 {
+        format!("0.{}{digits}", "0".repeat(-n as usize))
+    } else {
+        let e = n - 1;
+        let sign = if e < 0 { '-' } else { '+' };
+        match digits.split_at(1) {
+            (d, "") => format!("{d}e{sign}{}", e.abs()),
+            (d, rest) => format!("{d}.{rest}e{sign}{}", e.abs()),
+        }
+    }
+}
+
+/// Two shortest digit strings can sit exactly as far from `x` (x is the midpoint between them): ECMAScript takes
+/// the even one, Rust the upper one. Returns the even one when it differs from `digits`.
+fn even_tie(x: f64, digits: &str, exp: i32) -> Option<String> {
+    let k = digits.len();
+    // a tie needs the exact expansion to be `<k digits>5000...`: a short check first, the full expansion (a double
+    // has at most 767 significant digits) only for the rare candidate
+    let probe = format!("{:.*e}", k + 2, x);
+    let (pm, pe) = probe.split_once('e')?;
+    let pd = pm.replace('.', "");
+    if pe.parse::<i32>().ok()? != exp || &pd[k..] != "500" {
+        return None;
+    }
+    let full = format!("{x:.780e}");
+    let fd = full.split_once('e')?.0.replace('.', "");
+    if fd.as_bytes()[k] != b'5' || !fd[k + 1..].bytes().all(|b| b == b'0') {
+        return None;
+    }
+    let lo = &fd[..k];
+    if lo.as_bytes()[k - 1] % 2 == 0 && lo != digits {
+        let alt = lo.to_owned();
+        let mant = format!("{}.{}e{exp}", &alt[..1], &alt[1..]);
+        return (mant.parse::<f64>().ok()? == x).then_some(alt);
+    }
+    None
+}
+
+/// `String(v)` of a parsed JSON value (`None` = undefined).
+pub fn value_to_string(v: Option<&serde_json::Value>) -> String {
+    use serde_json::Value;
+    match v {
+        None => "undefined".into(),
+        Some(Value::Null) => "null".into(),
+        Some(Value::Bool(b)) => b.to_string(),
+        Some(Value::Number(n)) => number_to_string(n.as_f64().unwrap_or(f64::NAN)),
+        Some(Value::String(s)) => s.clone(),
+        // Array.prototype.join: null and undefined elements are empty
+        Some(Value::Array(a)) => a
+            .iter()
+            .map(|e| {
+                if e.is_null() {
+                    String::new()
+                } else {
+                    value_to_string(Some(e))
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(","),
+        Some(Value::Object(_)) => "[object Object]".into(),
+    }
 }
 
 /// `\s` of a JS regular expression (WhiteSpace + LineTerminator). `char::is_whitespace` differs: it takes U+0085
@@ -188,6 +290,43 @@ mod tests {
         }
         assert_eq!(hypot(f64::NAN, f64::INFINITY), f64::INFINITY);
         assert!(hypot(f64::NAN, 1.0).is_nan());
+    }
+
+    // expectations from Node
+    #[test]
+    fn number_to_string_matches_js_string() {
+        for (x, want) in [
+            (0.0, "0"),
+            (-0.0, "0"),
+            (-1.0, "-1"),
+            (247.0, "247"),
+            (1e21, "1e+21"),
+            (123456789012345680000.0, "123456789012345680000"),
+            (1e20, "100000000000000000000"),
+            (1.5e-7, "1.5e-7"),
+            (0.000001, "0.000001"),
+            (1e-7, "1e-7"),
+            (0.1 + 0.2, "0.30000000000000004"),
+            (5e-324, "5e-324"),
+            (1.7976931348623157e308, "1.7976931348623157e+308"),
+            (-1.5e-10, "-1.5e-10"),
+            (123.456, "123.456"),
+            (9007199254740994.0, "9007199254740994"),
+            (-2.5e21, "-2.5e+21"),
+            (1234.5, "1234.5"),
+            // exact midpoints between two shortest candidates: the even one
+            (106690415307569.0 + 0.625, "106690415307569.62"),
+            (-2215280473948473.0 - 0.25, "-2215280473948473.2"),
+            (169414688911108.0 + 0.125, "169414688911108.12"),
+            (f64::NAN, "NaN"),
+            (f64::NEG_INFINITY, "-Infinity"),
+        ] {
+            assert_eq!(number_to_string(x), want, "{x}");
+        }
+        let v: serde_json::Value = serde_json::from_str(r#"[1,null,"a",[2,3],true]"#).unwrap();
+        assert_eq!(value_to_string(Some(&v)), "1,,a,2,3,true");
+        assert_eq!(value_to_string(Some(&serde_json::json!({}))), "[object Object]");
+        assert_eq!(value_to_string(None), "undefined");
     }
 
     #[test]

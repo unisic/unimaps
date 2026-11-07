@@ -247,10 +247,6 @@ pub enum TrackMode {
     Off,
 }
 
-fn round1(x: f64) -> f64 {
-    js::round(x * 10.0) / 10.0
-}
-
 /// Places a fix on the route. None when the fix is not on the route at all; `Hold` when it cannot be placed
 /// confidently (keep the previous D: never jump, never go backwards).
 ///
@@ -292,14 +288,14 @@ pub fn track_along(
                 && let Some(p) = project_on_polyline(pl, lat, lon, lo, hi, Some(prev.d), SLACK_M)
                 && p.d <= max_off
             {
-                return Some((prev.d.max(round1(p.s)), TrackMode::Cont));
+                return Some((prev.d.max(js::round1(p.s)), TrackMode::Cont));
             }
             let lo2 = lo.max(in_sync_hi);
             if lo2 < hi_all
                 && let Some(p2) = project_on_polyline(pl, lat, lon, lo2, hi_all, Some(prev.d), SLACK_M)
                 && p2.d <= max_off
             {
-                return Some((prev.d.max(round1(p2.s)), TrackMode::Cont));
+                return Some((prev.d.max(js::round1(p2.s)), TrackMode::Cont));
             }
             return Some((prev.d, TrackMode::Hold));
         }
@@ -334,7 +330,7 @@ pub fn track_along(
             if dev(a.s) + COLD_MARGIN_S < dev(p.s) { a.s } else { p.s }
         }
     };
-    Some((round1(s), TrackMode::Init))
+    Some((js::round1(s), TrackMode::Init))
 }
 
 /* ------------------------------------------------------------------ stateful step */
