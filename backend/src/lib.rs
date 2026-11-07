@@ -9,6 +9,7 @@ pub mod http;
 pub mod js;
 pub mod kb_progress;
 pub mod logger;
+pub mod mzk_state;
 pub mod mzk_timetable;
 pub mod rate_limit;
 pub mod router;

@@ -17,6 +17,7 @@ import {
   type KbArrivals,
   type KbProgState,
 } from "../lib/kb-progress";
+import { clampPlannedMonotone, hasPlannedDip, isMzkNotStarted, mzkRowTiming } from "../lib/mzk-state";
 import { hhmm, preSortRows, type TimingRow } from "../lib/shared/departures";
 import type { LatLng } from "../lib/shared/polyline";
 import { cleanStopName, mergeStops, type FormattedStop } from "../lib/stop-merge";
@@ -528,3 +529,56 @@ void (async () => {
   }
   write("kb_progress", { cases, helpers, tracks, arrivals }, 0);
 })();
+
+// lib/mzk-state.ts: random OnTime-shaped records (absent, null and wrongly typed fields included); every input goes
+// through JSON first so TS and Rust read the same value
+{
+  let seed = 41;
+  const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  const pick = <T>(xs: T[]): T => xs[Math.floor(rnd() * xs.length)];
+  const ABSENT = Symbol("absent");
+  const rt = <T>(x: T): T => JSON.parse(JSON.stringify(x));
+  const notStarted = [];
+  for (let n = 0; n < 2000; n++) {
+    const first = { lat: 49.6 + rnd() * 0.4, lon: 18.8 + rnd() * 0.4 };
+    const off = pick([0, 50, 100, 300, 398, 399.5, 400.5, 402, 600, rnd() * 900]);
+    const ang = rnd() * 2 * Math.PI;
+    const fields: Record<string, unknown> = {
+      orderInCourse: pick([0, 0, 0, 0, 1, 2, "0", null, -1, 0.5, ABSENT]),
+      lastStopOrderNo: pick([null, null, 0, 0, 1, "0", ABSENT]),
+      reachedMeters: pick([0, 5, 28, 29.9, 30, 30.1, 64, rnd() * 60, "5", null, ABSENT]),
+      latitude: pick([first.lat + (off * Math.cos(ang)) / 111_320, first.lat + (off * Math.cos(ang)) / 111_320, "49.8", null, ABSENT]),
+      longitude: pick([
+        first.lon + (off * Math.sin(ang)) / (111_320 * Math.cos((first.lat * Math.PI) / 180)),
+        first.lon + (off * Math.sin(ang)) / (111_320 * Math.cos((first.lat * Math.PI) / 180)),
+        null,
+        ABSENT,
+      ]),
+    };
+    const rec = rt(Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== ABSENT)));
+    const firstStop = rnd() < 0.8 ? first : null;
+    notStarted.push({ rec, firstStop, out: isMzkNotStarted(rec, firstStop) });
+  }
+  const clamps = [];
+  for (let n = 0; n < 800; n++) {
+    const len = Math.floor(rnd() * 11);
+    const planned = rt(Array.from({ length: len }, () => (rnd() < 0.2 ? null : 1_790_000_000_000 + Math.floor(rnd() * 40) * 30_000)));
+    const fromIdx = pick([-1, 0, 0, 1, 2, 3, 5, 9, 2.5, Math.floor(rnd() * len)]);
+    clamps.push({ planned, fromIdx, out: clampPlannedMonotone(planned, fromIdx), dip: hasPlannedDip(planned, fromIdx) });
+  }
+  const rows = [];
+  for (let n = 0; n < 1500; n++) {
+    const sched = 1_790_900_000_000 + Math.floor(rnd() * 86_400) * 1000;
+    const inp = rt({
+      scheduledDepartureSec: pick([0, 59, 86_399, 86_400, 90_061, -1, -61, 45_000.7, Math.floor(rnd() * 100_000) - 5_000]),
+      scheduledDeparture: pick([sched, sched, 0]),
+      realDeparture: pick([null, 0, sched + (Math.floor(rnd() * 4000) - 600) * 500, sched - 500, sched + 500, sched - 1500]),
+      ...(rnd() < 0.5 ? { lack: rnd() < 0.3 } : {}),
+      notStarted: rnd() < 0.4,
+      firstScheduledMs: pick([null, sched - 300_000, sched + 120_000, sched - 500]),
+      nowMs: sched + (Math.floor(rnd() * 4000) - 2000) * 500,
+    });
+    rows.push({ in: inp, out: mzkRowTiming(inp) });
+  }
+  write("mzk_state", { notStarted, clamps, rows }, 0);
+}
