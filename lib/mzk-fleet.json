@@ -1,0 +1,155 @@
+[
+  {
+    "model": "Solaris Urbino 12 hydrogen",
+    "producer": "Solaris",
+    "year": "2026",
+    "lengthCategory": "MAXI",
+    "fuelType": "hydrogen",
+    "numbers": [[256, 259]],
+    "defaultFeatures": { "hydrogen": true, "lowFloor": true, "airCondition": true }
+  },
+  {
+    "model": "Solaris Urbino 18 hydrogen",
+    "producer": "Solaris",
+    "year": "2026",
+    "lengthCategory": "MEGA",
+    "fuelType": "hydrogen",
+    "numbers": [[254, 255]],
+    "defaultFeatures": { "hydrogen": true, "longVehicle": true, "lowFloor": true, "airCondition": true }
+  },
+  {
+    "model": "Solaris Urbino 18 electric",
+    "producer": "Solaris",
+    "year": "2026",
+    "lengthCategory": "MEGA",
+    "fuelType": "electric",
+    "numbers": [[250, 253]],
+    "defaultFeatures": { "electric": true, "longVehicle": true, "lowFloor": true, "airCondition": true }
+  },
+  {
+    "model": "Irizar ie bus 12",
+    "producer": "Irizar",
+    "year": "2026",
+    "lengthCategory": "MAXI",
+    "fuelType": "electric",
+    "numbers": [[238, 249]],
+    "defaultFeatures": { "electric": true, "lowFloor": true, "airCondition": true }
+  },
+  {
+    "model": "Karsan e-Atak",
+    "producer": "Karsan",
+    "year": "2026",
+    "lengthCategory": "MIDI",
+    "fuelType": "electric",
+    "numbers": [237],
+    "defaultFeatures": { "electric": true, "lowFloor": true, "airCondition": true }
+  },
+  {
+    "model": "Isuzu Novociti Life",
+    "producer": "Isuzu",
+    "year": "2025",
+    "lengthCategory": "MINI",
+    "fuelType": "diesel",
+    "numbers": [[229, 232]],
+    "defaultFeatures": { "lowFloor": true, "airCondition": true }
+  },
+  {
+    "model": "Solaris Urbino 9LE electric",
+    "producer": "Solaris",
+    "year": "2023",
+    "lengthCategory": "MIDI",
+    "fuelType": "electric",
+    "numbers": [[227, 228]],
+    "defaultFeatures": { "electric": true, "lowFloor": true, "airCondition": true }
+  },
+  {
+    "model": "Solaris Urbino 18 IV",
+    "producer": "Solaris",
+    "year": "2016/2022/2025",
+    "lengthCategory": "MEGA",
+    "fuelType": "diesel",
+    "numbers": [[168, 177], [223, 226], 233],
+    "defaultFeatures": { "longVehicle": true, "lowFloor": true, "airCondition": true }
+  },
+  {
+    "model": "Solaris Urbino 12 IV",
+    "producer": "Solaris",
+    "year": "2016-2025",
+    "lengthCategory": "MAXI",
+    "fuelType": "diesel",
+    "numbers": [[178, 215], [218, 222], [234, 236]],
+    "defaultFeatures": { "lowFloor": true, "airCondition": true }
+  },
+  {
+    "model": "Iveco Daily 70C17 / SKD Stratos LF38",
+    "producer": "Iveco / Stratos",
+    "year": "2015/2017",
+    "lengthCategory": "MINI",
+    "fuelType": "diesel",
+    "numbers": [157, 216, 217],
+    "defaultFeatures": { "lowFloor": true, "airCondition": true }
+  },
+  {
+    "model": "Scania CN230UB 4x2EB",
+    "producer": "Scania",
+    "year": "2015",
+    "lengthCategory": "MAXI",
+    "fuelType": "diesel",
+    "numbers": [167],
+    "defaultFeatures": { "lowFloor": true, "airCondition": true }
+  },
+  {
+    "model": "Mercedes-Benz Conecto LF",
+    "producer": "Mercedes-Benz",
+    "year": "2011",
+    "lengthCategory": "MAXI",
+    "fuelType": "diesel",
+    "numbers": [[147, 156]],
+    "defaultFeatures": { "lowFloor": true, "airCondition": false }
+  },
+  {
+    "model": "Mercedes-Benz Citaro G",
+    "producer": "Mercedes-Benz",
+    "year": "2010/2011",
+    "lengthCategory": "MEGA",
+    "fuelType": "diesel",
+    "numbers": [138, 139, 141, 143, 144, 145, 146],
+    "defaultFeatures": { "longVehicle": true, "lowFloor": true, "airCondition": false }
+  },
+  {
+    "model": "Autosan A8V.03.01",
+    "producer": "Autosan",
+    "year": "2009",
+    "lengthCategory": "MINI",
+    "fuelType": "diesel",
+    "numbers": [[134, 136]],
+    "defaultFeatures": { "lowFloor": false, "airCondition": false }
+  },
+  {
+    "model": "Solaris Urbino 12 III",
+    "producer": "Solaris",
+    "year": "2006/2009",
+    "lengthCategory": "MAXI",
+    "fuelType": "diesel",
+    "numbers": [92, [94, 101], [129, 133]],
+    "defaultFeatures": { "lowFloor": true, "airCondition": false }
+  },
+  {
+    "model": "Mercedes-Benz Citaro",
+    "producer": "Mercedes-Benz",
+    "year": "2008",
+    "lengthCategory": "MAXI",
+    "fuelType": "diesel",
+    "numbers": [[119, 128]],
+    "defaultFeatures": { "lowFloor": true, "airCondition": false }
+  },
+  {
+    "model": "Mercedes-Benz Citaro K",
+    "producer": "Mercedes-Benz",
+    "year": "2007",
+    "lengthCategory": "MIDI",
+    "fuelType": "diesel",
+    "numbers": [109, [111, 118]],
+    "defaultFeatures": { "lowFloor": true, "airCondition": false }
+  }
+]

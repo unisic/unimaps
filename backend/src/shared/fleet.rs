@@ -59,26 +59,9 @@ pub fn fold_text(s: &str) -> String {
         .collect()
 }
 
-/// `Number.parseInt(s, 10)`: leading whitespace, a sign, then the leading digits; NaN without a digit.
-fn parse_int(s: &str) -> f64 {
-    let t = s.trim_start_matches(js::is_space);
-    let (neg, t) = match t.as_bytes().first() {
-        Some(b'-') => (true, &t[1..]),
-        Some(b'+') => (false, &t[1..]),
-        _ => (false, t),
-    };
-    let digits = &t[..t.bytes().position(|b| !b.is_ascii_digit()).unwrap_or(t.len())];
-    let v = if digits.is_empty() {
-        f64::NAN
-    } else {
-        digits.parse().unwrap_or(f64::NAN)
-    };
-    if neg { -v } else { v }
-}
-
 /// Numeric lines first in numeric order ("2" < "10"), then the rest alphabetically.
 pub fn compare_line_names(a: &str, b: &str) -> Ordering {
-    let (na, nb) = (parse_int(a), parse_int(b));
+    let (na, nb) = (js::parse_int(a), js::parse_int(b));
     let (fa, fb) = (na.is_finite(), nb.is_finite());
     if fa && fb && na != nb {
         return na.total_cmp(&nb);

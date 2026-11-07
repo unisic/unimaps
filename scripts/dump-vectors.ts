@@ -18,6 +18,7 @@ import {
   type KbArrivals,
   type KbProgState,
 } from "../lib/kb-progress";
+import { getAllFleetVehicles, getFleetDetails } from "../lib/mzk-fleet";
 import { mzkRemapDist, mzkShapeFromCourseDetails, mzkStopIndices } from "../lib/mzk-shape";
 import { clampPlannedMonotone, hasPlannedDip, isMzkNotStarted, mzkRowTiming } from "../lib/mzk-state";
 import { estimateFixAt, kbAheadM, kbDistAlong, nextSpeed, schedSpeed } from "../lib/route-info";
@@ -1154,3 +1155,29 @@ void (async () => {
   });
   write("gtfs_tables", { fixture: read(path.join("test", "fixtures", "gtfs")), feeds }, 0);
 })();
+
+// lib/mzk-fleet.ts: every side number of the table plus odd ones, each with OnTime static records whose fields are
+// missing, null, false, true or another JSON value (the upstream record is never validated)
+{
+  const flags = ["longVehicle", "airCondition", "lowFloor", "ecoVehicle", "electric", "hybrid", "ticketmachineCard",
+    "ticketmachineCash", "ticketmachineCashCard"];
+  const vals: unknown[] = [undefined, null, false, true, 0, 1, "", "x", [], {}];
+  let seed = 43;
+  const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  const int = (n: number) => Math.floor(rnd() * n);
+  const sides = [...getAllFleetVehicles().map((v) => v.sideNumber), "0", "91", "93", "110", "260", "999", " 230",
+    "\t230", "230x", "+230", "-230", "0230", "230.9", "2.3e2", "0x10", "abc", "", "1e400", "99999999999999999999"];
+  const cases = sides.flatMap((side) => {
+    const statics: unknown[] = [undefined, {}];
+    for (let k = 0; k < 2; k++) {
+      const s: Record<string, unknown> = {};
+      for (const f of flags) {
+        const v = vals[int(vals.length)];
+        if (v !== undefined) s[f] = v;
+      }
+      statics.push(s);
+    }
+    return statics.map((st) => ({ side, static: st ?? null, out: getFleetDetails(side, st as never) }));
+  });
+  write("mzk_fleet", { all: getAllFleetVehicles(), cases }, 0);
+}

@@ -340,6 +340,23 @@ pub fn num_value(x: f64) -> serde_json::Value {
     }
 }
 
+/// `Number.parseInt(s, 10)`: leading whitespace, a sign, then the leading digits; NaN without a digit.
+pub fn parse_int(s: &str) -> f64 {
+    let t = s.trim_start_matches(is_space);
+    let (neg, t) = match t.as_bytes().first() {
+        Some(b'-') => (true, &t[1..]),
+        Some(b'+') => (false, &t[1..]),
+        _ => (false, t),
+    };
+    let digits = &t[..t.bytes().position(|b| !b.is_ascii_digit()).unwrap_or(t.len())];
+    let v = if digits.is_empty() {
+        f64::NAN
+    } else {
+        digits.parse().unwrap_or(f64::NAN)
+    };
+    if neg { -v } else { v }
+}
+
 /// JS truthiness of a parsed JSON value (`None` = undefined).
 pub fn truthy(v: Option<&serde_json::Value>) -> bool {
     use serde_json::Value;
