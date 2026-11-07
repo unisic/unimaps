@@ -3,6 +3,7 @@
 
 pub mod api_helpers;
 pub mod config;
+pub mod fetch;
 pub mod geo;
 pub mod gtfs_csv;
 pub mod gtfs_rt;
@@ -18,6 +19,7 @@ pub mod mzk_fleet;
 pub mod mzk_shape;
 pub mod mzk_state;
 pub mod mzk_timetable;
+pub mod osrm;
 pub mod rate_limit;
 pub mod route_info;
 pub mod router;
