@@ -229,6 +229,50 @@ export interface LivePollerOptions {
   shapes?: KbShapeSink | null;
 }
 
+export type FeedVehicle = Pick<
+  VehiclePos,
+  "execId" | "tripId" | "routeId" | "line" | "lat" | "lon" | "bearing" | "timestamp" | "currentStopSequence" | "atStop"
+>;
+
+/** GTFS-Realtime VehiclePositions FeedMessage bytes, FULL_DATASET with header `timestamp`. backend/src/gtfs_rt.rs
+ * encodes the same bytes (vectors from scripts/dump-vectors.ts). */
+export function vehiclePositionsFeed(vehicles: readonly FeedVehicle[], timestamp: number): Uint8Array<ArrayBuffer> {
+  const entity: transit_realtime.IFeedEntity[] = [];
+  for (const v of vehicles) {
+    const vehicle: transit_realtime.IVehiclePosition = {
+      position: {
+        latitude: v.lat,
+        longitude: v.lon,
+        ...(v.bearing !== null ? { bearing: v.bearing } : {}),
+      },
+      timestamp: v.timestamp,
+      trip: {
+        ...(v.routeId ? { routeId: v.routeId } : {}),
+        ...(v.tripId ? { tripId: v.tripId } : {}),
+        scheduleRelationship: rt.TripDescriptor.ScheduleRelationship.SCHEDULED,
+      },
+      ...(v.currentStopSequence !== null ? { currentStopSequence: v.currentStopSequence } : {}),
+      currentStatus: v.atStop
+        ? rt.VehiclePosition.VehicleStopStatus.STOPPED_AT
+        : rt.VehiclePosition.VehicleStopStatus.IN_TRANSIT_TO,
+      vehicle: {
+        ...(v.line ? { label: v.line } : {}),
+        id: v.execId,
+      },
+    };
+    entity.push({ id: v.execId, vehicle });
+  }
+  const message: transit_realtime.IFeedMessage = {
+    header: {
+      gtfsRealtimeVersion: "2.0",
+      incrementality: rt.FeedHeader.Incrementality.FULL_DATASET,
+      timestamp,
+    },
+    entity,
+  };
+  return new Uint8Array(rt.FeedMessage.encode(message).finish());
+}
+
 /**
  * Continuously discovers active trip executions from stop departure boards
  * and polls their live vehicle positions.
@@ -1165,40 +1209,7 @@ export class LivePoller {
     const nowEpoch = Date.now() / 1000;
     const key = this.snapshotKey(nowEpoch);
     if (this.pbCache !== null && this.pbCache.key === key) return this.pbCache.value;
-    const entity: transit_realtime.IFeedEntity[] = [];
-    for (const v of this.liveVehicles(nowEpoch)) {
-      const vehicle: transit_realtime.IVehiclePosition = {
-        position: {
-          latitude: v.lat,
-          longitude: v.lon,
-          ...(v.bearing !== null ? { bearing: v.bearing } : {}),
-        },
-        timestamp: v.timestamp,
-        trip: {
-          ...(v.routeId ? { routeId: v.routeId } : {}),
-          ...(v.tripId ? { tripId: v.tripId } : {}),
-          scheduleRelationship: rt.TripDescriptor.ScheduleRelationship.SCHEDULED,
-        },
-        ...(v.currentStopSequence !== null ? { currentStopSequence: v.currentStopSequence } : {}),
-        currentStatus: v.atStop
-          ? rt.VehiclePosition.VehicleStopStatus.STOPPED_AT
-          : rt.VehiclePosition.VehicleStopStatus.IN_TRANSIT_TO,
-        vehicle: {
-          ...(v.line ? { label: v.line } : {}),
-          id: v.execId,
-        },
-      };
-      entity.push({ id: v.execId, vehicle });
-    }
-    const message: transit_realtime.IFeedMessage = {
-      header: {
-        gtfsRealtimeVersion: "2.0",
-        incrementality: rt.FeedHeader.Incrementality.FULL_DATASET,
-        timestamp: this.lastGoodRefresh,
-      },
-      entity,
-    };
-    const value = new Uint8Array(rt.FeedMessage.encode(message).finish());
+    const value = vehiclePositionsFeed(this.liveVehicles(nowEpoch), this.lastGoodRefresh);
     this.pbCache = { key, value };
     return value;
   }

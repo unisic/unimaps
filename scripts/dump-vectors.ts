@@ -19,6 +19,7 @@ import {
   type KbProgState,
 } from "../lib/kb-progress";
 import { getAllFleetVehicles, getFleetDetails } from "../lib/mzk-fleet";
+import type { FeedVehicle } from "../lib/poller";
 import { mzkRemapDist, mzkShapeFromCourseDetails, mzkStopIndices } from "../lib/mzk-shape";
 import { clampPlannedMonotone, hasPlannedDip, isMzkNotStarted, mzkRowTiming } from "../lib/mzk-state";
 import { estimateFixAt, kbAheadM, kbDistAlong, nextSpeed, schedSpeed } from "../lib/route-info";
@@ -1181,3 +1182,35 @@ void (async () => {
   });
   write("mzk_fleet", { all: getAllFleetVehicles(), cases }, 0);
 }
+
+// lib/poller.ts vehiclePositionsFeed: GTFS-RT bytes for random fleets, with empty strings (left out), multi-byte
+// and > 127 byte strings (2 byte lengths), float32 rounding, and stop sequences past uint32 / negative / fractional.
+// Imported late: lib/poller loads lib/config, see the router block
+void (async () => {
+  const { vehiclePositionsFeed } = await import("../lib/poller");
+  let seed = 47;
+  const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  const int = (n: number) => Math.floor(rnd() * n);
+  const pick = <T>(xs: readonly T[]): T => xs[int(xs.length)];
+  const strs = ["", "7", "120", "ŻÓŁĆ-ę", "N1/2", "x".repeat(130), "a\u0000b"];
+  const seqs = [null, 0, 1, 127, 128, 300, 16384, 2 ** 31, 2 ** 32 + 5, -1, 3.7, -2.5];
+  const stamps = [0, 1, 1794013548, 2 ** 40 + 3, -1, -7.9, 12.6];
+  const vehicle = (): FeedVehicle => ({
+    execId: pick(strs.slice(1)) + String(int(1e6)),
+    tripId: pick(strs),
+    routeId: pick(strs),
+    line: pick(strs),
+    lat: pick([49.8 + rnd() * 0.1, 0, -1e-9, 49.82231234567891, 1e30]),
+    lon: pick([19 + rnd() * 0.1, 0, 180, 19.04500000049]),
+    bearing: pick([null, 0, rnd() * 360, 359.99999999, -45.5]),
+    timestamp: pick(stamps),
+    currentStopSequence: pick(seqs),
+    atStop: int(2) === 0,
+  });
+  const cases = [0, 1, 1, 2, 3, 5, 8, 40].map((n) => {
+    const vehicles = Array.from({ length: n }, vehicle);
+    const timestamp = pick(stamps);
+    return { timestamp, vehicles, hex: Buffer.from(vehiclePositionsFeed(vehicles, timestamp)).toString("hex") };
+  });
+  write("gtfs_rt", { cases }, 0);
+})();

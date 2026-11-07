@@ -5,6 +5,7 @@ pub mod api_helpers;
 pub mod config;
 pub mod geo;
 pub mod gtfs_csv;
+pub mod gtfs_rt;
 pub mod gtfs_trips;
 pub mod http;
 pub mod js;
