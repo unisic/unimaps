@@ -1,4 +1,4 @@
-//! test/fleet-tracker.test.ts "shared fleet helpers" (matchesFleetQuery comes with the tracker), plus edge cases
+//! test/fleet-tracker.test.ts "shared fleet helpers" (matchesFleetQuery: tests/fleet_tracker_persist.rs), plus edge cases
 //! whose expectations are what lib/shared/fleet.ts returns in Node.
 
 use unimaps::shared::fleet::{DelayClass, classify_delay, compare_line_names, fold_text, is_on_time, median};

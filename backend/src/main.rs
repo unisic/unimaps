@@ -18,7 +18,7 @@ use tokio::net::TcpListener;
 use tokio::process::{Child, Command};
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::Semaphore;
-use unimaps::{http, logger, static_files};
+use unimaps::{gzm_fleet, http, logger, static_files};
 
 /// ponytail: one cap for every open connection (idle keep-alive ones included, ~8 KB of buffers each).
 const MAX_CONNECTIONS: usize = 1024;
@@ -167,6 +167,8 @@ async fn serve(base_env: Vec<(OsString, OsString)>) -> ExitCode {
         _ = int.recv() => None,
         st = async { match child.as_mut() { Some(c) => c.wait().await, None => std::future::pending().await } } => Some(st),
     };
+    // the GZM fleet tracker's debounced save (TS poller-singleton flushes on SIGTERM/SIGINT); a no-op when never built
+    let _ = tokio::task::spawn_blocking(gzm_fleet::flush_gzm_fleet).await;
     if let Some(st) = exited {
         // one failure domain: Docker's restart policy brings both back
         let st = st.map_or_else(|e| e.to_string(), |s| s.to_string());

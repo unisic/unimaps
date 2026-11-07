@@ -8,10 +8,11 @@ use std::time::Duration;
 use indexmap::IndexMap;
 use serde_json::{Map, Value, json};
 
-use super::parse::HttpZb;
-use super::state::{GzmLive, NowFn};
+use super::parse::{GzmFleetSource, HttpZb};
+use super::state::{FleetFn, GzmLive, NowFn};
 use crate::config;
 use crate::gzm_feed::{start_gzm_feed, stop_gzm_feed};
+use crate::gzm_fleet::feed_gzm_fleet;
 use crate::logger;
 
 /// a resident city requested within this is on screen somewhere: a viewer polls its vehicles at most 20 s apart
@@ -20,10 +21,12 @@ pub const ACTIVE_MS: i64 = 30_000;
 pub const FORCED_DROP_MS: i64 = 60_000;
 const SWEEP: Duration = Duration::from_secs(60);
 
-static GZM: LazyLock<Arc<GzmLive>> = LazyLock::new(|| Arc::new(GzmLive::new("gzm", HttpZb)));
+static GZM: LazyLock<Arc<GzmLive>> = LazyLock::new(|| {
+    let fleet: FleetFn = Arc::new(|sources: Vec<GzmFleetSource>| feed_gzm_fleet(&sources));
+    Arc::new(GzmLive::new("gzm", HttpZb).with_fleet(Some(fleet)))
+});
 
 /// The process-wide GZM live layer (created on first use, polling only after `start_gzm`).
-/// ponytail: no fleet callback yet (TS `feedGzmFleet`): lib/gzm-fleet.ts is not ported; wire it with `with_fleet`.
 pub fn get_gzm() -> Arc<GzmLive> {
     Arc::clone(&GZM)
 }

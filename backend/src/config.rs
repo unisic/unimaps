@@ -95,12 +95,13 @@ pub static GZM_POSITIONS_URL: LazyLock<String> = LazyLock::new(|| {
 pub static GZM_SDIP_ENABLED: LazyLock<bool> = LazyLock::new(|| env_int("KB_GZM_SDIP", 1, 0) != 0);
 pub static GZM_SDIP_URL: LazyLock<String> =
     LazyLock::new(|| env_str("KB_GZM_SDIP_URL", "https://sdip.transportgzm.pl/vm/main"));
-/// None when set to `off` (no GZM announcements).
+/// None when set to `off` or blank (TS: null or "", both falsy: no GZM announcements).
 pub static GZM_NEWS_URL: LazyLock<Option<String>> = LazyLock::new(|| {
     let v = env_str("KB_GZM_NEWS_URL", "https://rj.transportgzm.pl/v2/news/");
     let v = v.trim_matches(crate::js::is_space);
-    (!v.eq_ignore_ascii_case("off")).then(|| v.to_owned())
+    (!v.is_empty() && !v.eq_ignore_ascii_case("off")).then(|| v.to_owned())
 });
+pub static FLEET_HISTORY_DAYS: LazyLock<i64> = LazyLock::new(|| env_int("KB_FLEET_HISTORY_DAYS", 365, 1));
 pub static GZM_DIR: LazyLock<String> = LazyLock::new(|| env_str("KB_GZM_DIR", &in_output("gzm")));
 pub static GZM_FLEET_HISTORY_DAYS: LazyLock<i64> = LazyLock::new(|| env_int("KB_GZM_FLEET_HISTORY_DAYS", 30, 1));
 pub static ZB_API_URL: LazyLock<String> = LazyLock::new(|| {
