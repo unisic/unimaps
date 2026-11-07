@@ -110,7 +110,7 @@ pub struct GzmFeed {
     pub extra: Vec<GzmTripExtra>,
     /// by trip line (= the live feed's routeName), indices into `router.trips`
     pub trips_by_line: HashMap<String, Vec<u32>>,
-    pub shapes: GzmShapes,
+    pub shapes: Arc<GzmShapes>,
     pub built_at: i64,
     pub build_ms: i64,
     pub zip_bytes: u64,
@@ -1163,7 +1163,7 @@ impl FeedBuilder {
             router,
             extra,
             trips_by_line,
-            shapes: GzmShapes::new(shape_entries),
+            shapes: Arc::new(GzmShapes::new(shape_entries)),
             built_at: Timestamp::now().as_second(),
             build_ms: js::round(t0.elapsed().as_secs_f64() * 1000.0) as i64,
             zip_bytes,

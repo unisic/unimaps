@@ -1,19 +1,25 @@
-//! test/gzm-feed.test.ts (parse, shapes, upgrade, rejects, gzmRefreshDue; serviceDayBase lives in src/time.rs, the
-//! OSRM match cases move with gzm_match, downloadGzmZip with the download) and the golden vectors of
+//! test/gzm-feed.test.ts (parse, shapes, upgrade, the OSRM matches of gzm_match, rejects, gzmRefreshDue;
+//! serviceDayBase lives in src/time.rs, downloadGzmZip with the download) and the golden vectors of
 //! lib/gzm-feed.ts (scripts/dump-vectors.ts: the support fixture and seeded hostile zbiorkom-style zips, some with
 //! stored road matches, then the shape lookup and upgrade on each).
 
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering::SeqCst;
+use std::sync::{Arc, LazyLock, Mutex};
+use std::time::Duration;
 
 use serde::Serialize;
 use serde_json::{Value, json};
 use unimaps::gtfs_csv::{NO_DROP_OFF, NO_PICKUP, PICKUP_ON_REQUEST};
 use unimaps::gzm_feed::{GzmFeed, RefreshState, feed_area, gzm_refresh_due, parse_gzm_zip, raw_key};
-use unimaps::js::{buffer_from_base64, num_value};
-use unimaps::shared::polyline::LatLng;
+use unimaps::gzm_match::Matcher;
+use unimaps::js::{self, buffer_from_base64, num_value};
+use unimaps::osrm::{MATCH_CHUNK_PUBLIC, OsrmHttp, OsrmTransport, osrm_match_base};
+use unimaps::shape_store::ShapeSrc;
+use unimaps::shared::polyline::{LatLng, LatLonBox, encode_polyline};
 
 static V: LazyLock<Value> = LazyLock::new(|| serde_json::from_str(include_str!("vectors/gzm_feed.json")).unwrap());
 
@@ -421,6 +427,228 @@ fn a_stored_match_applies_to_gzm_only() {
     assert!(g.shapes.raw_keys().contains(&key));
     let w = parse_gzm_zip(&file, "warsaw", &matched).unwrap();
     assert_eq!(w.shapes.unmatched("warsaw:sh1").unwrap().poly, raw);
+}
+
+/// Answers like /match: every trace point is on the road; `seen` gets each request's trace first.
+struct Echo<F>(F);
+
+impl<F: Fn(&[LatLng]) + Send + Sync> OsrmTransport for Echo<F> {
+    async fn throttle(&self) {}
+
+    async fn get(&self, url: &str) -> Result<OsrmHttp, String> {
+        let u = url::Url::parse(url).unwrap();
+        let pts: Vec<LatLng> = u
+            .path()
+            .rsplit('/')
+            .next()
+            .unwrap()
+            .split(';')
+            .map(|c| {
+                let (lon, lat) = c.split_once(',').unwrap();
+                [lat.parse().unwrap(), lon.parse().unwrap()]
+            })
+            .collect();
+        (self.0)(&pts);
+        let legs: Vec<Value> = pts[1..].iter().map(|_| json!({ "distance": 1 })).collect();
+        let body = json!({ "code": "Ok", "matchings": [{ "geometry": encode_polyline(&pts, 6), "legs": legs }] });
+        Ok(OsrmHttp {
+            status: 200,
+            body: Some(body),
+            retry_after: None,
+        })
+    }
+}
+
+/// A matcher of its own (store file, pace) with the public host's chunks of 10.
+fn matcher<F: Fn(&[LatLng]) + Send + Sync + 'static>(name: &str, interval_ms: i64, seen: F) -> Arc<Matcher<Echo<F>>> {
+    Matcher::new(
+        osrm_match_base("https://osrm.example/route/v1/driving"),
+        MATCH_CHUNK_PUBLIC,
+        interval_ms,
+        Box::leak(Box::new(Mutex::new(0))),
+        dir().join(format!("{name}.json")),
+        Echo(seen),
+    )
+}
+
+async fn wait_while(busy: impl Fn() -> bool, tries: usize) {
+    for _ in 0..tries {
+        if !busy() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+fn zigzag(lat: f64) -> Vec<String> {
+    (0..28)
+        .map(|i| {
+            let la = js::to_fixed(lat + f64::from(i % 2) * 0.0004, 4);
+            let lo = js::to_fixed(19.022 + f64::from(i) * 0.0015, 4);
+            format!("sh1,{la},{lo},{}", i + 1)
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn one_osrm_match_serves_every_shape_with_the_same_geometry() {
+    let fs = with(files(), "trips.txt", |s| {
+        s.replace("t0,Sosnowiec,0,sh1,", "t0,Sosnowiec,0,sh2,")
+    });
+    let fs = with(fs, "shapes.txt", |s| {
+        format!("{s}\nsh2,50.2590,19.0220,1\nsh2,50.2600,19.0100,2\nsh2,50.2770,19.1300,3")
+    });
+    let f = parse("twins-match.zip", &fs);
+    let poly = f.shapes.unmatched("gzm:sh1").unwrap().poly;
+    assert_eq!(f.shapes.unmatched("gzm:sh2").unwrap().poly, poly);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let c = calls.clone();
+    let m = matcher("twins", 50, move |_| {
+        c.fetch_add(1, SeqCst);
+    });
+    let (a, b, c) = ([50.259, 19.022], [50.26, 19.01], [50.277, 19.13]);
+    assert!(m.request(&f.shapes, "gzm:sh1", &[Some(a), Some(b), Some(c)], None));
+    assert!(
+        m.request(&f.shapes, "gzm:sh2", &[Some(a), Some(c)], None),
+        "joins the running match"
+    );
+    let shapes = f.shapes.clone();
+    wait_while(
+        || shapes.unmatched("gzm:sh1").is_some() || shapes.unmatched("gzm:sh2").is_some(),
+        150,
+    )
+    .await;
+    assert_eq!(calls.load(SeqCst), 1);
+    assert_eq!(f.shapes.geometry("gzm:sh1").unwrap().src, ShapeSrc::Osrm);
+    assert_eq!(f.shapes.geometry("gzm:sh2").unwrap().src, ShapeSrc::Osrm);
+    assert!(m.stored(&raw_key(&poly)).is_some());
+    assert!(
+        !m.request(&f.shapes, "gzm:sh1", &[Some(a), Some(b), Some(c)], None),
+        "nothing left to match"
+    );
+    // the next feed build of the same geometry: the stored match applies at once, no request
+    let g = parse("twins-match.zip", &fs);
+    assert!(!m.request(&g.shapes, "gzm:sh1", &[Some(a), Some(b), Some(c)], None));
+    assert_eq!(g.shapes.geometry("gzm:sh1").unwrap().src, ShapeSrc::Osrm);
+    assert_eq!(calls.load(SeqCst), 1);
+}
+
+#[tokio::test]
+async fn the_part_of_the_route_in_view_is_matched_first_and_served_before_the_rest() {
+    // 28 points zigzagging 44 m: Douglas-Peucker keeps all, three chunks of 10 on the public host
+    let header = "shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence".to_owned();
+    let shapes_txt = std::iter::once(header)
+        .chain(zigzag(50.259))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let f = parse("focus.zip", &with(files(), "shapes.txt", |_| shapes_txt));
+    let raw_id = f.shapes.wire_id("gzm:sh1").unwrap();
+    type Seen = (f64, Option<ShapeSrc>, Option<String>);
+    let seen: Arc<Mutex<Vec<Seen>>> = Arc::default();
+    let (log, shapes) = (seen.clone(), f.shapes.clone());
+    let m = matcher("focus", 50, move |pts| {
+        let src = shapes.geometry("gzm:sh1").map(|g| g.src);
+        log.lock().unwrap().push((pts[0][1], src, shapes.wire_id("gzm:sh1")));
+    });
+    let refs = [Some([50.259, 19.022]), Some([50.26, 19.01]), Some([50.277, 19.13])];
+    assert!(m.request(&f.shapes, "gzm:sh1", &refs, None));
+    // the last chunk only (points 22-27); the worker has not picked yet, so this focus counts from the first request
+    let view = LatLonBox {
+        s: 50.258,
+        w: 19.054,
+        n: 50.26,
+        e: 19.064,
+    };
+    m.focus(&f.shapes, "gzm:sh1", view);
+    let shapes = f.shapes.clone();
+    wait_while(|| shapes.unmatched("gzm:sh1").is_some(), 300).await;
+    let seen = seen.lock().unwrap().clone();
+    assert_eq!(seen.len(), 3);
+    assert!(seen[0].0 > 19.048, "the chunk in view goes first");
+    assert_eq!(
+        seen.iter().map(|x| x.1).collect::<Vec<_>>(),
+        [Some(ShapeSrc::Gtfs), Some(ShapeSrc::Partial), Some(ShapeSrc::Partial)],
+        "published as partial before the rest"
+    );
+    let partial_id = seen[1].2.clone().unwrap();
+    assert_ne!(partial_id, raw_id);
+    assert_eq!(f.shapes.geometry("gzm:sh1").unwrap().src, ShapeSrc::Osrm);
+    assert_ne!(f.shapes.wire_id("gzm:sh1").unwrap(), partial_id);
+    let stale = f.shapes.lookup(std::slice::from_ref(&partial_id));
+    assert!(!stale.exact, "the partial id resolves to the full match");
+    assert_eq!(stale.shapes[&partial_id].src, ShapeSrc::Osrm);
+}
+
+#[tokio::test]
+async fn a_newly_opened_route_goes_before_the_rest_of_an_older_match() {
+    // sh1: 28 points zigzagging 44 m, three chunks; sh2: one chunk, far north
+    let fs = with(files(), "trips.txt", |s| {
+        s.replace("t0,Sosnowiec,0,sh1,", "t0,Sosnowiec,0,sh2,")
+    });
+    let header = "shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence".to_owned();
+    let shapes_txt = std::iter::once(header)
+        .chain(zigzag(50.239))
+        .chain(["sh2,50.3000,19.1000,1".to_owned(), "sh2,50.3010,19.1100,2".to_owned()])
+        .collect::<Vec<_>>()
+        .join("\n");
+    let f = parse("preempt.zip", &with(fs, "shapes.txt", |_| shapes_txt));
+    let calls: Arc<Mutex<Vec<&'static str>>> = Arc::default();
+    let log = calls.clone();
+    // 100 ms apart: the test asks for sh2 between the first and the second request
+    let m = matcher("preempt", 100, move |pts| {
+        log.lock().unwrap().push(if pts[0][0] > 50.29 { "sh2" } else { "sh1" });
+    });
+    let sh1 = [Some([50.239, 19.022]), Some([50.2394, 19.04]), Some([50.2394, 19.0625])];
+    assert!(m.request(&f.shapes, "gzm:sh1", &sh1, None));
+    wait_while(|| calls.lock().unwrap().is_empty(), 150).await;
+    assert!(m.request(&f.shapes, "gzm:sh2", &[Some([50.3, 19.1]), Some([50.301, 19.11])], None));
+    let shapes = f.shapes.clone();
+    wait_while(
+        || shapes.unmatched("gzm:sh1").is_some() || shapes.unmatched("gzm:sh2").is_some(),
+        300,
+    )
+    .await;
+    assert_eq!(
+        *calls.lock().unwrap(),
+        ["sh1", "sh2", "sh1", "sh1"],
+        "sh2 waits one request, not the whole sh1 match"
+    );
+    assert_eq!(f.shapes.geometry("gzm:sh1").unwrap().src, ShapeSrc::Osrm);
+    assert_eq!(f.shapes.geometry("gzm:sh2").unwrap().src, ShapeSrc::Osrm);
+}
+
+#[tokio::test]
+async fn a_route_opened_again_goes_back_to_the_front() {
+    let fs = with(files(), "trips.txt", |s| {
+        s.replace("t0,Sosnowiec,0,sh1,", "t0,Sosnowiec,0,sh2,")
+    });
+    let header = "shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence".to_owned();
+    let shapes_txt = std::iter::once(header)
+        .chain(zigzag(50.239))
+        .chain(["sh2,50.3000,19.1000,1".to_owned(), "sh2,50.3010,19.1100,2".to_owned()])
+        .collect::<Vec<_>>()
+        .join("\n");
+    let f = parse("reopen.zip", &with(fs, "shapes.txt", |_| shapes_txt));
+    let calls: Arc<Mutex<Vec<&'static str>>> = Arc::default();
+    let log = calls.clone();
+    let m = matcher("reopen", 100, move |pts| {
+        log.lock().unwrap().push(if pts[0][0] > 50.29 { "sh2" } else { "sh1" });
+    });
+    let sh1 = [Some([50.239, 19.022]), Some([50.2394, 19.04]), Some([50.2394, 19.0625])];
+    assert!(m.request(&f.shapes, "gzm:sh1", &sh1, None));
+    wait_while(|| calls.lock().unwrap().is_empty(), 150).await;
+    assert!(m.request(&f.shapes, "gzm:sh2", &[Some([50.3, 19.1]), Some([50.301, 19.11])], None));
+    assert!(
+        m.request(&f.shapes, "gzm:sh1", &sh1, None),
+        "joins its own running match"
+    );
+    let shapes = f.shapes.clone();
+    wait_while(
+        || shapes.unmatched("gzm:sh1").is_some() || shapes.unmatched("gzm:sh2").is_some(),
+        300,
+    )
+    .await;
+    assert_eq!(*calls.lock().unwrap(), ["sh1", "sh1", "sh1", "sh2"]);
 }
 
 #[test]

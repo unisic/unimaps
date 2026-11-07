@@ -6,6 +6,15 @@ use crate::js;
 
 pub type LatLng = [f64; 2];
 
+/// South, west, north, east edges in degrees.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LatLonBox {
+    pub s: f64,
+    pub w: f64,
+    pub n: f64,
+    pub e: f64,
+}
+
 const M_PER_DEG: f64 = 111_320.0;
 
 /// Planar metres between two nearby points, identical to `geo::meters_between`.
