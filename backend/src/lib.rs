@@ -7,6 +7,7 @@ pub mod geo;
 pub mod gtfs_csv;
 pub mod gtfs_rt;
 pub mod gtfs_trips;
+pub mod gzm_feed;
 pub mod http;
 pub mod js;
 pub mod kb_progress;

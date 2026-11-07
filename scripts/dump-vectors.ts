@@ -7,6 +7,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { strToU8, zipSync } from "fflate";
+
 import {
   plannedAt,
   progressAt,
@@ -38,7 +40,7 @@ import {
   rowKey,
   type TimingRow,
 } from "../lib/shared/departures";
-import { pointAt, preparePolyline, type LatLng } from "../lib/shared/polyline";
+import { encodePolyline, pointAt, preparePolyline, type LatLng } from "../lib/shared/polyline";
 import { cleanStopName, mergeStops, type FormattedStop } from "../lib/stop-merge";
 
 const OUT = "backend/tests/vectors";
@@ -1213,4 +1215,238 @@ void (async () => {
     return { timestamp, vehicles, hex: Buffer.from(vehiclePositionsFeed(vehicles, timestamp)).toString("hex") };
   });
   write("gtfs_rt", { cases }, 0);
+})();
+
+// lib/gzm-feed.ts parseGzmZip on seeded zbiorkom-style zips: hostile ids, CRLF, quoted fields, BOM, nested and
+// repeated members, broken rows, unordered sequences, times past 24 h, pickup flags, stop headsigns, calendars with
+// exceptions, frequencies.txt templates and stored road matches (GZM only); then the shape lookup and upgrade.
+// Imported late: lib/gzm-feed loads lib/config, and KB_GZM_DIR (the stored matches) must be set before it
+process.env.KB_GZM_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "kb-vec-gzm-"));
+void (async () => {
+  const feedMod = await import("../lib/gzm-feed");
+  const { rawKey } = await import("../lib/gzm-match");
+  const { FILES: FIXTURE } = await import("../test/support/gzm-fixture");
+  let seed = 59;
+  const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  const int = (n: number) => Math.floor(rnd() * n);
+  const pick = <T>(xs: readonly T[]): T => xs[int(xs.length)];
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const ids = ["a", "b", "c", "x y", "ż/1", "k:2", "Q-9.1", "z".repeat(70), "ü".repeat(30), "1", "01", "stop_1"];
+  const clock = () => pick(["", "8", "aa:bb:cc", "08:00", "-1:00:00", "07:30:00.5", ""]) || `${pad(int(28))}:${pad(int(60))}:${pad(int(60))}`;
+  const quote = (v: string) => (v.includes(",") ? `"${v.replace(/"/g, '""')}"` : v);
+  const csv = (rows: string[][]) => rows.map((r) => r.map(quote).join(",")).join(pick(["\n", "\r\n"]));
+
+  function synth(): Record<string, string> {
+    const nStops = 4 + int(10);
+    const stops = Array.from({ length: nStops }, (_, i) => ({
+      id: i < ids.length && int(3) === 0 ? ids[i] : `s${i}${pick(["", " ", "/", "ä"])}`,
+      lat: 50.2 + rnd() * 0.1,
+      lon: 19 + rnd() * 0.1,
+    }));
+    const stopRows = stops.map((s) => [
+      s.id,
+      pick(["Rynek 01", "Plac, Wolności 02", "Dworzec 03", "", "Zajezdnia NŻ"]),
+      int(10) === 0 ? pick(["0", "abc", "25.1", ""]) : String(s.lat),
+      int(10) === 0 ? pick(["0", "", "x"]) : String(s.lon),
+      int(8) === 0 ? pick(["1", "2", "3"]) : pick(["0", ""]),
+    ]);
+    const routes = ["r1", "r2", "T6", "N 1"].slice(0, 1 + int(4));
+    const routeRows = routes.map((r) => [r, "1", pick(["1", "10", "2", "N1", "", "100", "1a", "T6"]), pick(["Tramwaj", "Katowice, Rynek", ""]), pick(["0", "3", "11", ""])]);
+    const shapes = ["sh1", "sh 2", "sh3"].slice(0, int(4));
+    const nTrips = 2 + int(7);
+    const trips = Array.from({ length: nTrips }, (_, i) => `t${i}${pick(["", "", ".x", " y"])}`);
+    const tripRows = trips.map((t) => [
+      pick(routes),
+      pick(["s1", "s2", "m1", "nosvc"]),
+      t,
+      pick(["Centrum", "Dworzec", ""]),
+      pick(["0", "1", "", "x", "2.5"]),
+      int(2) ? pick(shapes.length ? shapes : [""]) : "",
+      pick(["", "1", "2", "3"]),
+    ]);
+    if (int(4) === 0) tripRows.push([...tripRows[0]]);
+    const timeRows: string[][] = [];
+    for (const t of trips) {
+      const k = int(6) === 0 ? int(2) : 2 + int(6);
+      const seqs = Array.from({ length: k }, (_, i) => i + 1);
+      if (int(3) === 0) seqs.sort(() => rnd() - 0.5);
+      if (k > 2 && int(5) === 0) seqs[1] = seqs[0];
+      let h = 5 + int(20);
+      for (let i = 0; i < k; i++) {
+        h += int(2);
+        const dep = int(10) === 0 ? clock() : `${pad(h)}:${pad(int(60))}:00`;
+        const arr = pick(["", dep, dep, int(9) === 0 ? clock() : dep]);
+        timeRows.push([
+          t,
+          arr,
+          dep,
+          int(12) === 0 ? "ghost" : pick(stops).id,
+          int(15) === 0 ? pick(["", "x", "1.5"]) : String(seqs[i]),
+          int(5) === 0 ? pick(["Centrum", "Dworzec", "Plac, Rynek"]) : "",
+          pick(["", "0", "1", "2", "3"]),
+          pick(["", "0", "1", "2", "3"]),
+        ]);
+      }
+    }
+    if (timeRows.length > 3 && int(3) === 0) timeRows.push(timeRows[0], timeRows[1]);
+    const shapeRows: string[][] = [];
+    for (const sh of shapes) {
+      const n = 1 + int(7);
+      for (let i = 0; i < n; i++) {
+        const st = pick(stops);
+        shapeRows.push([sh, int(10) === 0 ? "0" : String(st.lat + (rnd() - 0.5) * 1e-4), String(st.lon + (rnd() - 0.5) * 1e-4), String(int(3) === 0 ? n - i : i + 1)]);
+      }
+    }
+    const date = () => int(10) === 0 ? pick(["", "2026-10-28", "2026102", "20261332"]) : `2026${pad(9 + int(4))}${pad(1 + int(28))}`;
+    const calRows = ["s1", "s2", "x"].slice(0, int(4)).map((sv) => [sv, ...Array.from({ length: 7 }, () => pick(["1", "0", "1 ", ""])), date(), date()]);
+    const excRows = Array.from({ length: int(5) }, () => [pick(["s1", "s2", "m1", "new"]), date(), pick(["1", "2", "3", ""])]);
+    const files: Record<string, string> = {
+      "routes.txt": csv([["route_id", "agency_id", "route_short_name", "route_long_name", "route_type"], ...routeRows]),
+      [pick(["stops.txt", "feed/stops.txt", "a/b/stops.txt"])]: (int(4) === 0 ? "\ufeff" : "") + csv([["stop_id", "stop_name", "stop_lat", "stop_lon", "location_type"], ...stopRows]),
+      "trips.txt": csv([[" route_id", "service_id ", "trip_id", "trip_headsign", "direction_id", "shape_id", "brigade"], ...tripRows]),
+      "stop_times.txt": csv([["trip_id", "arrival_time", "departure_time", "stop_id", "stop_sequence", "stop_headsign", "pickup_type", "drop_off_type"], ...timeRows]) + pick(["", "\n", "\n\n"]),
+      "shapes.txt": csv([["shape_id", "shape_pt_lat", "shape_pt_lon", "shape_pt_sequence"], ...shapeRows]),
+      "calendar.txt": csv([["service_id", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "start_date", "end_date"], ...calRows]),
+      "calendar_dates.txt": csv([["service_id", "date", "exception_type"], ...excRows]),
+      "agency.txt": "agency_id,agency_name\n1,ZTM",
+    };
+    if (int(3) === 0) files["x/stops.txt"] = csv([["stop_id", "stop_name", "stop_lat", "stop_lon"], ["extra", "Extra 01", "50.3", "19.3"], [stops[0].id, "Dup 01", "50.31", "19.31"]]);
+    if (int(2) === 0) {
+      const runs = Array.from({ length: 1 + int(3) }, () => {
+        const st = 5 * 3600 + int(15) * 3600;
+        return [pick(trips), `${pad(Math.floor(st / 3600))}:00:00`, `${pad(Math.floor(st / 3600) + int(2))}:${pad(int(60))}:00`, pick(["600", "59", "0", "x", "900", "1200"]), "0"];
+      });
+      files["frequencies.txt"] = csv([["trip_id", "start_time", "end_time", "headway_secs", "exact_times"], ...runs]);
+    }
+    if (int(2) === 0) {
+      files["feed_info.txt"] = csv([
+        ["feed_publisher_name", "feed_start_date", "feed_end_date", "feed_version"],
+        ["ZTM", date(), date(), String(int(1e9))],
+        ...(int(2) ? [["ZTM", date(), "", "v2"]] : []),
+      ]);
+    }
+    if (int(6) === 0) delete files["trips.txt"];
+    return files;
+  }
+
+  const zip = (files: Record<string, string>) => Buffer.from(zipSync(Object.fromEntries(Object.entries(files).map(([k, v]) => [k, strToU8(v)]))));
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "kb-vec-gzm-zip-"));
+  const parse = async (bytes: Buffer, slug: string) => {
+    const file = path.join(tmp, "gtfs.zip");
+    fs.writeFileSync(file, bytes);
+    try {
+      return await feedMod.parseGzmZip(file, slug);
+    } catch (err) {
+      return String((err as Error).message);
+    }
+  };
+  type Entry = { poly: string; len: number; stops: Array<number | null>; rev: string; raw?: string };
+  const entriesOf = (f: import("../lib/gzm-feed").GzmFeed) => (f.shapes as unknown as { entries: Map<string, Entry> }).entries;
+
+  const inputs: Array<{ slug: string; files: Record<string, string> }> = [
+    { slug: "gzm", files: FIXTURE },
+    { slug: "warsaw", files: FIXTURE },
+    ...Array.from({ length: 20 }, (_, i) => ({ slug: i % 3 === 0 ? "gzm" : pick(["krakow", "x", "bialystok".repeat(5)]), files: synth() })),
+    { slug: "gzm", files: { "agency.txt": "agency_id\n1" } },
+  ];
+  // road matches for half of the raw shapes, keyed like gzm-match: the store file is read on the first GZM parse
+  const matched: Record<string, string> = {};
+  const zips = inputs.map((c) => zip(c.files));
+  for (const bytes of zips) {
+    const f = await parse(bytes, "zz");
+    if (typeof f === "string") continue;
+    for (const e of entriesOf(f).values()) {
+      if (int(2) === 0) continue;
+      matched[rawKey(e.poly)] = encodePolyline(
+        Array.from({ length: 2 + int(4) }, () => [50.2 + rnd() * 0.1, 19 + rnd() * 0.1] as [number, number]),
+      );
+    }
+  }
+  fs.writeFileSync(path.join(process.env.KB_GZM_DIR!, "matched-shapes.v1.json"), JSON.stringify({ format: "unimaps/gzm-matched-shapes", shapes: matched }));
+
+  const cases = [];
+  for (let i = 0; i < inputs.length; i++) {
+    const { slug } = inputs[i];
+    const f = await parse(zips[i], slug);
+    if (typeof f === "string") {
+      cases.push({ slug, zip: zips[i].toString("base64"), error: f });
+      continue;
+    }
+    const keys = [...entriesOf(f).keys()];
+    const shapes = keys.map((k) => ({ key: k, ...entriesOf(f).get(k) }));
+    const probe = keys.flatMap((k) => [f.shapes.wireId(k)!, k, `${k}.000000`, `${k}.ABCDEF`]).concat([`${slug}:nope.abcdef`, "", "."]);
+    const lookup = (xs: string[]) => {
+      const r = f.shapes.lookup(xs);
+      return { shapes: r.shapes, missing: r.missing, exact: r.exact };
+    };
+    const before = lookup(probe);
+    const geometry = keys.map((k) => {
+      const g = f.shapes.geometry(k);
+      return g && { src: g.src, rev: g.rev, stops: g.stops, len: g.pl.length };
+    });
+    const upgrades = keys.map((k) => {
+      const e = entriesOf(f).get(k)!;
+      const refs = e.stops.map(() => (int(6) === 0 ? null : ([50.2 + rnd() * 0.1, 19 + rnd() * 0.1] as [number, number])));
+      if (int(8) === 0) refs.pop();
+      const pts = Array.from({ length: int(8) === 0 ? int(2) : 2 + int(4) }, () => [50.2 + rnd() * 0.1, 19 + rnd() * 0.1] as [number, number]);
+      const rev = int(8) === 0 ? "000000" : e.rev;
+      const partial = int(2) === 0;
+      const ok = f.shapes.upgrade(k, rev, pts, refs, partial);
+      const ok2 = partial && int(2) === 0 ? f.shapes.upgrade(k, rev, pts, refs, false) : null;
+      return { key: k, rev, pts, refs, partial, ok, ok2, wire: f.shapes.wireId(k), unmatched: f.shapes.unmatched(k)?.rev ?? null };
+    });
+    cases.push({
+      slug,
+      zip: zips[i].toString("base64"),
+      error: null,
+      version: f.version,
+      start_date: f.startDate,
+      end_date: f.endDate,
+      area: f.area,
+      stops_body: f.stopsBody,
+      stops_etag: f.stopsEtag,
+      lines: f.lines,
+      trips: [...f.trips.values()].map((t) => ({
+        id: t.tripId,
+        service_id: t.serviceId,
+        route_id: t.routeId,
+        line: t.line,
+        headsign: t.headsign,
+        stop_ids: t.stopIds,
+        seqs: Array.from(t.seqs),
+        arr: Array.from(t.arr),
+        dep: Array.from(t.dep),
+        dates: [...t.dates].sort(),
+        flags: Array.from(t.flags),
+        shape_id: t.shapeId,
+        brigade: t.brigade,
+        dir: t.dir,
+        stop_headsigns: t.stopHeadsigns,
+        next: t.next?.tripId ?? null,
+      })),
+      trips_by_line: Object.fromEntries([...f.tripsByLine].map(([k, v]) => [k, v.map((t) => t.tripId)])),
+      shapes,
+      raw_keys: [...f.shapes.rawKeys()].sort(),
+      status: [...keys, `${slug}:nope`, ""].map((k) => [k, f.shapes.status(k)]),
+      before,
+      geometry,
+      upgrades,
+      after: lookup(probe),
+    });
+  }
+  fs.rmSync(tmp, { recursive: true, force: true });
+  fs.rmSync(process.env.KB_GZM_DIR!, { recursive: true, force: true });
+
+  const area = Array.from({ length: 12 }, () => {
+    const n = int(9);
+    const stops = Array.from({ length: n }, () => ({ lat: pick([50 + rnd(), 25.1, 50.2, -0.5]), lon: pick([19 + rnd(), 19.01, 120]) }));
+    return { stops: stops.map((s) => [s.lat, s.lon]), out: n ? feedMod.feedArea(stops) : null };
+  });
+  const at = (d: number, h: number, m = 0) => Date.UTC(2026, 9, d, h - 1, m);
+  const due = Array.from({ length: 40 }, () => {
+    const s = { hasFeed: int(4) > 0, checkedDay: pick(["", "2026-10-27", "2026-10-28", "2026-10-29"]), retryAt: pick([0, 0, at(28, 2, 30), at(28, 9)]) };
+    const now = at(27 + int(3), int(24), pick([0, 59, 30]));
+    return { state: s, now, out: feedMod.gzmRefreshDue(s, now) };
+  });
+  write("gzm_feed", { matched, cases, area, due }, 0);
 })();

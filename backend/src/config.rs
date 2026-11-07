@@ -49,3 +49,64 @@ pub static MZK_TIMETABLE_FILE: LazyLock<String> =
 pub static PUSH_DIR: LazyLock<String> = LazyLock::new(|| env_str("KB_PUSH_DIR", &in_output("push")));
 pub static PUSH_SUBJECT: LazyLock<String> =
     LazyLock::new(|| env_str("KB_PUSH_SUBJECT", "https://github.com/unisic/unimaps"));
+
+/// The identifying User-Agent every upstream request sends.
+pub static USER_AGENT: LazyLock<String> =
+    LazyLock::new(|| env_str("KB_USER_AGENT", "unimaps/2.0 (+https://github.com/unisic/unimaps)"));
+
+/// `KB_OSRM_URL` (route service base), None when set to `off`.
+pub static OSRM_URL: LazyLock<Option<String>> = LazyLock::new(|| {
+    let v = env_str("KB_OSRM_URL", "https://router.project-osrm.org/route/v1/driving");
+    let v = v.trim_matches(crate::js::is_space);
+    (!v.eq_ignore_ascii_case("off")).then(|| v.to_owned())
+});
+/// The public demo host: its policy wants an identifying User-Agent and at most 1 request/s.
+pub static PUBLIC_OSRM: LazyLock<bool> = LazyLock::new(|| {
+    OSRM_URL.as_deref().is_some_and(|u| {
+        // /(^|\/\/)router\.project-osrm\.org\b/
+        const HOST: &str = "router.project-osrm.org";
+        u.match_indices(HOST).any(|(i, _)| {
+            (i == 0 || u[..i].ends_with("//"))
+                && !u[i + HOST.len()..]
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+        })
+    })
+});
+/// Minimum spacing between OSRM requests, at least 1000 ms on the public host.
+pub static OSRM_MIN_INTERVAL_MS: LazyLock<i64> =
+    LazyLock::new(|| env_int("KB_OSRM_MIN_INTERVAL_MS", 1100, 250).max(if *PUBLIC_OSRM { 1000 } else { 0 }));
+pub static OSRM_USER_AGENT: LazyLock<String> = LazyLock::new(|| env_str("KB_OSRM_USER_AGENT", &USER_AGENT));
+
+/// Metropolia GZM and the other zbiorkom cities: feeds, positions, SDIP overlay, news.
+pub static GZM_GTFS_URL: LazyLock<String> = LazyLock::new(|| {
+    env_str(
+        "KB_GZM_GTFS_URL",
+        "https://api.zbiorkom.live/api6-open/gzm/gtfs/default",
+    )
+});
+pub static GZM_POSITIONS_URL: LazyLock<String> = LazyLock::new(|| {
+    env_str(
+        "KB_GZM_POSITIONS_URL",
+        "https://api.zbiorkom.live/api6-open/gzm/positions/18.3,49.9,19.7,50.7",
+    )
+});
+pub static GZM_SDIP_ENABLED: LazyLock<bool> = LazyLock::new(|| env_int("KB_GZM_SDIP", 1, 0) != 0);
+pub static GZM_SDIP_URL: LazyLock<String> =
+    LazyLock::new(|| env_str("KB_GZM_SDIP_URL", "https://sdip.transportgzm.pl/vm/main"));
+/// None when set to `off` (no GZM announcements).
+pub static GZM_NEWS_URL: LazyLock<Option<String>> = LazyLock::new(|| {
+    let v = env_str("KB_GZM_NEWS_URL", "https://rj.transportgzm.pl/v2/news/");
+    let v = v.trim_matches(crate::js::is_space);
+    (!v.eq_ignore_ascii_case("off")).then(|| v.to_owned())
+});
+pub static GZM_DIR: LazyLock<String> = LazyLock::new(|| env_str("KB_GZM_DIR", &in_output("gzm")));
+pub static GZM_FLEET_HISTORY_DAYS: LazyLock<i64> = LazyLock::new(|| env_int("KB_GZM_FLEET_HISTORY_DAYS", 30, 1));
+pub static ZB_API_URL: LazyLock<String> = LazyLock::new(|| {
+    env_str("KB_ZB_API_URL", "https://api.zbiorkom.live/api6-open")
+        .trim_end_matches('/')
+        .to_owned()
+});
+pub static ZB_RESIDENT: LazyLock<i64> = LazyLock::new(|| env_int("KB_ZB_RESIDENT", 2, 1));
+pub static ZB_IDLE_MIN: LazyLock<i64> = LazyLock::new(|| env_int("KB_ZB_IDLE_MIN", 30, 1));
