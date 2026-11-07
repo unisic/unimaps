@@ -8,19 +8,25 @@
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
-use std::io::{BufRead, BufReader, Read};
-use std::path::Path;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::time::Instant;
+use std::io::{BufRead, BufReader, BufWriter, Read, Write};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+use std::sync::{Arc, LazyLock, Mutex, MutexGuard, PoisonError};
+use std::time::{Duration, Instant};
 
 use indexmap::IndexMap;
 use jiff::Timestamp;
 use jiff::civil::Date;
+use jiff::fmt::rfc2822::DateTimePrinter;
 use serde::Serialize;
+use serde_json::{Value, json};
 use sha1::{Digest, Sha1};
 
+use crate::config;
 use crate::gtfs_csv::{DROP_OFF_ON_REQUEST, PICKUP_ON_REQUEST, col, field, parse_csv_line, pickup_flags};
+use crate::gzm_match::MATCHER;
 use crate::js::{self, JsNum};
+use crate::logger::{info, warn};
 use crate::router::{CallPool, RouterIndex, RouterInput, RouterStopInput, TripEntry, TripStopEntry, call_columns};
 use crate::shape_store::{ShapeGeometry, ShapeSrc, finalize_shape};
 use crate::shared::gzm_stop_key::gzm_stop_key;
@@ -1337,4 +1343,300 @@ pub fn gzm_refresh_due(s: &RefreshState, now_ms: i64) -> bool {
 pub fn checked_day_at(ms: i64) -> String {
     let (date, secs) = clock_ms(ms);
     if secs >= REFRESH_FROM_SECS { date } else { String::new() }
+}
+
+/* ---------------- download ---------------- */
+
+pub const MAX_ZIP_BYTES: u64 = 64 * 1024 * 1024;
+const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(120);
+
+#[derive(Debug, PartialEq)]
+pub struct Downloaded {
+    pub tmp: PathBuf,
+    pub bytes: u64,
+}
+
+fn size_cap() -> String {
+    "GZM GTFS zip exceeds the size cap".to_owned()
+}
+
+/// Downloads the zip next to `file` as `<file>.tmp`; `None` on 304. `if_modified_since` = the kept zip's mtime.
+pub async fn download_gzm_zip(
+    file: &Path,
+    url: &str,
+    if_modified_since: Option<Timestamp>,
+    max_bytes: u64,
+) -> Result<Option<Downloaded>, String> {
+    let mut req = crate::fetch::client()
+        .get(url)
+        .header("User-Agent", config::USER_AGENT.as_str())
+        .header("Accept", "application/zip, */*")
+        .timeout(DOWNLOAD_TIMEOUT);
+    if let Some(t) = if_modified_since {
+        let date = DateTimePrinter::new()
+            .timestamp_to_rfc9110_string(&t)
+            .map_err(|e| e.to_string())?;
+        req = req.header("If-Modified-Since", date);
+    }
+    let mut res = req.send().await.map_err(|e| e.to_string())?;
+    let status = res.status().as_u16();
+    if status == 304 {
+        return Ok(None);
+    }
+    if !res.status().is_success() {
+        return Err(format!("GZM GTFS HTTP {status}"));
+    }
+    if res.content_length().is_some_and(|n| n > max_bytes) {
+        return Err(size_cap());
+    }
+    let mut tmp = file.as_os_str().to_owned();
+    tmp.push(".tmp");
+    let tmp = PathBuf::from(tmp);
+    if let Some(dir) = file.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    // page-cache writes behind a 64 KB buffer: short enough to stay on the async thread
+    let mut out = BufWriter::with_capacity(64 * 1024, File::create(&tmp).map_err(|e| e.to_string())?);
+    let mut bytes = 0u64;
+    let body: Result<(), String> = async {
+        while let Some(chunk) = res.chunk().await.map_err(|e| e.to_string())? {
+            bytes += chunk.len() as u64;
+            if bytes > max_bytes {
+                return Err(size_cap());
+            }
+            out.write_all(&chunk).map_err(|e| e.to_string())?;
+        }
+        out.flush().map_err(|e| e.to_string())
+    }
+    .await;
+    drop(out);
+    match body {
+        Ok(()) => Ok(Some(Downloaded { tmp, bytes })),
+        Err(e) => {
+            let _ = std::fs::remove_file(&tmp);
+            Err(e)
+        }
+    }
+}
+
+/* ---------------- refresh ---------------- */
+
+const CHECK: Duration = Duration::from_secs(10 * 60);
+const RETRY_MS: i64 = 30 * 60_000;
+
+/// One city's feed. `epoch` tells a stopped city's refresh task apart from a restarted one's.
+#[derive(Default)]
+struct FeedState {
+    epoch: u64,
+    feed: Option<Arc<GzmFeed>>,
+    refresh: RefreshState,
+    last_error: Option<String>,
+    downloads: u64,
+    download_bytes: u64,
+    task: Option<tokio::task::JoinHandle<()>>,
+}
+
+/// one state per zbiorkom slug, created on start (bounded by the registry), dropped by [`stop_gzm_feed`]
+static STATES: LazyLock<Mutex<HashMap<String, FeedState>>> = LazyLock::new(Mutex::default);
+static EPOCH: AtomicU64 = AtomicU64::new(0);
+
+fn states() -> MutexGuard<'static, HashMap<String, FeedState>> {
+    STATES.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Runs `f` on the state of `slug` while it still belongs to the task of `epoch`; `None` once the city was stopped.
+fn with_state<R>(slug: &str, epoch: u64, f: impl FnOnce(&mut FeedState) -> R) -> Option<R> {
+    states().get_mut(slug).filter(|s| s.epoch == epoch).map(f)
+}
+
+/// The kept zip: GZM's stays where it was, every other city's sits beside it under its slug.
+pub fn gzm_zip_path(slug: &str) -> PathBuf {
+    let dir = Path::new(config::GZM_DIR.as_str());
+    if slug == "gzm" {
+        dir.join("gtfs.zip")
+    } else {
+        dir.join(slug).join("gtfs.zip")
+    }
+}
+
+fn feed_url(slug: &str) -> String {
+    if slug == "gzm" {
+        config::GZM_GTFS_URL.clone()
+    } else {
+        format!(
+            "{}/{}/gtfs/default",
+            config::ZB_API_URL.as_str(),
+            js::encode_uri_component(slug)
+        )
+    }
+}
+
+/// A city's current feed, or `None` while the first one loads (or after it was dropped). Never starts anything.
+pub fn get_gzm_feed(slug: &str) -> Option<Arc<GzmFeed>> {
+    states().get(slug)?.feed.clone()
+}
+
+fn mtime(file: &Path) -> Option<Timestamp> {
+    let t = std::fs::metadata(file).ok()?.modified().ok()?;
+    Timestamp::try_from(t).ok()
+}
+
+async fn parse_off_loop(file: PathBuf, slug: &str) -> Result<GzmFeed, String> {
+    let slug = slug.to_owned();
+    tokio::task::spawn_blocking(move || parse_gzm_zip(&file, &slug, &|raw| MATCHER.stored(raw)))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Publishes a parsed feed; false = the city was stopped meanwhile.
+fn set_feed(slug: &str, epoch: u64, feed: GzmFeed, checked_day: Option<String>) -> bool {
+    let feed = Arc::new(feed);
+    let set = with_state(slug, epoch, |s| {
+        s.feed = Some(feed.clone());
+        s.refresh.has_feed = true;
+        if let Some(day) = checked_day {
+            s.refresh.checked_day = day;
+        }
+    });
+    if set.is_none() {
+        return false;
+    }
+    if slug == "gzm" {
+        MATCHER.prune(&feed.shapes);
+    }
+    info(
+        "gzm-feed",
+        format!(
+            "{slug}: feed {} ({}..{}): {} stops, {} trips, {} shapes, built in {} ms",
+            feed.version,
+            feed.start_date,
+            feed.end_date,
+            feed.stops.len(),
+            feed.router.trips.len(),
+            feed.shapes.size(),
+            feed.build_ms
+        ),
+    );
+    true
+}
+
+/// Downloads (If-Modified-Since the kept zip), parses, then swaps the zip in; `Ok(false)` = stopped meanwhile.
+async fn download_and_install(slug: &str, epoch: u64, zip: &Path, has_feed: bool) -> Result<bool, String> {
+    let since = if has_feed { mtime(zip) } else { None };
+    let Some(got) = download_gzm_zip(zip, &feed_url(slug), since, MAX_ZIP_BYTES).await? else {
+        return Ok(true);
+    };
+    with_state(slug, epoch, |s| {
+        s.downloads += 1;
+        s.download_bytes += got.bytes;
+    });
+    let installed = match parse_off_loop(got.tmp.clone(), slug).await {
+        Ok(feed) => std::fs::rename(&got.tmp, zip).map(|()| feed).map_err(|e| e.to_string()),
+        Err(e) => Err(e),
+    };
+    match installed {
+        Ok(feed) => Ok(set_feed(slug, epoch, feed, None)),
+        Err(e) => {
+            let _ = std::fs::remove_file(&got.tmp);
+            Err(e)
+        }
+    }
+}
+
+async fn refresh(slug: &str, epoch: u64) {
+    let zip = gzm_zip_path(slug);
+    let Some(has_feed) = with_state(slug, epoch, |s| s.feed.is_some()) else {
+        return;
+    };
+    if !has_feed && zip.exists() {
+        match parse_off_loop(zip.clone(), slug).await {
+            Ok(feed) => {
+                let day = mtime(&zip).map_or_else(String::new, |t| checked_day_at(t.as_millisecond()));
+                if !set_feed(slug, epoch, feed, Some(day)) {
+                    return;
+                }
+            }
+            Err(e) => warn(
+                "gzm-feed",
+                format!("{slug}: kept zip unreadable, downloading again: {e}"),
+            ),
+        }
+    }
+    // stopped while it parsed: a city nobody holds must not download
+    let Some((due, has_feed)) = with_state(slug, epoch, |s| {
+        (
+            gzm_refresh_due(&s.refresh, Timestamp::now().as_millisecond()),
+            s.feed.is_some(),
+        )
+    }) else {
+        return;
+    };
+    if !due {
+        return;
+    }
+    let r = download_and_install(slug, epoch, &zip, has_feed).await;
+    let now = Timestamp::now().as_millisecond();
+    with_state(slug, epoch, |s| match r {
+        Ok(_) => {
+            s.refresh.checked_day = checked_day_at(now);
+            s.last_error = None;
+        }
+        Err(e) => {
+            s.refresh.retry_at = now + RETRY_MS;
+            warn(
+                "gzm-feed",
+                format!("{slug}: refresh failed, keeping the current feed, retry in 30 min: {e}"),
+            );
+            s.last_error = Some(e);
+        }
+    });
+}
+
+/// Loads a city's kept zip and checks for a new one now and every 10 min, on one task. Idempotent.
+/// ponytail: a repeated start does not force a check (Node's did, deduped); both callers start once per city.
+pub fn start_gzm_feed(slug: &str) {
+    let mut all = states();
+    let s = all.entry(slug.to_owned()).or_default();
+    if s.task.is_some() {
+        return;
+    }
+    let epoch = EPOCH.fetch_add(1, AtomicOrdering::Relaxed) + 1;
+    s.epoch = epoch;
+    let slug = slug.to_owned();
+    s.task = Some(tokio::spawn(async move {
+        loop {
+            refresh(&slug, epoch).await;
+            tokio::time::sleep(CHECK).await;
+        }
+    }));
+}
+
+/// Drops a city's feed and refresh task (idle eviction); the kept zip stays for the next start.
+pub fn stop_gzm_feed(slug: &str) {
+    if let Some(s) = states().remove(slug)
+        && let Some(t) = s.task
+    {
+        t.abort();
+    }
+}
+
+pub fn gzm_feed_health(slug: &str) -> Value {
+    let all = states();
+    let s = all.get(slug);
+    let f = s.and_then(|s| s.feed.as_deref());
+    json!({
+        "version": f.map(|f| &f.version),
+        "start_date": f.map(|f| &f.start_date),
+        "end_date": f.map(|f| &f.end_date),
+        "stops": f.map_or(0, |f| f.stops.len()),
+        "trips": f.map_or(0, |f| f.router.trips.len()),
+        "shapes": f.map_or(0, |f| f.shapes.size()),
+        "built_at": f.map_or(0, |f| f.built_at),
+        "build_ms": f.map(|f| f.build_ms),
+        "zip_bytes": f.map_or(0, |f| f.zip_bytes),
+        "checked_day": s.map(|s| s.refresh.checked_day.as_str()).filter(|d| !d.is_empty()),
+        "downloads": s.map_or(0, |s| s.downloads),
+        "download_bytes": s.map_or(0, |s| s.download_bytes),
+        "last_error": s.and_then(|s| s.last_error.as_deref()),
+    })
 }

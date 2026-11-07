@@ -1,5 +1,5 @@
-//! test/gzm-feed.test.ts (parse, shapes, upgrade, the OSRM matches of gzm_match, rejects, gzmRefreshDue;
-//! serviceDayBase lives in src/time.rs, downloadGzmZip with the download) and the golden vectors of
+//! test/gzm-feed.test.ts (parse, shapes, upgrade, the OSRM matches of gzm_match, rejects, gzmRefreshDue,
+//! downloadGzmZip; serviceDayBase lives in src/time.rs) and the golden vectors of
 //! lib/gzm-feed.ts (scripts/dump-vectors.ts: the support fixture and seeded hostile zbiorkom-style zips, some with
 //! stored road matches, then the shape lookup and upgrade on each).
 
@@ -11,10 +11,15 @@ use std::sync::atomic::Ordering::SeqCst;
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
+use jiff::Timestamp;
 use serde::Serialize;
 use serde_json::{Value, json};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use unimaps::gtfs_csv::{NO_DROP_OFF, NO_PICKUP, PICKUP_ON_REQUEST};
-use unimaps::gzm_feed::{GzmFeed, RefreshState, feed_area, gzm_refresh_due, parse_gzm_zip, raw_key};
+use unimaps::gzm_feed::{
+    Downloaded, GzmFeed, MAX_ZIP_BYTES, RefreshState, download_gzm_zip, feed_area, gzm_refresh_due, parse_gzm_zip,
+    raw_key,
+};
 use unimaps::gzm_match::Matcher;
 use unimaps::js::{self, buffer_from_base64, num_value};
 use unimaps::osrm::{MATCH_CHUNK_PUBLIC, OsrmHttp, OsrmTransport, osrm_match_base};
@@ -956,4 +961,87 @@ fn golden_refresh_due() {
         };
         assert_eq!(gzm_refresh_due(&state, c["now"].as_i64().unwrap()), c["out"], "{c}");
     }
+}
+
+/* ---------------- downloadGzmZip ---------------- */
+
+/// Answers one request with `response` (raw HTTP/1.1); the handle yields the request head.
+async fn serve_once(response: &'static [u8]) -> (String, tokio::task::JoinHandle<String>) {
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/gtfs", l.local_addr().unwrap());
+    let head = tokio::spawn(async move {
+        let (mut s, _) = l.accept().await.unwrap();
+        let (mut head, mut buf) = (Vec::new(), [0u8; 1024]);
+        while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+            let n = s.read(&mut buf).await.unwrap();
+            if n == 0 {
+                break;
+            }
+            head.extend_from_slice(&buf[..n]);
+        }
+        s.write_all(response).await.unwrap();
+        let _ = s.shutdown().await;
+        String::from_utf8_lossy(&head).to_lowercase()
+    });
+    (url, head)
+}
+
+/// One dir per test: they run at once.
+fn target(name: &str) -> (PathBuf, PathBuf) {
+    let d = dir().join(name);
+    (d.join("gtfs.zip"), d.join("gtfs.zip.tmp"))
+}
+
+#[tokio::test]
+async fn download_returns_none_on_304_and_sends_if_modified_since() {
+    let (file, tmp) = target("dl-304");
+    let (url, head) = serve_once(b"HTTP/1.1 304 Not Modified\r\nContent-Length: 0\r\n\r\n").await;
+    let since = Timestamp::from_millisecond(1_793_070_000_000).unwrap(); // Date.UTC(2026, 9, 27, 3)
+    assert_eq!(
+        download_gzm_zip(&file, &url, Some(since), MAX_ZIP_BYTES).await,
+        Ok(None)
+    );
+    let head = head.await.unwrap();
+    assert!(
+        head.contains("if-modified-since: tue, 27 oct 2026 03:00:00 gmt\r\n"),
+        "{head}"
+    );
+    assert!(head.contains("accept: application/zip, */*\r\n"), "{head}");
+    assert!(!tmp.exists());
+}
+
+#[tokio::test]
+async fn download_writes_the_streamed_body_to_the_tmp_file() {
+    let (file, tmp) = target("dl-stream");
+    let (url, _) =
+        serve_once(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\n\x01\x02\x03\r\n1\r\n\x04\r\n0\r\n\r\n")
+            .await;
+    let got = download_gzm_zip(&file, &url, None, MAX_ZIP_BYTES).await;
+    assert_eq!(
+        got,
+        Ok(Some(Downloaded {
+            tmp: tmp.clone(),
+            bytes: 4
+        }))
+    );
+    assert_eq!(std::fs::read(&tmp).unwrap(), [1, 2, 3, 4]);
+    std::fs::remove_file(tmp).unwrap();
+}
+
+#[tokio::test]
+async fn download_refuses_an_oversized_body_by_header_and_by_stream_leaving_no_tmp_file() {
+    let (file, tmp) = target("dl-cap");
+    let (url, _) = serve_once(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\n12345").await;
+    let err = download_gzm_zip(&file, &url, None, 3).await.unwrap_err();
+    assert!(err.contains("size cap"), "{err}");
+    let (url, _) =
+        serve_once(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nab\r\n2\r\ncd\r\n0\r\n\r\n").await;
+    let err = download_gzm_zip(&file, &url, None, 3).await.unwrap_err();
+    assert!(err.contains("size cap"), "{err}");
+    assert!(!tmp.exists());
+    let (url, _) = serve_once(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 1\r\n\r\nx").await;
+    assert_eq!(
+        download_gzm_zip(&file, &url, None, MAX_ZIP_BYTES).await,
+        Err("GZM GTFS HTTP 500".to_owned())
+    );
 }
