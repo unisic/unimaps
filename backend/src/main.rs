@@ -310,6 +310,13 @@ fn run_to_exit(rt: tokio::runtime::Runtime, serve: impl Future<Output = ExitCode
 }
 
 fn main() -> ExitCode {
+    // glibc gives every tokio thread its own arena and keeps what they free: measured 1.3 GB RSS and growing
+    // after 7 min of BB + GZM + Warsaw, 510 MB flat with 2 arenas. musl (the Docker image) has no arenas.
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    // SAFETY: called before any other thread exists
+    unsafe {
+        libc::mallopt(libc::M_ARENA_MAX, 2);
+    }
     let args: Vec<String> = std::env::args_os().map(|a| a.to_string_lossy().into_owned()).collect();
     // `tsx scripts/build-gtfs.ts` reads no .env file, the server entries do
     if args.get(1).map(String::as_str) == Some("build-gtfs") {
