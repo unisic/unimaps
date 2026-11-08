@@ -77,7 +77,7 @@ export interface Stop {
   name: string;
   lat: number;
   lon: number;
-  /** up to two GTFS-derived travel bearings (deg) buses leave this stop on */
+  /** up to two travel bearings (deg) buses leave this stop on: KB from GTFS, MZK learned from running courses, zbiorkom from the feed */
   dirs?: number[];
   isStation?: boolean;
   showPlatforms?: boolean;

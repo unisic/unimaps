@@ -7,6 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::fs::{File, FileTimes};
 use std::future::Future;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::{ErrorKind, Write as _};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -31,8 +32,8 @@ use crate::mzk_shape::mzk_shape_from_course_details;
 use crate::osrm::{HttpOsrm, OsrmFailure, OsrmHttp, OsrmPace, OsrmTransport, book_slot, route_waypoints};
 use crate::shape_patterns::KbPattern;
 use crate::shared::polyline::{
-    LatLng, Polyline, decode_polyline, encode_polyline, prepare_polyline, project_stops_along, prune_spurs,
-    simplify_polyline,
+    LatLng, Polyline, decode_polyline, encode_polyline, point_at, prepare_polyline, project_stops_along, prune_spurs,
+    simplify_polyline, tangent_bearing,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -521,6 +522,8 @@ struct State {
     timers: Vec<JoinHandle<()>>,
     flush_timer: Option<JoinHandle<()>>,
     last_gc: i64,
+    /// `stop_tangents()` and the hash of the (key, rev) pairs it was built from
+    stop_tangents: Option<(u64, Arc<Vec<[f64; 3]>>)>,
 }
 
 impl State {
@@ -633,6 +636,7 @@ impl<O: OsrmTransport + Send + Sync + 'static> ShapeStore<O> {
                 timers: Vec::new(),
                 flush_timer: None,
                 last_gc: 0,
+                stop_tangents: None,
             }),
             flush_lock: Mutex::new(()),
         })
@@ -793,6 +797,41 @@ impl<O: OsrmTransport + Send + Sync + 'static> ShapeStore<O> {
     /// Driven directly by tests.
     pub fn edit_entry(&self, key: &str, f: impl FnOnce(&mut ShapeEntry)) -> bool {
         self.lock().entries.get_mut(key).map(f).is_some()
+    }
+
+    /// `[lat, lon, bearing]` of every road shape (OSRM / MZK, not `partial`: its straight legs are the chord again) at
+    /// each of its placed stops, the bearing over ±15 m of road, sorted by lat: what `snap_dirs` turns a stop's
+    /// arrows to. The same Arc while no road entry's rev changed (a hash over the keys and revs per call, ~400 entries);
+    /// a rebuild decodes every road polyline under the state lock (~360 shapes, ~11k points).
+    pub fn stop_tangents(&self) -> Arc<Vec<[f64; 3]>> {
+        let mut st = self.lock();
+        let road = |e: &ShapeEntry| matches!(e.src, ShapeSrc::Osrm | ShapeSrc::Mzk);
+        let mut h = DefaultHasher::new();
+        for (k, e) in st.entries.iter().filter(|(_, e)| road(e)) {
+            (k, &e.rev).hash(&mut h);
+        }
+        let sig = h.finish();
+        if let Some((s, t)) = &st.stop_tangents
+            && *s == sig
+        {
+            return t.clone();
+        }
+        let mut out = Vec::new();
+        for e in st.entries.values().filter(|e| road(e)) {
+            let Some(pl) = prepare_polyline(&decode_polyline(&e.poly, 6)) else {
+                continue;
+            };
+            for &s in e.stops.iter().flatten() {
+                if let Some(b) = tangent_bearing(&pl, s, 15.0, 15.0) {
+                    let p = point_at(&pl, s, None);
+                    out.push([p.lat, p.lon, b]);
+                }
+            }
+        }
+        out.sort_by(|a, b| a[0].total_cmp(&b[0]));
+        let t = Arc::new(out);
+        st.stop_tangents = Some((sig, t.clone()));
+        t
     }
 
     /// Prepared geometry for along-route math (LRU of 300, per key and rev).

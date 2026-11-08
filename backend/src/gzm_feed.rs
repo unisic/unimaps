@@ -31,7 +31,8 @@ use crate::logger::{info, warn};
 use crate::router::{CallPool, RouterIndex, RouterInput, RouterStopInput, TripEntry, TripStopEntry, call_columns};
 use crate::shape_store::{ShapeGeometry, ShapeSrc, finalize_shape};
 use crate::shared::gzm_stop_key::gzm_stop_key;
-use crate::shared::polyline::{LatLng, decode_polyline, prepare_polyline};
+use crate::shared::polyline::{LatLng, decode_polyline, prepare_polyline, tangent_bearing};
+use crate::stop_directions::{angle_diff, call_tangent, cluster_road_directions};
 use crate::time::agency_clock;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -1068,36 +1069,26 @@ impl FeedBuilder {
                 extra[w[0] as usize].next = Some(w[1]);
             }
         }
+        // trips with the same calls share one `stop_ids` slice: each pattern (with its shape) and its trip count, for
+        // the stop arrows
+        type PatternKey<'a> = (*const String, Option<&'a str>);
+        let mut patterns: IndexMap<PatternKey, (&[String], usize)> = IndexMap::new();
+        for (t, x) in trips.values().zip(&extra) {
+            patterns
+                .entry((t.stop_ids.as_ptr(), x.shape_id.as_deref()))
+                .or_insert((&t.stop_ids, 0))
+                .1 += 1;
+        }
 
         let stops: IndexMap<String, GzmStop> = std::mem::take(&mut self.stops)
             .into_iter()
             .filter(|(id, _)| used.contains(id.as_str()))
             .collect();
-        let wire: Vec<serde_json::Value> = stops
-            .values()
-            .map(|s| {
-                let mut o = serde_json::json!({
-                    "id": s.id,
-                    "designator": s.id,
-                    "name": s.name,
-                    "lat": js::num_value(s.lat),
-                    "lon": js::num_value(s.lon),
-                    "operator": "GZM",
-                    "operators": ["GZM"],
-                });
-                if request.get(s.id.as_str()).is_some_and(|&r| r > 0) {
-                    o["onRequest"] = true.into();
-                }
-                o
-            })
-            .collect();
-        let stops_body = serde_json::json!({ "count": wire.len(), "stops": wire }).to_string();
-        drop(request);
-        drop(used);
-
         // one stop pattern per shape in this feed, so the first trip's stops place every trip's stops
         let gzm = self.slug == "gzm";
         let mut shape_entries: IndexMap<String, GzmShapeEntry> = IndexMap::new();
+        // per shape: the stop pattern it was placed with and the road bearing at each of its stops
+        let mut shape_tan: HashMap<String, (*const String, Vec<Option<f64>>)> = HashMap::new();
         for (key, mut pts) in std::mem::take(&mut self.shape_pts) {
             let Some(&ti) = shape_trip.get(&key) else { continue };
             if pts.len() < 2 {
@@ -1136,8 +1127,54 @@ impl FeedBuilder {
                     raw: None,
                 },
             };
+            // the road's own direction at each stop, for its arrows: a stop-to-stop chord cuts across bends
+            if let Some(pl) = prepare_polyline(&decode_polyline(&entry.poly, 6)) {
+                let road = entry
+                    .stops
+                    .iter()
+                    .map(|s| s.and_then(|s| tangent_bearing(&pl, s, 15.0, 15.0)));
+                shape_tan.insert(key.clone(), (trips[ti as usize].stop_ids.as_ptr(), road.collect()));
+            }
             shape_entries.insert(key, entry);
         }
+
+        let dirs = stop_dirs(
+            patterns.iter().map(|(&(ptr, shape), &(ids, n))| {
+                let road = shape
+                    .and_then(|k| shape_tan.get(k))
+                    .filter(|(p, _)| *p == ptr)
+                    .map(|(_, r)| r.as_slice());
+                (ids, n, road)
+            }),
+            &stops,
+        );
+        drop(patterns);
+        let wire: Vec<serde_json::Value> = stops
+            .values()
+            .map(|s| {
+                let mut o = serde_json::json!({
+                    "id": s.id,
+                    "designator": s.id,
+                    "name": s.name,
+                    "lat": js::num_value(s.lat),
+                    "lon": js::num_value(s.lon),
+                    "operator": "GZM",
+                    "operators": ["GZM"],
+                });
+                if request.get(s.id.as_str()).is_some_and(|&r| r > 0) {
+                    o["onRequest"] = true.into();
+                }
+                if let Some(d) = dirs.get(s.id.as_str()).filter(|d| !d.is_empty()) {
+                    o["dirs"] = d.iter().map(|&b| js::num_value(b)).collect();
+                }
+                o
+            })
+            .collect();
+        let stops_body = serde_json::json!({ "count": wire.len(), "stops": wire }).to_string();
+        drop(request);
+        drop(used);
+        drop(dirs);
+        drop(shape_tan);
 
         let mut lines: Vec<GzmLine> = std::mem::take(&mut self.routes).into_values().collect();
         lines.sort_by(|a, b| js::compare_pl_numeric(&a.name, &b.name));
@@ -1179,6 +1216,37 @@ impl FeedBuilder {
 }
 
 /// `trips.set(id, t)`: a repeated id keeps its place and takes the new trip
+/// Travel arrows per stop id, by `stop_directions`' rule: each call credits its stop with the road tangent through
+/// it, a pattern's calls counting all of its trips, clustered into 1-2 opposite bearings. `road` = the bearing of the
+/// pattern's shape at each call (None where it has no shape or the stop lies off it); else, or when it disagrees with
+/// it, the call's `call_tangent` chord.
+fn stop_dirs<'a>(
+    patterns: impl Iterator<Item = (&'a [String], usize, Option<&'a [Option<f64>]>)>,
+    stops: &IndexMap<String, GzmStop>,
+) -> HashMap<&'a str, Vec<f64>> {
+    let at = |id: &str| stops.get(id).map(|s| [s.lat, s.lon]);
+    let mut acc: HashMap<&str, Vec<(f64, usize)>> = HashMap::new();
+    for (ids, n, road) in patterns {
+        for (i, id) in ids.iter().enumerate() {
+            let Some(c) = at(id) else { continue };
+            let p = i.checked_sub(1).and_then(|j| at(&ids[j]));
+            let next = ids.get(i + 1).and_then(|x| at(x));
+            let chord = call_tangent(p, c, next);
+            // > 75 deg off the chord = the stop was projected onto the other leg of a loop (Zabrze Goethego 05: 22 m
+            // from the eastbound track, 47 m from its own westbound one)
+            let road = road
+                .and_then(|r| r.get(i).copied().flatten())
+                .filter(|&r| chord.is_none_or(|ch| angle_diff(r, ch) <= 75.0));
+            if let Some(b) = road.or(chord) {
+                acc.entry(id).or_default().push((b, n));
+            }
+        }
+    }
+    acc.into_iter()
+        .map(|(id, bs)| (id, cluster_road_directions(&bs)))
+        .collect()
+}
+
 fn put(trips: &mut IndexMap<String, TripEntry>, extra: &mut Vec<GzmTripExtra>, t: TripEntry, x: GzmTripExtra) {
     match trips.get_index_of(&t.trip_id) {
         Some(i) => {

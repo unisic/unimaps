@@ -12,6 +12,8 @@ use sha1::{Digest, Sha1};
 
 use crate::gzm::NowFn;
 use crate::js::{self, JsNum};
+use crate::shared::polyline::seg_meters;
+use crate::stop_directions::angle_diff;
 use crate::stop_merge::{Operator, WireStop, index_merged_stops, merge_stops};
 use crate::types::Stop;
 
@@ -76,11 +78,17 @@ pub fn format_kb_stops(stops: &[Stop], dirs: &HashMap<String, Vec<f64>>) -> Vec<
         .collect()
 }
 
-/// MZK stops carry NO `dirs` on the wire (arrows stay a KB/GTFS feature); learned bearings only steer the pairing.
-pub fn format_mzk_stops(stops: &[Stop]) -> Vec<WireStop> {
+/// MZK stops carry their learned bearings (`MzkStopDirs::dirs()`, by symbol) as `dirs`: the arrows of an MZK-only
+/// stop, MZK's half of a merged stop's arrows, and the pairing's direction check. A bus station gets none, as in KB.
+pub fn format_mzk_stops(stops: &[Stop], dirs: &HashMap<String, Vec<JsNum>>) -> Vec<WireStop> {
     stops
         .iter()
         .map(|s| WireStop {
+            dirs: (!s.is_station)
+                .then(|| s.symbol.as_ref().and_then(|sym| dirs.get(sym)))
+                .flatten()
+                .filter(|d| !d.is_empty())
+                .cloned(),
             id: s.stop_id.clone(),
             designator: s.url_id.clone(),
             name: s.name.clone(),
@@ -180,6 +188,8 @@ pub struct MergedInput {
     pub kb_dirs: Arc<HashMap<String, Vec<f64>>>,
     /// MZK learned bearings by symbol: `MzkStopDirs::dirs()`, which keeps its identity until a bearing changes
     pub mzk_dirs: Arc<HashMap<String, Vec<JsNum>>>,
+    /// road bearings at the stored shapes' stops (`ShapeStore::stop_tangents()`), sorted by lat
+    pub road: Arc<Vec<[f64; 3]>>,
 }
 
 impl MergedInput {
@@ -188,6 +198,7 @@ impl MergedInput {
             && Arc::ptr_eq(&self.mzk, &o.mzk)
             && Arc::ptr_eq(&self.kb_dirs, &o.kb_dirs)
             && Arc::ptr_eq(&self.mzk_dirs, &o.mzk_dirs)
+            && Arc::ptr_eq(&self.road, &o.road)
     }
 }
 
@@ -223,12 +234,46 @@ impl MergedView {
     }
 }
 
+/// A stop's arrows turned parallel to its road. KB's come from the GTFS stop chord and MZK's from the stop order,
+/// both straight prev -> next lines, so a stop before a bend points across it. Each arrow takes the bearing of the
+/// nearest road tangent (`road`, `[lat, lon, bearing]` sorted by lat) within 30 m of the stop and 60° of the arrow
+/// (a crossing street or the opposite carriageway never is); an arrow with none keeps its value, one landing
+/// within 45° of an arrow already kept is dropped.
+pub fn snap_dirs(lat: f64, lon: f64, dirs: &[JsNum], road: &[[f64; 3]]) -> Vec<JsNum> {
+    const NEAR_M: f64 = 30.0;
+    let dlat = NEAR_M / 111_000.0;
+    let from = road.partition_point(|r| r[0] < lat - dlat);
+    let near: Vec<(f64, f64)> = road[from..]
+        .iter()
+        .take_while(|r| r[0] <= lat + dlat)
+        .map(|r| (seg_meters(lat, lon, r[0], r[1]), r[2]))
+        .filter(|&(d, _)| d <= NEAR_M)
+        .collect();
+    let mut out: Vec<JsNum> = Vec::with_capacity(dirs.len());
+    for d in dirs {
+        let b = near
+            .iter()
+            .filter(|&&(_, b)| angle_diff(b, d.0) <= 60.0)
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map_or(d.0, |&(_, b)| js::round(b).rem_euclid(360.0));
+        if out.iter().all(|x| angle_diff(x.0, b) >= 45.0) {
+            out.push(JsNum(b));
+        }
+    }
+    out
+}
+
 fn build_view(input: &MergedInput, now_ms: i64) -> MergedView {
-    let stops = merge_stops(
+    let mut stops = merge_stops(
         &format_kb_stops(&input.kb, &input.kb_dirs),
-        &format_mzk_stops(&input.mzk),
+        &format_mzk_stops(&input.mzk, &input.mzk_dirs),
         Some(&input.mzk_dirs),
     );
+    for s in &mut stops {
+        if let Some(d) = &mut s.dirs {
+            *d = snap_dirs(s.lat.0, s.lon.0, d, &input.road);
+        }
+    }
     let partial = input.kb.is_empty() || input.mzk.is_empty();
     let mut response = Map::new();
     response.insert("count".into(), stops.len().into());

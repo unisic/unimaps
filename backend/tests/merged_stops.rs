@@ -5,7 +5,9 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 use unimaps::js::JsNum;
-use unimaps::merged_stops::{MergedInput, MergedStopsCache, MergedSummary, format_kb_stops, format_mzk_stops};
+use unimaps::merged_stops::{
+    MergedInput, MergedStopsCache, MergedSummary, format_kb_stops, format_mzk_stops, snap_dirs,
+};
 use unimaps::mzk_stop_dirs::{MzkStopDirs, StopCoord, cluster_bearings};
 use unimaps::stop_merge::Operator;
 use unimaps::types::Stop;
@@ -94,15 +96,30 @@ fn a_kb_name_ending_in_nz_is_a_request_stop_kb_has_no_flag_nz_inside_a_word_is_n
 }
 
 #[test]
-fn mzk_stops_carry_symbol_and_flags_and_no_dirs_learned_bearings_steer_the_pairing_only() {
-    let out = format_mzk_stops(&[Stop {
-        on_request: Some(true),
-        ..mzk_stop("265", "Piastowska Lubertowicza", 49.827, 19.036)
-    }]);
+fn mzk_stops_carry_symbol_flags_and_learned_dirs_a_station_none() {
+    let out = format_mzk_stops(
+        &[
+            Stop {
+                on_request: Some(true),
+                ..mzk_stop("265", "Piastowska Lubertowicza", 49.827, 19.036)
+            },
+            mzk_stop("266", "Piastowska", 49.828, 19.037),
+            Stop {
+                is_station: true,
+                ..mzk_stop("343", "Dworzec", 49.83, 19.04)
+            },
+        ],
+        &HashMap::from([
+            ("265".to_string(), vec![JsNum(218.0)]),
+            ("343".to_string(), vec![JsNum(90.0)]),
+        ]),
+    );
     let m = &out[0];
     assert_eq!(m.symbol.as_deref(), Some("265"));
     assert_eq!(m.on_request, Some(true));
-    assert_eq!(m.dirs, None);
+    assert_eq!(m.dirs, Some(vec![JsNum(218.0)]));
+    assert_eq!(out[1].dirs, None);
+    assert_eq!(out[2].dirs, None);
 }
 
 // createMergedStopsCache
@@ -112,6 +129,7 @@ struct Base {
     mzk: Arc<Vec<Stop>>,
     no_dirs: Arc<HashMap<String, Vec<f64>>>,
     no_mzk_dirs: Arc<HashMap<String, Vec<JsNum>>>,
+    no_road: Arc<Vec<[f64; 3]>>,
 }
 
 impl Base {
@@ -127,6 +145,7 @@ impl Base {
             mzk: Arc::new(vec![mzk_stop("265", "Piastowska Lubertowicza", 49.827047, 19.036152)]),
             no_dirs: Arc::new(HashMap::new()),
             no_mzk_dirs: Arc::new(HashMap::new()),
+            no_road: Arc::new(Vec::new()),
         }
     }
 
@@ -136,6 +155,7 @@ impl Base {
             mzk: self.mzk.clone(),
             kb_dirs: self.no_dirs.clone(),
             mzk_dirs: self.no_mzk_dirs.clone(),
+            road: self.no_road.clone(),
         }
     }
 }
@@ -359,4 +379,26 @@ fn cluster_bearings_merges_nearby_bearings_and_keeps_an_opposite_cluster_only_wi
     assert_same(&two, &[90.0, 269.0]);
     // single stray sample is noise
     assert_same(&cluster_bearings(&[90.0, 92.0, 88.0, 91.0, 89.0, 90.0, 270.0]), &[90.0]);
+}
+
+#[test]
+fn an_arrow_turns_to_the_nearest_road_bearing_within_30_m_and_60_degrees() {
+    let (lat, lon) = (49.827, 19.036);
+    let m = 1.0 / 111_000.0;
+    let road = [
+        [lat - 25.0 * m, lon, 172.4], // the stop's own road, 25 m away
+        [lat + 10.0 * m, lon, 268.0], // a crossing street, nearer but 85 deg off
+        [lat + 12.0 * m, lon, 352.0], // the opposite carriageway, for the other arrow
+        [lat + 40.0 * m, lon, 150.0], // beyond 30 m
+    ];
+    let snap = |d: &[f64]| -> Vec<f64> {
+        let d: Vec<JsNum> = d.iter().map(|&x| JsNum(x)).collect();
+        snap_dirs(lat, lon, &d, &road).iter().map(|x| x.0).collect()
+    };
+    assert_eq!(snap(&[150.0, 330.0]), [172.0, 352.0]);
+    // nothing within 60 deg: unchanged
+    assert_eq!(snap(&[60.0]), [60.0]);
+    // two arrows landing on one bearing: one arrow
+    assert_eq!(snap(&[150.0, 200.0]), [172.0]);
+    assert_eq!(snap_dirs(lat, lon, &[JsNum(150.0)], &[]), [JsNum(150.0)]);
 }

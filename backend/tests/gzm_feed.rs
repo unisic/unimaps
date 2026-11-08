@@ -233,6 +233,63 @@ fn reads_feed_info_and_keeps_only_served_plain_stops_with_prefixed_ids() {
 }
 
 #[test]
+fn stops_carry_travel_arrows_from_the_calls_through_them() {
+    let body: Value = serde_json::from_str(&FEED.stops_body).unwrap();
+    let dirs = |id: &str| -> Vec<f64> {
+        let s = body["stops"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["id"] == id)
+            .unwrap();
+        s["dirs"]
+            .as_array()
+            .map_or(Vec::new(), |d| d.iter().map(|x| x.as_f64().unwrap()).collect())
+    };
+    // a: left westward (t1) and eastward (t0), reached from the east (t2) and the west (t3): both ways
+    let a = dirs("gzm:a");
+    assert_eq!(a.len(), 2, "{a:?}");
+    assert!((a[0] - a[1]).abs() > 150.0, "{a:?}");
+    // c: reached eastward twice (t1, t0), left westward once (t2): an opposite needs >= 2 trips
+    let c = dirs("gzm:c");
+    assert_eq!(c.len(), 1, "{c:?}");
+    assert!((60.0..90.0).contains(&c[0]), "{c:?}");
+}
+
+#[test]
+fn a_stop_arrow_follows_its_shape_unless_the_shape_leaves_the_other_way() {
+    let arrow = |name: &str, shape: &str| {
+        let fs = with(files(), "stop_times.txt", |s| {
+            let only_t0 = s.lines().enumerate().filter(|(i, l)| *i == 0 || l.starts_with("t0,"));
+            only_t0.map(|(_, l)| l).collect::<Vec<_>>().join("\n")
+        });
+        let fs = with(fs, "shapes.txt", |_| {
+            format!("shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence\n{shape}")
+        });
+        let body: Value = serde_json::from_str(&parse(name, &fs).stops_body).unwrap();
+        let a = body["stops"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["id"] == "gzm:a")
+            .unwrap();
+        a["dirs"][0].as_f64().unwrap()
+    };
+    // t0 runs a -> c, 75 deg as the crow flies; its road leaves a due east
+    let east = arrow(
+        "east.zip",
+        "sh1,50.2590,19.0220,1\nsh1,50.2590,19.0300,2\nsh1,50.2770,19.1300,3",
+    );
+    assert!((88.0..=92.0).contains(&east), "{east}");
+    // a shape leaving westward (a stop projected onto the other leg of a loop) is not trusted: the chord stays
+    let chord = arrow(
+        "west.zip",
+        "sh1,50.2590,19.0220,1\nsh1,50.2590,19.0150,2\nsh1,50.2770,19.1300,3",
+    );
+    assert!((73.0..=78.0).contains(&chord), "{chord}");
+}
+
+#[test]
 fn labels_trips_by_route_short_name_falling_back_to_route_id() {
     let f = &*FEED;
     assert_eq!(f.trip("gzm:t1").unwrap().t.line, "1N");

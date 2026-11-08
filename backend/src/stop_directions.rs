@@ -16,7 +16,7 @@ use crate::js;
 use crate::merged_stops::is_station_name;
 
 /// Smallest absolute angle between two compass bearings, degrees [0, 180].
-fn angle_diff(a: f64, b: f64) -> f64 {
+pub fn angle_diff(a: f64, b: f64) -> f64 {
     let d = (a - b).abs() % 360.0;
     if d > 180.0 { 360.0 - d } else { d }
 }
@@ -30,11 +30,12 @@ struct Cluster {
 }
 
 impl Cluster {
-    fn push(&mut self, b: f64) {
+    /// `w` trips at bearing `b` (1 per trip in KB's stop_times walk; a zbiorkom pattern counts all its trips at once)
+    fn push(&mut self, b: f64, w: usize) {
         let r = b * std::f64::consts::PI / 180.0;
-        self.n += 1;
-        self.sin += r.sin();
-        self.cos += r.cos();
+        self.n += w;
+        self.sin += w as f64 * r.sin();
+        self.cos += w as f64 * r.cos();
     }
 
     /// `circularMean`, rounded to whole degrees (360 can come out of the rounding, as in the TS).
@@ -45,11 +46,11 @@ impl Cluster {
 
 /// `clusterRoadDirections`: bearings within 75 degrees of a cluster mean join it; the biggest cluster is the
 /// direction, a second one is kept only when it runs the opposite way (>= 100 degrees off) with >= 2 trips and >= 15 %
-/// of the first one's.
-fn cluster_road_directions(bearings: &[f64]) -> Vec<f64> {
+/// of the first one's. Each bearing comes with its trip count.
+pub fn cluster_road_directions(bearings: &[(f64, usize)]) -> Vec<f64> {
     const MERGE_THRESHOLD: f64 = 75.0;
     let mut clusters: Vec<Cluster> = Vec::new();
-    for &b in bearings {
+    for &(b, w) in bearings {
         let mut best: Option<usize> = None;
         let mut best_diff = MERGE_THRESHOLD;
         for (i, c) in clusters.iter().enumerate() {
@@ -60,10 +61,10 @@ fn cluster_road_directions(bearings: &[f64]) -> Vec<f64> {
             }
         }
         match best {
-            Some(i) => clusters[i].push(b),
+            Some(i) => clusters[i].push(b, w),
             None => {
                 let mut c = Cluster::default();
-                c.push(b);
+                c.push(b, w);
                 clusters.push(c);
             }
         }
@@ -79,6 +80,17 @@ fn cluster_road_directions(bearings: &[f64]) -> Vec<f64> {
         .find(|c| angle_diff(primary, c.mean()) >= 100.0 && c.n >= 2 && c.n as f64 >= first.n as f64 * 0.15);
     out.extend(opposite.map(Cluster::mean));
     out
+}
+
+/// The road tangent a call credits its stop with: previous -> next stop, the first / last call its outgoing /
+/// incoming leg.
+pub fn call_tangent(prev: Option<[f64; 2]>, cur: [f64; 2], next: Option<[f64; 2]>) -> Option<f64> {
+    match (prev, next) {
+        (Some(p), Some(n)) => bearing(p[0], p[1], n[0], n[1]),
+        (None, Some(n)) => bearing(cur[0], cur[1], n[0], n[1]),
+        (Some(p), None) => bearing(p[0], p[1], cur[0], cur[1]),
+        (None, None) => None,
+    }
 }
 
 /// `readStopDirections`: stop_id -> one or two bearings (whole degrees) of the feed in `dir`; empty while its
@@ -130,7 +142,7 @@ pub fn read_stop_directions(dir: &Path) -> HashMap<String, Vec<f64>> {
         per_trip.entry(trip).or_default().push((seq, stop));
     }
 
-    let mut acc: HashMap<&str, Vec<f64>> = HashMap::new();
+    let mut acc: HashMap<&str, Vec<(f64, usize)>> = HashMap::new();
     for calls in per_trip.values_mut() {
         calls.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
         for (i, &(_, curr)) in calls.iter().enumerate() {
@@ -142,14 +154,8 @@ pub fn read_stop_directions(dir: &Path) -> HashMap<String, Vec<f64>> {
             };
             let p = i.checked_sub(1).and_then(|j| coords.get(calls[j].1));
             let n = calls.get(i + 1).and_then(|x| coords.get(x.1));
-            let brg = match (p, n) {
-                (Some(p), Some(n)) => bearing(p[0], p[1], n[0], n[1]),
-                (None, Some(n)) => bearing(c[0], c[1], n[0], n[1]),
-                (Some(p), None) => bearing(p[0], p[1], c[0], c[1]),
-                (None, None) => None,
-            };
-            if let Some(b) = brg {
-                acc.entry(curr).or_default().push(b);
+            if let Some(b) = call_tangent(p.copied(), *c, n.copied()) {
+                acc.entry(curr).or_default().push((b, 1));
             }
         }
     }

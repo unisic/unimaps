@@ -316,7 +316,8 @@ fn assign(cands: &[Candidate], kb_len: usize, mzk_len: usize) -> HashMap<usize, 
 /// - a bus station also fans out to the other unmatched same-name MZK stops within MERGE_HUB_M (`mzkSymbols`),
 ///   which are folded into it.
 ///
-/// `mzk_dirs` (learned bearings by MZK symbol) only steers the pairing; it never reaches the merged stops.
+/// `mzk_dirs` (learned bearings by MZK symbol) stands in for an MZK stop's missing `dirs` in the pairing only (a bus
+/// station: `format_mzk_stops` sends no arrows for one); the merged stops' arrows come from the stops' own `dirs`.
 pub fn merge_stops(kb: &[WireStop], mzk: &[WireStop], mzk_dirs: Option<&HashMap<String, Vec<JsNum>>>) -> Vec<WireStop> {
     let kc: Vec<String> = kb.iter().map(|k| clean_stop_name(&k.name)).collect();
     let mc: Vec<String> = mzk.iter().map(|m| clean_stop_name(&m.name)).collect();

@@ -341,6 +341,7 @@ impl<T: BbKinds> Bb<T> {
             mzk,
             kb_dirs: get_stop_directions(),
             mzk_dirs,
+            road: self.shapes.stop_tangents(),
         })
     }
 
