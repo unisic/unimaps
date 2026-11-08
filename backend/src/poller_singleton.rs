@@ -258,12 +258,17 @@ impl<T: BbKinds> Bb<T> {
     /// `startPoller`: idempotent. KB and MZK start concurrently; a failed KB start while MZK came up is retried
     /// every 30 s in the background until it succeeds. Err only when both failed ("Both KB and MZK poller starts
     /// failed", the next call within 30 s gets "poller start failed recently, retry pending"). The start runs in
-    /// its own task: a caller dropped mid-wait never abandons it. Must be awaited inside a tokio runtime.
-    pub async fn start_poller(&self) -> Result<(), String> {
-        let (mut rx, _) = self.begin_start()?;
-        settled(&mut rx)
-            .await
-            .unwrap_or_else(|| Err("poller start abandoned".to_owned()))
+    /// its own task: a caller dropped mid-wait never abandons it. Must be called inside a tokio runtime: the TS
+    /// synchronous prefix (shape store load, start task spawn) runs at the call, so a caller that spawns the
+    /// returned future still reads a loaded store right after.
+    pub fn start_poller(&self) -> impl Future<Output = Result<(), String>> + Send + 'static {
+        let begun = self.begin_start();
+        async move {
+            let (mut rx, _) = begun?;
+            settled(&mut rx)
+                .await
+                .unwrap_or_else(|| Err("poller start abandoned".to_owned()))
+        }
     }
 
     /// The pending or settled start (false) or a new one (true); Err = still cooling down after a failure.

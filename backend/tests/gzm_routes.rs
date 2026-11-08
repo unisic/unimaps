@@ -36,6 +36,7 @@ fn get(param: &str, query: &str, extra: &[(&'static str, &str)]) -> ApiRequest {
         param: param.into(),
         query: query.into(),
         headers,
+        ..Default::default()
     }
 }
 

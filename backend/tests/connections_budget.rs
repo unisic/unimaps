@@ -34,6 +34,7 @@ async fn search(live: &Arc<GzmLive<Fake>>, ip: &str) -> StatusCode {
         param: String::new(),
         query: "city=gzm&from=gzm:a&to=gzm:c".into(),
         headers,
+        ..Default::default()
     };
     let live = Arc::clone(live);
     tokio::spawn(async move { connections::handle(&req, |_| live).unwrap().status() })

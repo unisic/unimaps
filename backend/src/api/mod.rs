@@ -1,6 +1,6 @@
-//! server/routes.ts and the route half of server/http.ts for the requests Rust answers itself: GET or HEAD of
-//! /api/health and of every zbiorkom request. Everything else (other methods, BB requests, unknown paths, push,
-//! status, gtfs-rt) stays with the Node child, through `crate::http`'s proxy.
+//! server/routes.ts and the route half of server/http.ts. Proxy mode (a Node child): `pick` + `dispatch` answer GET
+//! or HEAD of /api/health and of every zbiorkom request, everything else stays with Node through `crate::http`'s
+//! proxy. Owned mode (no Node): `match_route`, `methods` and `dispatch_owned` answer every API request.
 
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -15,6 +15,7 @@ use indexmap::IndexSet;
 use serde::Serialize;
 
 use crate::api_helpers::{City, internal_error, parse_city, query_param};
+use crate::fleet_tracker::get_fleet_tracker;
 use crate::gzm::{GzmLive, get_zb, start_zb};
 use crate::http::{Body, full, json, strip_hop};
 use crate::js;
@@ -29,10 +30,14 @@ pub mod fleet_history;
 pub mod fleet_timeline;
 pub mod fleet_vehicle;
 pub mod geocode;
+pub mod gtfs_rt;
 pub mod health;
 pub mod line;
 pub mod lines;
+pub mod push;
+pub mod push_news;
 pub mod shapes;
+pub mod status;
 pub mod stop_departures;
 pub mod stop_timetable;
 pub mod stops;
@@ -41,7 +46,7 @@ pub mod trip_execution;
 pub mod trips;
 pub mod vehicles;
 
-/// The API routes Rust answers, one per server/api module (push, push/news, status and gtfs-rt.pb stay in Node).
+/// The API routes, one per server/api module (push, push/news, status and gtfs-rt.pb only in owned mode).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Route {
     Announcements,
@@ -51,10 +56,14 @@ pub enum Route {
     FleetVehicle,
     FleetHistory,
     Geocode,
+    GtfsRt,
     Health,
     Line,
     Lines,
+    Push,
+    PushNews,
     Shapes,
+    Status,
     StopDepartures,
     StopTimetable,
     Stops,
@@ -66,7 +75,7 @@ pub enum Route {
 
 /// server/routes.ts over a raw (still percent-encoded) pathname: the route and its raw `[name]` segment, "" when it
 /// has none. `[name]` = `[^/]+`; a literal path wins over a `[param]` one, as the TS table order makes it.
-fn match_route(path: &str) -> Option<(Route, &str)> {
+pub fn match_route(path: &str) -> Option<(Route, &str)> {
     use Route::*;
     let rest = path.strip_prefix("/api/")?;
     // no route has more than 3 segments: a 4th only has to make the slice match nothing
@@ -79,10 +88,14 @@ fn match_route(path: &str) -> Option<(Route, &str)> {
         ["fleet", side] if !side.is_empty() => (FleetVehicle, *side),
         ["fleet", side, "history"] if !side.is_empty() => (FleetHistory, *side),
         ["geocode"] => (Geocode, ""),
+        ["gtfs-rt.pb"] => (GtfsRt, ""),
         ["health"] => (Health, ""),
         ["line"] => (Line, ""),
         ["lines"] => (Lines, ""),
+        ["push"] => (Push, ""),
+        ["push", "news"] => (PushNews, ""),
         ["shapes"] => (Shapes, ""),
+        ["status"] => (Status, ""),
         ["stop", id, "departures"] if !id.is_empty() => (StopDepartures, *id),
         ["stop", id, "timetable"] if !id.is_empty() => (StopTimetable, *id),
         ["stops"] => (Stops, ""),
@@ -112,6 +125,25 @@ fn zb_request(route: Route, param: &str, query: &str) -> bool {
         StopDepartures | StopTimetable | Trip => zb_city_of(param).is_some(),
         TripExecution => query_param(query, "exec_id").is_some_and(|id| zb_city_of(&id).is_some()),
         Trips | Shapes => batch(),
+        GtfsRt | Push | PushNews | Status => false,
+    }
+}
+
+/// The methods the route's TS module exports, in server/routes.ts order (GET, POST, DELETE).
+pub fn methods(route: Route) -> &'static [&'static str] {
+    match route {
+        Route::Push => &["GET", "POST", "DELETE"],
+        Route::PushNews => &["POST", "DELETE"],
+        _ => &["GET"],
+    }
+}
+
+/// server/http.ts `allow`: `methods(route)` joined by ", ", then HEAD and OPTIONS.
+pub fn allow(route: Route) -> &'static str {
+    match route {
+        Route::Push => "GET, POST, DELETE, HEAD, OPTIONS",
+        Route::PushNews => "POST, DELETE, HEAD, OPTIONS",
+        _ => "GET, HEAD, OPTIONS",
     }
 }
 
@@ -127,7 +159,7 @@ pub fn pick(method: &Method, path: &str, query: &str) -> Option<(Route, String)>
     zb_request(route, &param, query).then_some((route, param))
 }
 
-/// What a handler reads of a request: no body (GET and HEAD only), so a test builds one directly.
+/// What a handler reads of a request, so a test builds one directly.
 #[derive(Debug, Clone, Default)]
 pub struct ApiRequest {
     /// the route's `[name]` segment, decodeURIComponent'd; "" on a route without one
@@ -136,6 +168,10 @@ pub struct ApiRequest {
     pub query: String,
     /// request headers, x-forwarded-for set from the socket when absent (as server/http.ts does)
     pub headers: HeaderMap,
+    /// the handler's method: GET for a HEAD request
+    pub method: Method,
+    /// the body, at most 64 KB; None for GET
+    pub body: Option<Bytes>,
 }
 
 impl ApiRequest {
@@ -212,6 +248,90 @@ async fn run(route: Route, req: ApiRequest, node: NodeClient) -> Option<Response
         Route::TripExecution => trip_execution::get(&req),
         Route::Trips => trips::get(&req, &node).await,
         Route::Vehicles => vehicles::get(&req),
+        Route::GtfsRt | Route::Push | Route::PushNews | Route::Status => None,
+    }
+}
+
+/// Owned mode: answers a request whose route `match_route` found and whose method `methods` allows. The handler
+/// runs on its own task, so a panic becomes server/http.ts's 500 (logged `<METHOD> <path> failed: ..`). HEAD is the
+/// caller's (`head_of`).
+pub async fn dispatch_owned(route: Route, path: &str, req: ApiRequest) -> Response<Body> {
+    let method = req.method.clone();
+    match tokio::spawn(run_owned(route, req)).await {
+        Ok(res) => res,
+        Err(err) => internal_error("http", format_args!("{method} {path} failed: {err}")),
+    }
+}
+
+/// One arm per route: a list or id route answers a zbiorkom request with `<route>::get` and a BB one (None) with
+/// `<route>::get_bb`.
+async fn run_owned(route: Route, req: ApiRequest) -> Response<Body> {
+    let bb = crate::poller_singleton::bb();
+    match route {
+        Route::Announcements => match announcements::get(&req).await {
+            Some(res) => res,
+            None => announcements::get_bb(&req, bb).await,
+        },
+        Route::Connections => match connections::get(&req) {
+            Some(res) => res,
+            None => connections::get_bb(&req, bb).await,
+        },
+        Route::Fleet => match fleet::get(&req) {
+            Some(res) => res,
+            None => fleet::get_bb(&req, bb, get_fleet_tracker).await,
+        },
+        Route::FleetTimeline => match fleet_timeline::get(&req) {
+            Some(res) => res,
+            None => fleet_timeline::get_bb(&req, bb, get_fleet_tracker).await,
+        },
+        Route::FleetVehicle => match fleet_vehicle::get(&req) {
+            Some(res) => res,
+            None => fleet_vehicle::get_bb(&req, bb, get_fleet_tracker).await,
+        },
+        Route::FleetHistory => match fleet_history::get(&req) {
+            Some(res) => res,
+            None => fleet_history::get_bb(&req, bb, get_fleet_tracker).await,
+        },
+        Route::Geocode => geocode::get_owned(&req).await,
+        Route::GtfsRt => gtfs_rt::get(bb).await,
+        Route::Health => health::get_owned(bb).await,
+        Route::Line => match line::get(&req) {
+            Some(res) => res,
+            None => line::get_bb(&req, bb).await,
+        },
+        Route::Lines => match lines::get(&req) {
+            Some(res) => res,
+            None => lines::get_bb(bb).await,
+        },
+        Route::Push => push::handle(&req),
+        Route::PushNews => push_news::handle(&req),
+        Route::Shapes => shapes::get_owned(&req, bb).await,
+        Route::Status => status::get(bb).await,
+        Route::StopDepartures => match stop_departures::get(&req) {
+            Some(res) => res,
+            None => stop_departures::get_bb(&req, bb).await,
+        },
+        Route::StopTimetable => match stop_timetable::get(&req) {
+            Some(res) => res,
+            None => stop_timetable::get_bb(&req, bb).await,
+        },
+        Route::Stops => match stops::get(&req) {
+            Some(res) => res,
+            None => stops::get_bb(&req, bb).await,
+        },
+        Route::Trip => match trip::get(&req) {
+            Some(res) => res,
+            None => trip::get_bb(&req, bb).await,
+        },
+        Route::TripExecution => match trip_execution::get(&req) {
+            Some(res) => res,
+            None => trip_execution::get_bb(&req, bb).await,
+        },
+        Route::Trips => trips::get_owned(&req, bb).await,
+        Route::Vehicles => match vehicles::get(&req) {
+            Some(res) => res,
+            None => vehicles::get_bb(&req, bb).await,
+        },
     }
 }
 
@@ -460,6 +580,54 @@ mod tests {
             get("/api/fleet/timeline/history", "city=gzm"),
             Some((Route::FleetHistory, "timeline".into()))
         );
+    }
+
+    #[test]
+    fn owned_mode_route_table_methods_and_allow() {
+        use Route::*;
+        let get_only = "GET, HEAD, OPTIONS";
+        for (path, route, allow_text) in [
+            ("/api/announcements", Announcements, get_only),
+            ("/api/connections", Connections, get_only),
+            ("/api/fleet", Fleet, get_only),
+            ("/api/fleet/timeline", FleetTimeline, get_only),
+            ("/api/fleet/12", FleetVehicle, get_only),
+            ("/api/fleet/12/history", FleetHistory, get_only),
+            ("/api/geocode", Geocode, get_only),
+            ("/api/gtfs-rt.pb", GtfsRt, get_only),
+            ("/api/health", Health, get_only),
+            ("/api/line", Line, get_only),
+            ("/api/lines", Lines, get_only),
+            ("/api/push", Push, "GET, POST, DELETE, HEAD, OPTIONS"),
+            ("/api/push/news", PushNews, "POST, DELETE, HEAD, OPTIONS"),
+            ("/api/shapes", Shapes, get_only),
+            ("/api/status", Status, get_only),
+            ("/api/stop/1/departures", StopDepartures, get_only),
+            ("/api/stop/1/timetable", StopTimetable, get_only),
+            ("/api/stops", Stops, get_only),
+            ("/api/trip/1", Trip, get_only),
+            ("/api/trip_execution", TripExecution, get_only),
+            ("/api/trips", Trips, get_only),
+            ("/api/vehicles", Vehicles, get_only),
+        ] {
+            assert_eq!(match_route(path).map(|m| m.0), Some(route), "{path}");
+            assert_eq!(allow(route), allow_text, "{path}");
+            assert_eq!(
+                format!("{}, HEAD, OPTIONS", methods(route).join(", ")),
+                allow_text,
+                "{path}"
+            );
+        }
+        for path in [
+            "/api",
+            "/api/",
+            "/api/gtfs-rt%2Epb",
+            "/api/gtfs-rtXpb",
+            "/api/push/news/x",
+            "/api/status/1",
+        ] {
+            assert_eq!(match_route(path), None, "{path}");
+        }
     }
 
     #[test]

@@ -76,6 +76,8 @@ pub type ListFn = Arc<dyn Fn(City) -> BoxFut<Result<Announcements, String>> + Se
 
 struct Entry {
     sub: PushSub,
+    /// the subscription object as the client sent it (or the file held it), written back whole
+    raw: Value,
     cities: Vec<City>,
 }
 
@@ -138,17 +140,22 @@ impl PushNews {
         };
         let mut st = me.st();
         for e in raw.get("subs").and_then(Value::as_array).into_iter().flatten() {
-            let (Some(sub), Some(cities)) = (
-                e.get("sub").and_then(parse_push_sub),
-                e.get("cities").and_then(Value::as_array),
-            ) else {
+            let (Some(raw_sub), Some(cities)) = (e.get("sub"), e.get("cities").and_then(Value::as_array)) else {
                 continue;
             };
+            let Some(sub) = parse_push_sub(raw_sub) else { continue };
             let cities: Vec<City> = cities.iter().filter_map(parse_city).collect();
             if cities.is_empty() || st.subs.len() >= MAX_SUBS {
                 continue;
             }
-            st.subs.insert(sub.endpoint.clone(), Entry { sub, cities });
+            st.subs.insert(
+                sub.endpoint.clone(),
+                Entry {
+                    sub,
+                    raw: js_object(raw_sub),
+                    cities,
+                },
+            );
         }
         for city in CITIES {
             let Some(keys) = raw
@@ -178,14 +185,16 @@ impl PushNews {
         self.st().subs.len()
     }
 
-    /// false = store full (the caller answers 503)
-    pub fn add(self: &Arc<Self>, sub: &PushSub, city: City) -> bool {
+    /// `sub` = `parse_push_sub(raw)`, `raw` = the request's subscription object; false = store full (the caller
+    /// answers 503)
+    pub fn add(self: &Arc<Self>, sub: &PushSub, raw: &Value, city: City) -> bool {
         let mut st = self.st();
         if let Some(e) = st.subs.get_mut(&sub.endpoint) {
             if !e.cities.contains(&city) {
                 e.cities.push(city);
             }
             e.sub = sub.clone();
+            e.raw = js_object(raw);
         } else {
             if st.subs.len() >= MAX_SUBS {
                 return false;
@@ -194,6 +203,7 @@ impl PushNews {
                 sub.endpoint.clone(),
                 Entry {
                     sub: sub.clone(),
+                    raw: js_object(raw),
                     cities: vec![city],
                 },
             );
@@ -354,13 +364,21 @@ impl PushNews {
     }
 }
 
+/// A subscription object as JSON.stringify writes the one the TS holds: `Object.keys` order, JS numbers.
+// ponytail: a lone surrogate escape in an extra field is U+FFFD here (js::json_parse), so it saves back as that
+// character where the TS writes the escape; no browser sends one
+fn js_object(raw: &Value) -> Value {
+    let mut v = raw.clone();
+    crate::kb_api::js_key_order(&mut v);
+    v
+}
+
 /// `JSON.stringify({subs: [...subs.values()], seen: {bb, gzm}})`.
-// ponytail: a sub keeps only endpoint and keys; the TS stores the whole request object (`expirationTime` too)
 fn file_json(st: &State) -> String {
     let subs: Vec<Value> = st
         .subs
         .values()
-        .map(|e| json!({ "sub": e.sub, "cities": e.cities }))
+        .map(|e| json!({ "sub": e.raw, "cities": e.cities }))
         .collect();
     let [bb, gzm] = &st.seen;
     json!({ "subs": subs, "seen": { "bb": bb, "gzm": gzm } }).to_string()
@@ -422,8 +440,9 @@ mod tests {
                 auth: "a".into(),
             },
         };
-        assert!(s.add(&sub, City::Bb));
-        assert!(s.add(&sub, City::Gzm));
+        let raw = json!(sub);
+        assert!(s.add(&sub, &raw, City::Bb));
+        assert!(s.add(&sub, &raw, City::Gzm));
         s.tick().await;
         tokio::time::sleep(Duration::from_millis(2100)).await;
         let written = fs::read_to_string(&file).unwrap();

@@ -1,8 +1,9 @@
-//! The Unimaps server. `unimaps` (or `unimaps serve`) listens on HOST:PORT, serves the static build
-//! (KB_STATIC_DIR, default <cwd>/out) and hands the API to the Node process: started here when KB_NODE_CMD is set
-//! (the Docker image), and then this process runs the zbiorkom cities (GZM booted here) and answers their API
-//! requests itself; else Node is expected on 127.0.0.1:KB_NODE_PORT and keeps the whole API, zbiorkom included. `unimaps healthcheck` exits 0 when /api/health answers 2xx (Docker /
-//! compose healthcheck).
+//! The Unimaps server. `unimaps` (or `unimaps serve`) listens on HOST:PORT and serves the static build
+//! (KB_STATIC_DIR, default <cwd>/out). With KB_NODE_CMD set (proxy mode) it starts that Node process as a child and
+//! hands it the API, but for the zbiorkom cities (GZM booted here) and /api/health, which it answers itself. Without
+//! it (owned mode) there is no Node: this process boots the BB pollers, GZM and the push ticks (server/http.ts boot())
+//! and answers every API request. `unimaps healthcheck` exits 0 when /api/health answers 2xx (Docker / compose
+//! healthcheck).
 
 use std::ffi::OsString;
 use std::io::{Read, Write};
@@ -20,15 +21,20 @@ use tokio::net::TcpListener;
 use tokio::process::{Child, Command};
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::Semaphore;
-use unimaps::{api, config, gtfs_builder, gzm, gzm_fleet, http, logger, static_files};
+use unimaps::{
+    api, config, fetch, gtfs_builder, gzm, gzm_fleet, http, logger, poller_singleton, push_alerts, push_news,
+    static_files,
+};
 
 /// ponytail: one cap for every open connection (idle keep-alive ones included, ~8 KB of buffers each).
 const MAX_CONNECTIONS: usize = 1024;
 /// an idle keep-alive connection, or one still sending its headers, is closed after this (Node: 5 s idle, 60 s for
 /// headers); it bounds how long one client holds a MAX_CONNECTIONS slot without sending anything
 const HEADER_TIMEOUT: Duration = Duration::from_secs(10);
-/// how long the Node child gets to flush its stores after SIGTERM
+/// how long the Node child gets to flush its stores after SIGTERM (owned mode: the pollers to stop)
 const CHILD_GRACE: Duration = Duration::from_secs(5);
+/// server/http.ts listen(): `setTimeout(() => process.exit(0), 100)` after SIGTERM/SIGINT
+const EXIT_GRACE: Duration = Duration::from_millis(100);
 
 fn var(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.is_empty())
@@ -195,36 +201,48 @@ async fn serve(base_env: Vec<(OsString, OsString)>) -> ExitCode {
         }
     };
     logger::info("http", format_args!("listening on http://{host}:{port}"));
-    // only a child we started has KB_ZB_REMOTE: a Node started by hand runs its own GZM (server/http.ts boot()), so
-    // here it keeps the zbiorkom cities and their routes, as in stage 1
-    let owns_zb = child.is_some();
-    if owns_zb {
-        // server/http.ts boot(): GZM beside the BB pollers (a no-op with KB_GZM=0); other zbiorkom cities start on
+    let app = if child.is_some() {
+        // server/http.ts boot()'s GZM beside the BB pollers (a no-op with KB_GZM=0); other zbiorkom cities start on
         // their first request and the registry arms its own idle sweep
         gzm::start_gzm();
-    }
+        http::App::new(statics, node_port, true)
+    } else {
+        boot();
+        http::App::owned(statics)
+    };
     let (mut term, mut int) = (
         signal(SignalKind::terminate()).expect("SIGTERM"),
         signal(SignalKind::interrupt()).expect("SIGINT"),
     );
-    let app = Arc::new(http::App::new(statics, node_port, owns_zb));
+    let app = Arc::new(app);
     let exited = tokio::select! {
-        _ = accept_loop(listener, app) => None,
-        _ = term.recv() => None,
-        _ = int.recv() => None,
-        st = async { match child.as_mut() { Some(c) => c.wait().await, None => std::future::pending().await } } => Some(st),
+        _ = accept_loop(listener, app) => Ok("SIGTERM"),
+        _ = term.recv() => Ok("SIGTERM"),
+        _ = int.recv() => Ok("SIGINT"),
+        st = async { match child.as_mut() { Some(c) => c.wait().await, None => std::future::pending().await } } => Err(st),
+    };
+    let Some(c) = child.as_mut() else {
+        // lib/poller-singleton.ts's signal handler: shape store, fleet trackers and GZM fleet flushed, pollers stopped.
+        // ponytail: the TS exits 100 ms after the signal without awaiting the stop; here the stop gets up to
+        // CHILD_GRACE (5 s), past which the process exits 0 anyway (run_to_exit: blocking work gets EXIT_GRACE)
+        if let Ok(sig) = exited
+            && tokio::time::timeout(CHILD_GRACE, poller_singleton::bb().shutdown(sig))
+                .await
+                .is_err()
+        {
+            logger::warn("rt", "pollers did not stop in time");
+        }
+        return ExitCode::SUCCESS;
     };
     // the GZM fleet tracker's debounced save (TS poller-singleton flushes on SIGTERM/SIGINT); a no-op when never built
     let _ = tokio::task::spawn_blocking(gzm_fleet::flush_gzm_fleet).await;
-    if let Some(st) = exited {
+    if let Err(st) = exited {
         // one failure domain: Docker's restart policy brings both back
         let st = st.map_or_else(|e| e.to_string(), |s| s.to_string());
         logger::error("http", format_args!("node exited ({st}), stopping"));
         return ExitCode::FAILURE;
     }
-    if let Some(c) = child.as_mut()
-        && let Some(pid) = c.id()
-    {
+    if let Some(pid) = c.id() {
         // SAFETY: kill(2) on the pid of our own child, which has not been reaped yet
         unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
         if tokio::time::timeout(CHILD_GRACE, c.wait()).await.is_err() {
@@ -233,6 +251,26 @@ async fn serve(base_env: Vec<(OsString, OsString)>) -> ExitCode {
         }
     }
     ExitCode::SUCCESS
+}
+
+/// server/http.ts boot() in owned mode: the BB pollers, GZM beside them (its failure never touches BB) and, with
+/// push on, the push stores, so alerts persisted before a restart fire without waiting for a request.
+fn boot() {
+    // the call loads the shape store before accept_loop runs, as startPoller() inside boot() does in the TS
+    let start = poller_singleton::bb().start_poller();
+    tokio::spawn(async move {
+        if let Err(err) = start.await {
+            logger::error(
+                "rt",
+                format_args!("background poller start failed: {}", fetch::string_err(err)),
+            );
+        }
+    });
+    gzm::start_gzm();
+    if *config::PUSH_ENABLED {
+        push_alerts::get_push_alerts();
+        push_news::get_push_news();
+    }
 }
 
 /// The options of scripts/build-gtfs.ts, parsed like node:util `parseArgs` in strict mode (its codes and
@@ -360,6 +398,14 @@ fn build_gtfs_cli(args: &[String]) -> ExitCode {
     }
 }
 
+/// server/http.ts exits 100 ms after the signal whatever is still running; a plain runtime drop would wait for
+/// every spawn_blocking task (a GZM zip parse, fleet-history day reads) to finish.
+fn run_to_exit(rt: tokio::runtime::Runtime, serve: impl Future<Output = ExitCode>) -> ExitCode {
+    let code = rt.block_on(serve);
+    rt.shutdown_timeout(EXIT_GRACE);
+    code
+}
+
 fn main() -> ExitCode {
     let base_env: Vec<_> = std::env::vars_os().collect();
     let args: Vec<String> = std::env::args_os().map(|a| a.to_string_lossy().into_owned()).collect();
@@ -370,13 +416,15 @@ fn main() -> ExitCode {
     load_env_files();
     match args.get(1).map(String::as_str) {
         Some("healthcheck") => healthcheck(),
-        None | Some("serve") => tokio::runtime::Builder::new_multi_thread()
-            // tokio's default is 512; compose's pids_limit (256) counts threads, Node's included
-            .max_blocking_threads(32)
-            .enable_all()
-            .build()
-            .expect("tokio runtime")
-            .block_on(serve(base_env)),
+        None | Some("serve") => run_to_exit(
+            tokio::runtime::Builder::new_multi_thread()
+                // tokio's default is 512; compose's pids_limit (256) counts threads, Node's included
+                .max_blocking_threads(32)
+                .enable_all()
+                .build()
+                .expect("tokio runtime"),
+            serve(base_env),
+        ),
         Some(other) => {
             eprintln!("unknown command {other:?}; usage: unimaps [serve | healthcheck | build-gtfs]");
             ExitCode::from(2)
@@ -386,7 +434,73 @@ fn main() -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_gtfs_args, self_origin};
+    use super::{boot, parse_gtfs_args, run_to_exit, self_origin};
+    use std::process::ExitCode;
+    use std::time::{Duration, Instant};
+
+    /// server/main.ts runs boot() in the tick of listen(): startPoller() loads the shape store synchronously, so no
+    /// request callback ever sees it unloaded. boot() returns before accept_loop runs: the store must be loaded then.
+    #[test]
+    fn boot_loads_the_shape_store_before_the_first_accept() {
+        let dir = std::env::temp_dir().join(format!("unimaps-main-boot-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("shapes")).unwrap();
+        let entry = r#"{"src":"osrm","poly":"_p~iF~ps|U_ulLnnqC","len":1234.5,"stops":[0,1234.5],"rev":"7b21c0"}"#;
+        let file = format!(r#"{{"format":"kb-map/route-shapes","version":1,"shapes":{{"kb:3f9a0c11d2e4":{entry}}}}}"#);
+        std::fs::write(dir.join("shapes/route-shapes.v1.json"), file).unwrap();
+        // SAFETY: the only test of this binary that reads the configuration, set before its first read
+        unsafe {
+            std::env::set_var("KB_OUTPUT_DIR", &dir);
+            for k in [
+                "KB_BASE_URL",
+                "KB_ZB_API_URL",
+                "HTTPS_PROXY",
+                "https_proxy",
+                "HTTP_PROXY",
+                "http_proxy",
+            ] {
+                std::env::set_var(k, "http://127.0.0.1:9");
+            }
+            for k in ["KB_OSRM_URL", "KB_GEOCODER_URL", "KB_GZM_NEWS_URL"] {
+                std::env::set_var(k, "off");
+            }
+            for k in ["KB_GZM", "KB_ZB", "KB_PUSH"] {
+                std::env::set_var(k, "0");
+            }
+            std::env::set_var("KB_LOG_LEVEL", "error");
+        }
+        // current_thread: nothing boot() spawns runs before the assertion, and blocking_io runs inline
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            boot();
+            let shapes = unimaps::poller_singleton::bb().shapes();
+            assert_eq!(
+                shapes.wire_id("kb:3f9a0c11d2e4").as_deref(),
+                Some("kb:3f9a0c11d2e4.7b21c0")
+            );
+        });
+    }
+
+    #[test]
+    fn exit_does_not_wait_for_running_blocking_work() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let started = Instant::now();
+        let code = run_to_exit(rt, async {
+            drop(tokio::task::spawn_blocking(|| {
+                std::thread::sleep(Duration::from_secs(8))
+            }));
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            ExitCode::SUCCESS
+        });
+        assert_eq!(code, ExitCode::SUCCESS);
+        assert!(started.elapsed() < Duration::from_secs(1), "{:?}", started.elapsed());
+    }
 
     fn parse(args: &[&str]) -> Result<(Option<String>, bool, bool), String> {
         let v: Vec<String> = args.iter().map(|a| (*a).to_owned()).collect();

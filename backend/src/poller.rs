@@ -1,8 +1,6 @@
 //! lib/poller.ts, core half: the KB live poller's state, position parsing, motion carry-over, GPS progress, route
 //! info and the `/api/vehicles` / GTFS-RT snapshots. The background loop (loadStops, start/stop, scans,
 //! fetchPositions) lives further down this module.
-// ponytail: wired in sub-stage 4b/4c
-#![allow(dead_code)]
 
 use std::any::Any;
 use std::collections::HashMap;

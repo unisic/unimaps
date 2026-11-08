@@ -120,7 +120,7 @@ pub type VariantSamples = HashMap<String, VariantSample>;
 
 /// `a.order - b.order` as a total order: -0 equals 0. ponytail: a NaN order (V8 leaves its place unspecified) sorts
 /// last.
-fn order_cmp(a: f64, b: f64) -> Ordering {
+pub(crate) fn order_cmp(a: f64, b: f64) -> Ordering {
     let key = |x: f64| {
         if x == 0.0 {
             0.0

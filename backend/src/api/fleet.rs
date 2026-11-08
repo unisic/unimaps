@@ -1,5 +1,6 @@
-//! server/api/fleet/route.ts, GZM branch: the whole fleet list (built and hashed once per tracker update), its
-//! filtered form, or one vehicle's card by `?sideNumber=`. Another zbiorkom city has no fleet tracker: 404.
+//! server/api/fleet/route.ts. GZM: the whole fleet list (built and hashed once per tracker update), its filtered
+//! form, or one vehicle's card by `?sideNumber=`; another zbiorkom city has no fleet tracker: 404. BB (no `?city=`):
+//! the MZK fleet list with `serverNow`, or one vehicle's card.
 
 use hyper::header::{CACHE_CONTROL, CONTENT_TYPE, ETAG, HeaderName, HeaderValue};
 use hyper::{Response, StatusCode};
@@ -9,16 +10,61 @@ use serde_json::json;
 
 use super::ApiRequest;
 use super::stop_departures::json_no_store;
-use crate::api_helpers::{bad_request, etag_matches, json_with_etag, not_found, query_param};
+use crate::api_helpers::{bad_request, etag_matches, json_with_etag, not_found, query_param, upstream_error};
 use crate::fleet_tracker::{FleetSummaryFilter, FleetTracker, blocking_io};
 use crate::gzm::start_gzm;
 use crate::gzm_fleet::{ListBody, fleet_list_body, get_gzm_fleet_tracker, is_gzm_side};
 use crate::http::{Body, full, header_str};
-use crate::js;
-use crate::shared::fleet::{FleetVehicleDetail, VehicleStatus};
+use crate::js::{self, JsNum};
+use crate::poller_singleton::{Bb, BbKinds};
+use crate::shared::fleet::{FleetStats, FleetSummaryItem, FleetVehicleDetail, VehicleStatus};
 
 const X_SERVER_TIME: HeaderName = HeaderName::from_static("x-server-time");
 const FILTER_PARAMS: [&str; 4] = ["status", "propulsion", "line", "q"];
+
+/// summaryFilter(url): the query values a `FleetSummaryFilter` borrows.
+struct Filter {
+    status: Option<VehicleStatus>,
+    propulsion: Option<String>,
+    line: Option<String>,
+    q: Option<String>,
+}
+
+impl Filter {
+    fn parse(query: &str) -> Self {
+        let status = match query_param(query, "status").as_deref() {
+            Some("active") => Some(VehicleStatus::Active),
+            Some("depot") => Some(VehicleStatus::Depot),
+            _ => None,
+        };
+        Filter {
+            status,
+            propulsion: query_param(query, "propulsion"),
+            line: query_param(query, "line"),
+            q: query_param(query, "q"),
+        }
+    }
+
+    fn get(&self) -> FleetSummaryFilter<'_> {
+        FleetSummaryFilter {
+            status: self.status,
+            propulsion: self.propulsion.as_deref(),
+            line: self.line.as_deref(),
+            // ponytail: a 64th UTF-16 unit that splits a pair drops the pair (the TS keeps a lone surrogate)
+            query: self.q.as_deref().map(|q| js::utf16_prefix(q, 64)),
+        }
+    }
+}
+
+/// The BB list: `{ stats, count, vehicles, serverNow }`.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BbList<'a> {
+    stats: &'a FleetStats,
+    count: usize,
+    vehicles: &'a [FleetSummaryItem],
+    server_now: JsNum,
+}
 
 /// `{ vehicle: detail }` of the card routes.
 #[derive(Serialize)]
@@ -40,7 +86,8 @@ pub(super) fn gzm_tracker() -> &'static FleetTracker {
     get_gzm_fleet_tracker()
 }
 
-/// GET /api/fleet?city=<zbiorkom slug>; None = a BB request (Node answers it).
+/// GET /api/fleet?city=<zbiorkom slug>; None = a BB request (`get_bb` in owned mode,
+/// Node in proxy mode).
 pub fn get(req: &ApiRequest) -> Option<Response<Body>> {
     blocking_io(|| handle(req, gzm_tracker))
 }
@@ -66,22 +113,7 @@ pub fn handle<'t>(req: &ApiRequest, tracker: impl FnOnce() -> &'t FleetTracker) 
     }
 
     if FILTER_PARAMS.iter().any(|k| query_param(&req.query, k).is_some()) {
-        let status = match query_param(&req.query, "status").as_deref() {
-            Some("active") => Some(VehicleStatus::Active),
-            Some("depot") => Some(VehicleStatus::Depot),
-            _ => None,
-        };
-        let propulsion = query_param(&req.query, "propulsion");
-        let line = query_param(&req.query, "line");
-        let q = query_param(&req.query, "q");
-        // ponytail: a 64th UTF-16 unit that splits a pair drops the pair (the TS keeps a lone surrogate)
-        let vehicles = tracker.get_fleet_summary(&FleetSummaryFilter {
-            status,
-            propulsion: propulsion.as_deref(),
-            line: line.as_deref(),
-            query: q.as_deref().map(|q| js::utf16_prefix(q, 64)),
-        });
-        let stats = tracker.get_stats();
+        let (_, vehicles, stats) = tracker.list_snapshot(&Filter::parse(&req.query).get());
         let body = ListBody {
             stats: &stats,
             count: vehicles.len(),
@@ -104,4 +136,36 @@ pub fn handle<'t>(req: &ApiRequest, tracker: impl FnOnce() -> &'t FleetTracker) 
     }
     h.insert(X_SERVER_TIME, HeaderValue::from(Timestamp::now().as_millisecond()));
     Some(res)
+}
+
+/// The BB branch (no `?city=`) over the MZK tracker from `tracker` (the dispatcher passes `get_fleet_tracker`).
+pub async fn get_bb<T: BbKinds>(
+    req: &ApiRequest,
+    bb: &'static Bb<T>,
+    tracker: impl FnOnce() -> &'static FleetTracker,
+) -> Response<Body> {
+    if let Err(err) = bb.start_poller().await {
+        return upstream_error("fleet", err);
+    }
+    blocking_io(|| {
+        let tracker = tracker();
+        if let Some(side) = query_param(&req.query, "sideNumber").filter(|s| !s.is_empty()) {
+            let detail = if side.encode_utf16().count() <= 16 {
+                tracker.get_vehicle_detail(&side)
+            } else {
+                None
+            };
+            return match detail {
+                Some(detail) => json_with_etag(&req.headers, &VehicleBody { vehicle: &detail }),
+                None => vehicle_not_found(),
+            };
+        }
+        let (_, vehicles, stats) = tracker.list_snapshot(&Filter::parse(&req.query).get());
+        json_no_store(&BbList {
+            stats: &stats,
+            count: vehicles.len(),
+            vehicles: &vehicles,
+            server_now: JsNum(bb.now_ms() as f64 / 1000.0),
+        })
+    })
 }

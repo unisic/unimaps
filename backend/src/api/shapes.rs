@@ -1,6 +1,7 @@
-//! server/api/shapes/route.ts for a batch holding a zbiorkom shape id: the whole request is validated as the TS
-//! does, zbiorkom shapes come from their cities' feeds (a `near` box re-aims their running road matches), store
-//! shapes (kb:, mzk:) from Node in one sub-request, merged into the answer the one TS route would give.
+//! server/api/shapes/route.ts. Proxy mode, for a batch holding a zbiorkom shape id: the whole request is validated
+//! as the TS does, zbiorkom shapes come from their cities' feeds (a `near` box re-aims their running road matches),
+//! store shapes (kb:, mzk:) from Node in one sub-request, merged into the answer the one TS route would give. Owned
+//! mode (`get_owned`): store shapes from `bb.shapes()` in-process.
 
 use std::sync::Arc;
 
@@ -17,6 +18,7 @@ use crate::gzm::{GzmLive, ZbTransport};
 use crate::gzm_feed::{ShapeLookup, ShapePayload};
 use crate::http::{Body, full, header_str};
 use crate::js;
+use crate::poller_singleton::{Bb, BbKinds};
 use crate::rate_limit::{allow_request, too_many_requests};
 use crate::shared::cities::zb_city_of;
 use crate::shared::polyline::LatLonBox;
@@ -25,11 +27,12 @@ const MAX_IDS: usize = 50;
 const MAX_IDS_PARAM: usize = 1300;
 const IMMUTABLE: &str = "public, max-age=31536000, immutable";
 
+/// Node's shape verbatim, or a payload looked up here (store or feed).
 #[derive(Serialize)]
 #[serde(untagged)]
 enum Shape {
     Node(Box<RawValue>),
-    Zb(ShapePayload),
+    Local(ShapePayload),
 }
 
 #[derive(Deserialize)]
@@ -57,6 +60,67 @@ fn parse_box(v: &str) -> Option<LatLonBox> {
     (s < n && w < e && s >= -90.0 && n <= 90.0 && w >= -180.0 && e <= 180.0).then_some(LatLonBox { s, w, n, e })
 }
 
+/// A request past the TS checks: zbiorkom ids per city in first-seen order, store ids, the `near` box, and
+/// `etag_hit` = a one-id batch whose If-None-Match names it.
+struct Batch {
+    by_city: IndexMap<&'static str, Vec<String>>,
+    store: Vec<String>,
+    focus: Option<LatLonBox>,
+    etag_hit: bool,
+}
+
+/// The rate-limit gate and the TS checks in their order; Err = the 429 / 400.
+fn checked(req: &ApiRequest) -> Result<Batch, Response<Body>> {
+    if !allow_request(&req.ip(), 1.0) {
+        return Err(too_many_requests());
+    }
+    let param = query_param(&req.query, "ids").unwrap_or_default();
+    let focus = match query_param(&req.query, "near") {
+        None => None,
+        Some(near) => match parse_box(&near) {
+            None => return Err(bad_request("Invalid near box")),
+            focus => focus,
+        },
+    };
+    if param.is_empty() {
+        return Err(bad_request("Missing ?ids= query parameter"));
+    }
+    if param.encode_utf16().count() > MAX_IDS_PARAM {
+        return Err(bad_request("ids parameter too long"));
+    }
+    let ids = batch_ids(&param);
+    if ids.is_empty() {
+        return Err(bad_request("ids list cannot be empty"));
+    }
+    if ids.len() > MAX_IDS {
+        return Err(bad_request(&format!("Exceeded maximum of {MAX_IDS} ids")));
+    }
+    if !ids.iter().all(|id| is_valid_shape_id(id)) {
+        return Err(bad_request("Invalid shape id"));
+    }
+    let etag_hit = match &ids[..] {
+        [id] => etag_matches(
+            header_str(&req.headers, "if-none-match").as_deref(),
+            &format!("\"{id}\""),
+        ),
+        _ => false,
+    };
+    let mut by_city: IndexMap<&'static str, Vec<String>> = IndexMap::new();
+    let mut store = Vec::new();
+    for id in ids {
+        match zb_city_of(&id) {
+            Some(slug) => by_city.entry(slug).or_default().push(id),
+            None => store.push(id),
+        }
+    }
+    Ok(Batch {
+        by_city,
+        store,
+        focus,
+        etag_hit,
+    })
+}
+
 /// GET /api/shapes?ids=<batch with a zbiorkom id>[&near=s,w,n,e].
 pub async fn get(req: &ApiRequest, node: &NodeClient) -> Option<Response<Body>> {
     handle(req, node, zb_live).await
@@ -69,41 +133,15 @@ pub async fn handle<T: ZbTransport>(
     node: &NodeClient,
     live: impl Fn(&'static str) -> Arc<GzmLive<T>>,
 ) -> Option<Response<Body>> {
-    if !allow_request(&req.ip(), 1.0) {
-        return Some(too_many_requests());
-    }
-    let param = query_param(&req.query, "ids").unwrap_or_default();
-    let focus = match query_param(&req.query, "near") {
-        None => None,
-        Some(near) => match parse_box(&near) {
-            None => return Some(bad_request("Invalid near box")),
-            focus => focus,
-        },
+    let Batch {
+        by_city,
+        store,
+        focus,
+        etag_hit,
+    } = match checked(req) {
+        Ok(b) => b,
+        Err(res) => return Some(res),
     };
-    if param.is_empty() {
-        return Some(bad_request("Missing ?ids= query parameter"));
-    }
-    if param.encode_utf16().count() > MAX_IDS_PARAM {
-        return Some(bad_request("ids parameter too long"));
-    }
-    let ids = batch_ids(&param);
-    if ids.is_empty() {
-        return Some(bad_request("ids list cannot be empty"));
-    }
-    if ids.len() > MAX_IDS {
-        return Some(bad_request(&format!("Exceeded maximum of {MAX_IDS} ids")));
-    }
-    if !ids.iter().all(|id| is_valid_shape_id(id)) {
-        return Some(bad_request("Invalid shape id"));
-    }
-    let mut by_city: IndexMap<&'static str, Vec<String>> = IndexMap::new();
-    let mut store = Vec::new();
-    for id in &ids {
-        match zb_city_of(id) {
-            Some(slug) => by_city.entry(slug).or_default().push(id.clone()),
-            None => store.push(id.as_str()),
-        }
-    }
     let node_part = if store.is_empty() {
         None
     } else {
@@ -112,14 +150,34 @@ pub async fn handle<T: ZbTransport>(
         let path = format!("/api/shapes?ids={}", store.join(","));
         Some(node.get(&path, node_headers(&req.headers)).await)
     };
-    let etag_hit = match &ids[..] {
-        [id] => etag_matches(
-            header_str(&req.headers, "if-none-match").as_deref(),
-            &format!("\"{id}\""),
-        ),
-        _ => false,
-    };
     Some(merge_shapes(node_part, || zb_shapes(&by_city, focus, live), etag_hit))
+}
+
+/// GET /api/shapes?ids=<any batch>[&near=s,w,n,e] in owned mode: store ids from `bb.shapes()` (read-only, never
+/// routes or fetches), then each zbiorkom city's feed shapes.
+pub async fn get_owned<T: BbKinds>(req: &ApiRequest, bb: &'static Bb<T>) -> Response<Body> {
+    let b = match checked(req) {
+        Ok(b) => b,
+        Err(res) => return res,
+    };
+    let mut out = ShapeLookup {
+        exact: true,
+        ..ShapeLookup::default()
+    };
+    if !b.store.is_empty() {
+        // lazy start like every other route (`void startPoller().catch(() => {})`); its call loads the store, the
+        // lookup never waits on upstream
+        let start = bb.start_poller();
+        tokio::spawn(async move {
+            let _ = start.await;
+        });
+        out = bb.shapes().lookup(&b.store);
+    }
+    let zb = zb_shapes(&b.by_city, b.focus, zb_live);
+    let mut shapes: IndexMap<String, Shape> = out.shapes.into_iter().map(|(k, v)| (k, Shape::Local(v))).collect();
+    shapes.extend(zb.shapes.into_iter().map(|(k, v)| (k, Shape::Local(v))));
+    out.missing.extend(zb.missing);
+    answer(shapes, out.missing, out.exact && zb.exact, b.etag_hit)
 }
 
 /// The TS loop over `byCity`: each enabled city's feed shapes (a disabled city's ids are missing, never exact).
@@ -176,9 +234,14 @@ pub fn merge_shapes(
         Some(Err(err)) => return internal_error("shapes", format_args!("node: {err}")),
     }
     let zb = zb();
-    shapes.extend(zb.shapes.into_iter().map(|(k, v)| (k, Shape::Zb(v))));
+    shapes.extend(zb.shapes.into_iter().map(|(k, v)| (k, Shape::Local(v))));
     missing.extend(zb.missing);
-    exact &= zb.exact;
+    answer(shapes, missing, exact && zb.exact, etag_hit)
+}
+
+/// The TS answer: immutable when every id is an exact hit (then a one-id `etag_hit` is a bodiless 304), else
+/// short-lived.
+fn answer(shapes: IndexMap<String, Shape>, missing: Vec<String>, exact: bool, etag_hit: bool) -> Response<Body> {
     let cache = if exact { IMMUTABLE } else { "public, max-age=30" };
     if exact && etag_hit {
         let mut res = Response::new(full(Bytes::new()));

@@ -1,4 +1,5 @@
-//! server/api/lines/route.ts, zbiorkom branch: the feed's line catalog.
+//! server/api/lines/route.ts: a zbiorkom feed's line catalog, or BB's GTFS catalog (crate::lines) followed by the
+//! MZK poller's lines.
 
 use std::sync::Arc;
 
@@ -6,9 +7,12 @@ use hyper::Response;
 use serde::Serialize;
 
 use super::{ApiRequest, json_cached, zb_live};
-use crate::api_helpers::warming;
+use crate::api_helpers::{internal_error, warming};
+use crate::fleet_tracker::blocking_io;
 use crate::gzm::{GzmLive, ZbTransport};
 use crate::http::Body;
+use crate::lines::get_lines;
+use crate::poller_singleton::{Bb, BbKinds};
 
 #[derive(Serialize)]
 struct Line<'a> {
@@ -22,12 +26,12 @@ struct Line<'a> {
 }
 
 #[derive(Serialize)]
-struct Lines<'a> {
+struct Lines<L> {
     count: usize,
-    lines: Vec<Line<'a>>,
+    lines: Vec<L>,
 }
 
-/// GET /api/lines?city=<zbiorkom slug>; None = a BB request (Node answers it).
+/// GET /api/lines?city=<zbiorkom slug>; None = a BB request (`get_bb` in owned mode, Node in proxy mode).
 pub fn get(req: &ApiRequest) -> Option<Response<Body>> {
     handle(req, zb_live)
 }
@@ -62,4 +66,25 @@ pub fn handle<T: ZbTransport>(
         },
         "public, max-age=3600",
     ))
+}
+
+/// GET /api/lines of BB: the KB entries as `{id, name, terminus, operator: "KB"}`, then MZK's.
+pub async fn get_bb<T: BbKinds>(bb: &'static Bb<T>) -> Response<Body> {
+    if let Err(err) = bb.start_poller().await {
+        return internal_error("lines", err);
+    }
+    // the first read after a (re)build parses routes.txt
+    let kb = blocking_io(get_lines);
+    let kb_lines = kb
+        .iter()
+        .map(|l| serde_json::json!({ "id": l.id, "name": l.name, "terminus": l.terminus, "operator": "KB" }))
+        .collect();
+    let lines = bb.combined_lines(kb_lines);
+    json_cached(
+        &Lines {
+            count: lines.len(),
+            lines,
+        },
+        "public, max-age=3600",
+    )
 }

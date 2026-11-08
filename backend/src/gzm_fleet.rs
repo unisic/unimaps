@@ -11,7 +11,8 @@ use sha1::{Digest, Sha1};
 
 use crate::config::{GZM_DIR, GZM_FLEET_HISTORY_DAYS};
 use crate::fleet_tracker::{
-    FleetRunningInput, FleetSighting, FleetStopPoint, FleetTracker, FleetTrackerOptions, FleetVehicleInfo, blocking_io,
+    FleetRunningInput, FleetSighting, FleetStopPoint, FleetSummaryFilter, FleetTracker, FleetTrackerOptions,
+    FleetVehicleInfo, blocking_io,
 };
 use crate::gzm::{GzmFleetSource, GzmLiveVehicle};
 use crate::js;
@@ -292,7 +293,7 @@ pub fn fleet_list_body(tracker: &FleetTracker) -> Arc<GzmFleetList> {
     {
         return Arc::clone(list);
     }
-    let (version, vehicles, stats) = tracker.list_snapshot();
+    let (version, vehicles, stats) = tracker.list_snapshot(&FleetSummaryFilter::default());
     let body = serde_json::to_string(&ListBody {
         stats: &stats,
         count: vehicles.len(),

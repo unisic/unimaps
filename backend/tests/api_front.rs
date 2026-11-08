@@ -4,9 +4,7 @@
 //! the rest pin the stage-2 split: zbiorkom GET/HEAD answered in Rust, everything else proxied unchanged.
 
 use std::convert::Infallible;
-use std::io::Write as _;
 use std::net::SocketAddr;
-use std::path::Path;
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
@@ -27,19 +25,15 @@ use unimaps::http::{App, handle};
 use unimaps::rate_limit::client_ip;
 use unimaps::static_files::Static;
 
+#[path = "support/build.rs"]
+mod build;
+
+use build::{ASSET, ASSET_BR, write_build};
+
 const ALLOW: &str = "GET, HEAD, OPTIONS";
 const NODE_HEALTH: &str =
     r#"{"status":"degraded","vehicles":3,"gzm":{"enabled":false},"ratio":1.5e-7,"zb":null,"tail":[1,2]}"#;
 const NODE_TRIP: &str = r#"{"trip_id":"123","delay":1.5e-7}"#;
-const INDEX_HTML: &str =
-    r#"<!doctype html><html><head><script type="module" src="/assets/index-a1b2c3.js"></script></head></html>"#;
-const ASSET: &str = "export const city = \"gzm\";\n";
-/// zlib.brotliCompressSync(ASSET) from Node: the bytes the TS test decompresses back to ASSET
-const ASSET_BR: [u8; 31] = [
-    11, 13, 128, 101, 120, 112, 111, 114, 116, 32, 99, 111, 110, 115, 116, 32, 99, 105, 116, 121, 32, 61, 32, 34, 103,
-    122, 109, 34, 59, 10, 3,
-];
-
 struct Seen {
     method: Method,
     uri: String,
@@ -120,28 +114,6 @@ static FRONT: LazyLock<Front> = LazyLock::new(|| {
         seen,
     }
 });
-
-fn write_build(out: &Path) {
-    std::fs::create_dir_all(out.join("assets")).unwrap();
-    std::fs::write(out.join("index.html"), INDEX_HTML).unwrap();
-    std::fs::write(
-        out.join("brygady.html"),
-        "<!doctype html><html><body>brygady</body></html>",
-    )
-    .unwrap();
-    std::fs::write(out.join("404.html"), "<!doctype html><html><body>404</body></html>").unwrap();
-    std::fs::write(out.join("assets/index-a1b2c3.js"), ASSET).unwrap();
-    std::fs::write(out.join("assets/index-a1b2c3.js.br"), ASSET_BR).unwrap();
-    // scripts/compress-static.mjs gives every page of the real build a .gz (and a .br), hence its Vary
-    std::fs::write(out.join("index.html.gz"), gzip(INDEX_HTML)).unwrap();
-    std::fs::write(out.join("assets/index-a1b2c3.js.gz"), gzip(ASSET)).unwrap();
-}
-
-fn gzip(s: &str) -> Vec<u8> {
-    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-    gz.write_all(s.as_bytes()).unwrap();
-    gz.finish().unwrap()
-}
 
 /// main.rs accept_loop without the connection cap.
 async fn serve_front(listener: TcpListener, app: Arc<App>) {

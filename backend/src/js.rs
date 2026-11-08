@@ -400,9 +400,70 @@ pub fn encode_uri_component(s: &str) -> String {
 
 /// `JSON.parse`: it takes a lone UTF-16 surrogate escape (`JSON.stringify` writes one for a string holding it),
 /// where serde_json refuses the whole document. A Rust string cannot hold a lone surrogate, so each such escape
-/// parses as U+FFFD.
+/// parses as U+FFFD. It also takes a number past the f64 range and any nesting depth (`tame`).
 pub fn json_parse(text: &str) -> serde_json::Result<serde_json::Value> {
-    serde_json::from_str(&lone_surrogates_to_fffd(text))
+    let text = lone_surrogates_to_fffd(text);
+    serde_json::from_str(&text).or_else(|e| {
+        // serde_json skips an ignored value iteratively, with no depth limit and no number conversion: the
+        // syntax check JSON.parse makes
+        serde_json::from_str::<serde::de::IgnoredAny>(&text).map_err(|_| e)?;
+        serde_json::from_str(&tame(&text))
+    })
+}
+
+/// A valid JSON document rewritten so serde_json takes it: a number past the f64 range (Infinity, which
+/// `JSON.stringify` writes as null) becomes null, and so does a container nested past serde_json's limit.
+// ponytail: a container more than 127 levels deep parses as null where JSON.parse keeps it; no caller reads that deep
+fn tame(s: &str) -> String {
+    const MAX_DEPTH: usize = 127;
+    let b = s.as_bytes();
+    let mut out = String::with_capacity(s.len());
+    let (mut i, mut depth, mut cut) = (0, 0usize, None);
+    while let Some(&c) = b.get(i) {
+        let start = i;
+        i += 1;
+        match c {
+            b'"' => {
+                while let Some(&c) = b.get(i) {
+                    i += if c == b'\\' { 2 } else { 1 };
+                    if c == b'"' {
+                        break;
+                    }
+                }
+            }
+            b'[' | b'{' => {
+                depth += 1;
+                if cut.is_none() && depth > MAX_DEPTH {
+                    cut = Some(depth);
+                    out.push_str("null");
+                }
+            }
+            b']' | b'}' => {
+                depth = depth.saturating_sub(1);
+                if cut == Some(depth + 1) {
+                    cut = None;
+                    continue;
+                }
+            }
+            b'-' | b'0'..=b'9' => {
+                while matches!(b.get(i), Some(b'0'..=b'9' | b'.' | b'e' | b'E' | b'+' | b'-')) {
+                    i += 1;
+                }
+                if cut.is_none()
+                    && s.get(start..i)
+                        .is_some_and(|n| n.parse::<f64>().is_ok_and(f64::is_infinite))
+                {
+                    out.push_str("null");
+                    continue;
+                }
+            }
+            _ => {}
+        }
+        if cut.is_none() {
+            out.push_str(s.get(start..i).unwrap_or(""));
+        }
+    }
+    out
 }
 
 fn lone_surrogates_to_fffd(s: &str) -> Cow<'_, str> {

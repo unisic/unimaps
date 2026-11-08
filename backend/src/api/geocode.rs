@@ -1,5 +1,6 @@
-//! server/api/geocode/route.ts for zbiorkom cities: streets, addresses and places within the city from Photon
-//! (KB_GEOCODER_URL), for a connection search from a point.
+//! server/api/geocode/route.ts: streets, addresses and places within the city from Photon (KB_GEOCODER_URL), for a
+//! connection search from a point. Proxy mode answers the zbiorkom cities (Node the BB one), owned mode every city
+//! through the same memo and in-flight counter.
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -70,13 +71,15 @@ fn memo() -> std::sync::MutexGuard<'static, IndexMap<String, (i64, Hits)>> {
     MEMO.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// minLon, minLat, maxLon, maxLat: GZM's stops plus the 800 m a search from a point walks; any other zbiorkom
+/// minLon, minLat, maxLon, maxLat: each city's stops plus the 800 m a search from a point walks; any other zbiorkom
 /// city uses its feed's stop extent (None while that feed loads)
-fn bbox_of(slug: &str) -> Option<[f64; 4]> {
-    if slug == "gzm" {
-        return Some([18.39, 49.96, 19.49, 50.59]);
+fn bbox_of(city: &str) -> Option<[f64; 4]> {
+    match city {
+        "bb" => return Some([18.8, 49.65, 19.37, 50.06]),
+        "gzm" => return Some([18.39, 49.96, 19.49, 50.59]),
+        _ => {}
     }
-    let a = get_gzm_feed(slug)?.area;
+    let a = get_gzm_feed(city)?.area;
     Some([a.lon_min, a.lat_min, a.lon_max, a.lat_max])
 }
 
@@ -163,24 +166,45 @@ pub async fn get(req: &ApiRequest) -> Option<Response<Body>> {
     handle(req, &HttpZb).await
 }
 
-/// The route with Photon behind `photon` (HttpZb, or a stub in a test).
+/// The route with Photon behind `photon` (HttpZb, or a stub in a test); None = a BB request.
 pub async fn handle<T: ZbTransport>(req: &ApiRequest, photon: &T) -> Option<Response<Body>> {
-    let city = match req.zb_city() {
+    Some(match req.zb_city() {
         Err(None) => return None,
-        city => city,
+        Ok(slug) => search(req, photon, Ok(slug)).await,
+        Err(Some(res)) => search(req, photon, Err(res)).await,
+    })
+}
+
+/// Owned mode: GET /api/geocode?q=<address or place>[&city=<slug>] of every city, BB included.
+pub async fn get_owned(req: &ApiRequest) -> Response<Body> {
+    handle_owned(req, &HttpZb).await
+}
+
+/// `get_owned` with Photon behind `photon`.
+pub async fn handle_owned<T: ZbTransport>(req: &ApiRequest, photon: &T) -> Response<Body> {
+    let city = match parse_city(&req.query) {
+        Ok(City::Bb) => Ok("bb"),
+        Ok(City::Zb(slug)) => Ok(slug),
+        Err(res) => Err(res),
     };
+    search(req, photon, city).await
+}
+
+/// The TS GET from its rate-limit gate on, `city` = parseCity's answer ("bb" or a zbiorkom slug, Err = its 400 /
+/// 404, which the TS returns after the gate).
+async fn search<T: ZbTransport>(req: &ApiRequest, photon: &T, city: Result<&str, Response<Body>>) -> Response<Body> {
     if !allow_request(&req.ip(), COST) {
-        return Some(too_many_requests());
+        return too_many_requests();
     }
     let slug = match city {
         Ok(slug) => slug,
         Err(res) => return res,
     };
     let Some(base) = GEOCODER_URL.as_deref() else {
-        return Some(not_found("Not found"));
+        return not_found("Not found");
     };
     let Some(q) = search_text(&req.query) else {
-        return Some(bad_request("Invalid 'q' parameter (3 to 80 characters)"));
+        return bad_request("Invalid 'q' parameter (3 to 80 characters)");
     };
 
     let key = format!("{slug}|{}", q.to_lowercase());
@@ -189,13 +213,13 @@ pub async fn handle<T: ZbTransport>(req: &ApiRequest, photon: &T) -> Option<Resp
     if let Some((at, hits)) = cached
         && now - at < MEMO_TTL_MS
     {
-        return Some(answer(&hits));
+        return answer(&hits);
     }
     let Some(_slot) = Slot::take() else {
-        return Some(too_many_requests());
+        return too_many_requests();
     };
     let Some(bbox) = bbox_of(slug) else {
-        return Some(warming());
+        return warming();
     };
     let bbox_param = bbox.map(js::number_to_string).join(",");
     let params = url::form_urlencoded::Serializer::new(String::new())
@@ -214,12 +238,12 @@ pub async fn handle<T: ZbTransport>(req: &ApiRequest, photon: &T) -> Option<Resp
         .await
     {
         Ok(r) if r.ok() => r,
-        Ok(r) => return Some(upstream_error("geocode", format_args!("HTTP {}", r.status))),
-        Err(err) => return Some(upstream_error("geocode", err)),
+        Ok(r) => return upstream_error("geocode", format_args!("HTTP {}", r.status)),
+        Err(err) => return upstream_error("geocode", err),
     };
     let body: Value = match crate::js::json_parse(&res.body) {
         Ok(v) => v,
-        Err(err) => return Some(upstream_error("geocode", err)),
+        Err(err) => return upstream_error("geocode", err),
     };
 
     let mut hits = Vec::new();
@@ -248,5 +272,5 @@ pub async fn handle<T: ZbTransport>(req: &ApiRequest, photon: &T) -> Option<Resp
             m.shift_remove_index(0);
         }
     }
-    Some(answer(&hits))
+    answer(&hits)
 }

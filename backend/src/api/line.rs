@@ -1,4 +1,4 @@
-//! server/api/line/route.ts, zbiorkom branch: a line's stop patterns on a date from the feed's own router index.
+//! server/api/line/route.ts: a line's stop patterns on a date from a zbiorkom feed's own router index or the BB one.
 
 use std::sync::Arc;
 
@@ -10,8 +10,9 @@ use crate::api_helpers::{bad_request, is_valid_date, is_valid_id, query_param, w
 use crate::fleet_tracker::blocking_io;
 use crate::gzm::{GzmLive, ZbTransport};
 use crate::http::Body;
+use crate::poller_singleton::{Bb, BbKinds};
 use crate::rate_limit::{allow_request, too_many_requests};
-use crate::router::{LineStop, line_timetable};
+use crate::router::{LineStop, get_index, line_timetable};
 use crate::time::today_local;
 
 /// A LineVariant without its trip id, plus the pattern's road shape (wire id, null = none).
@@ -26,12 +27,13 @@ struct Variant {
 #[derive(Serialize)]
 struct LineBody<'a> {
     line: &'a str,
-    operator: &'static str,
+    operator: &'a str,
     date: &'a str,
     variants: Vec<Variant>,
 }
 
-/// GET /api/line?name=<line>[&date=YYYY-MM-DD]&city=<zbiorkom slug>; None = a BB request (Node answers it).
+/// GET /api/line?name=<line>[&date=YYYY-MM-DD]&city=<zbiorkom slug>; None = a BB request (`get_bb`, Node in proxy
+/// mode).
 pub fn get(req: &ApiRequest) -> Option<Response<Body>> {
     handle(req, zb_live)
 }
@@ -90,4 +92,51 @@ pub fn handle<T: ZbTransport>(
         },
         "public, max-age=3600",
     ))
+}
+
+/// GET /api/line?name=<line>[&op=KB|MZK][&date=YYYY-MM-DD] without a zbiorkom city: the KB + MZK router index, each
+/// pattern's shape from the BB store. No GTFS feed built yet (a fresh volume builds it at start) = warming.
+pub async fn get_bb<T: BbKinds>(req: &ApiRequest, bb: &'static Bb<T>) -> Response<Body> {
+    if !allow_request(&req.ip(), 1.0) {
+        return too_many_requests();
+    }
+    let name = query_param(&req.query, "name").unwrap_or_default();
+    let op = query_param(&req.query, "op").unwrap_or_else(|| "KB".to_owned());
+    let date = query_param(&req.query, "date")
+        .filter(|d| !d.is_empty())
+        .unwrap_or_else(|| today_local().to_string());
+    if !is_valid_id(&name) {
+        return bad_request("Invalid 'name'");
+    }
+    if !matches!(op.as_str(), "KB" | "MZK" | "GZM") {
+        return bad_request("Invalid 'op' (KB or MZK)");
+    }
+    if !is_valid_date(&date) {
+        return bad_request("Invalid 'date' (expected YYYY-MM-DD)");
+    }
+    // an O(trips) scan, the index loaded from disk on first use
+    let Some(found) = blocking_io(|| line_timetable(&name, &op, &date, get_index().as_deref())) else {
+        return warming();
+    };
+    let variants = found
+        .into_iter()
+        .map(|v| {
+            let ids: Vec<String> = v.stops.iter().map(|s| s.id.clone()).collect();
+            Variant {
+                shape: bb.line_shape_ref(&v.trip_id, &ids, &name, &v.headsign),
+                headsign: v.headsign,
+                stops: v.stops,
+                times: v.times,
+            }
+        })
+        .collect();
+    json_cached(
+        &LineBody {
+            line: &name,
+            operator: &op,
+            date: &date,
+            variants,
+        },
+        "public, max-age=3600",
+    )
 }

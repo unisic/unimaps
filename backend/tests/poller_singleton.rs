@@ -160,6 +160,30 @@ async fn retries_a_failed_kb_start_in_the_background_even_though_mzk_started() {
     bb.mzk_poller().stop().await;
 }
 
+// /api/gtfs-rt.pb
+
+#[tokio::test(start_paused = true)]
+async fn gtfs_rt_serves_the_poller_feed_as_an_attachment() {
+    let base = tokio::time::Instant::now();
+    let bb: &'static Bb<Fakes> = Box::leak(Box::new(fake_bb(
+        Arc::new(AtomicU32::new(0)),
+        Arc::new(move || NOW_MS + base.elapsed().as_millis() as i64),
+    )));
+    let res = unimaps::api::gtfs_rt::get(bb).await;
+    assert_eq!(res.status(), 200);
+    let h = res.headers();
+    assert_eq!(h["content-type"], "application/x-protobuf");
+    assert_eq!(h["content-disposition"], "attachment; filename=VehiclePositions.pb");
+    assert_eq!(h["cache-control"], "no-store");
+    assert_eq!(h["access-control-allow-origin"], "*");
+    let body = http_body_util::BodyExt::collect(res.into_body())
+        .await
+        .unwrap()
+        .to_bytes();
+    assert_eq!(&body[..], &bb.poller().to_protobuf()[..]);
+    bb.mzk_poller().stop().await;
+}
+
 // getApi
 
 #[test]
@@ -242,4 +266,78 @@ fn serves_the_same_payload_until_the_kb_snapshot_or_the_mzk_map_changes() {
     bb.mzk_poller().state().positions = Arc::new(IndexMap::new());
     seen.push(bb.combined_vehicles(None));
     assert_eq!(builds(&seen), 3);
+}
+
+// /api/vehicles and /api/lines, BB branch (no TS route test drives them)
+
+#[tokio::test(start_paused = true)]
+async fn bb_vehicles_and_lines_routes_send_the_ts_headers_and_bodies() {
+    use std::io::Read;
+
+    use hyper::header::{HeaderMap, HeaderValue};
+    use unimaps::api::{ApiRequest, lines, vehicles};
+    use unimaps::mzk_poller::MzkLineInfo;
+
+    async fn text(res: hyper::Response<unimaps::http::Body>) -> Vec<u8> {
+        http_body_util::BodyExt::collect(res.into_body())
+            .await
+            .unwrap()
+            .to_bytes()
+            .to_vec()
+    }
+    let clock = Arc::new(AtomicI64::new(NOW_MS));
+    let bb: &'static Bb<Fakes> = Box::leak(Box::new(fake_bb(Arc::new(AtomicU32::new(0)), fixed_clock(&clock))));
+    let req = |gzip: bool| {
+        let mut headers = HeaderMap::new();
+        if gzip {
+            headers.insert("accept-encoding", HeaderValue::from_static("gzip, br"));
+        }
+        ApiRequest {
+            query: "?operator=MZK".to_owned(),
+            headers,
+            ..Default::default()
+        }
+    };
+
+    let res = vehicles::get_bb(&req(false), bb).await;
+    assert_eq!(res.status(), 200);
+    let h = res.headers();
+    assert_eq!(h["cache-control"], "no-store, no-cache, must-revalidate, max-age=0");
+    assert_eq!(h["pragma"], "no-cache");
+    assert_eq!(h["x-server-time"], NOW_MS.to_string().as_str());
+    assert_eq!(h["content-type"], "application/json");
+    assert_eq!(h["vary"], "Accept-Encoding");
+    assert!(h.get("content-encoding").is_none());
+    let plain = text(res).await;
+    let want = serde_json::to_string(&*bb.combined_vehicles(Some("mzk"))).unwrap();
+    assert_eq!(String::from_utf8_lossy(&plain), want);
+    let res = vehicles::get_bb(&req(true), bb).await;
+    assert_eq!(res.headers()["content-encoding"], "gzip");
+    let mut unzipped = Vec::new();
+    flate2::read::GzDecoder::new(&text(res).await[..])
+        .read_to_end(&mut unzipped)
+        .unwrap();
+    assert_eq!(unzipped, plain);
+
+    bb.mzk_poller().state().lines = Arc::new(vec![MzkLineInfo {
+        id: "mzk:6".to_owned(),
+        name: "6".to_owned(),
+        terminus: "Wapienica".to_owned(),
+        operator: "MZK",
+    }]);
+    let res = lines::get_bb(bb).await;
+    assert_eq!(res.status(), 200);
+    assert_eq!(res.headers()["cache-control"], "public, max-age=3600");
+    assert_eq!(res.headers()["content-type"], "application/json");
+    let body = String::from_utf8(text(res).await).unwrap();
+    assert!(
+        body.ends_with(r#"{"id":"mzk:6","name":"6","terminus":"Wapienica","operator":"MZK"}]}"#),
+        "{body}"
+    );
+    let v: Value = serde_json::from_str(&body).unwrap();
+    let all = v["lines"].as_array().unwrap();
+    assert_eq!(v["count"], all.len());
+    // whatever KB_GTFS_DIR holds comes first, each entry tagged KB
+    assert!(all[..all.len() - 1].iter().all(|l| l["operator"] == "KB"));
+    bb.mzk_poller().stop().await;
 }

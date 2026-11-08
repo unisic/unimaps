@@ -161,6 +161,19 @@ pub fn upstream_error(tag: &str, err: impl Display) -> Response<Body> {
     error(StatusCode::BAD_GATEWAY, "Upstream request failed")
 }
 
+/// readJsonBody: a JSON object or array body of at most `max` bytes. None when Content-Length is not a positive
+/// integer <= `max` (a chunked body is refused unread), the text is not JSON, or it is a JSON primitive.
+pub fn read_json_body(headers: &HeaderMap, body: Option<&[u8]>, max: usize) -> Option<serde_json::Value> {
+    let len = header_str(headers, "content-length").map_or(0.0, |v| js::number(&v));
+    if len.fract() != 0.0 || len <= 0.0 || len > max as f64 {
+        return None;
+    }
+    // req.text(): UTF-8 with replacement characters, a leading BOM dropped
+    let text = String::from_utf8_lossy(body.unwrap_or_default());
+    let v = js::json_parse(text.strip_prefix('\u{feff}').unwrap_or(&text)).ok()?;
+    (v.is_object() || v.is_array()).then_some(v)
+}
+
 /// RFC 9110 weak comparison of an If-None-Match value (`http::header_str`): any listed tag, W/ ignored, or "*".
 pub fn etag_matches(header: Option<&str>, etag: &str) -> bool {
     fn weak(t: &str) -> &str {
@@ -273,4 +286,76 @@ pub fn json_with_etag(req: &HeaderMap, data: &impl Serialize) -> Response<Body> 
         h.insert(ETAG, v);
     }
     res
+}
+
+#[cfg(test)]
+mod tests {
+    use hyper::header::{HeaderMap, HeaderValue};
+    use serde_json::json;
+
+    use super::read_json_body;
+
+    fn with_len(len: &str) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert(
+            "content-length",
+            HeaderValue::from_str(len).unwrap_or(HeaderValue::from_static("x")),
+        );
+        h
+    }
+
+    #[test]
+    fn read_json_body_takes_only_a_sized_object_or_array() {
+        let body = "\u{feff}{\"a\":1}".as_bytes();
+        assert_eq!(
+            read_json_body(&with_len("10"), Some(body), 4096),
+            Some(json!({ "a": 1 }))
+        );
+        assert_eq!(read_json_body(&with_len(" 2 "), Some(b"[]"), 4096), Some(json!([])));
+        assert_eq!(read_json_body(&HeaderMap::new(), Some(b"{}"), 4096), None);
+        for len in ["0", "1.5", "-2", "4097", "abc"] {
+            assert_eq!(read_json_body(&with_len(len), Some(b"{}"), 4096), None, "{len}");
+        }
+        assert_eq!(read_json_body(&with_len("1"), Some(b"7"), 4096), None);
+        assert_eq!(read_json_body(&with_len("3"), Some(b"{x}"), 4096), None);
+        assert_eq!(read_json_body(&with_len("2"), None, 4096), None);
+    }
+
+    /// JSON.parse takes a number past the f64 range (Infinity, written back as null) and any nesting depth, so a
+    /// valid body with such an extra field still parses.
+    #[test]
+    fn read_json_body_takes_what_json_parse_takes() {
+        let pad = |p: &str| format!(r#"{{"subscription":{{"endpoint":"e"}},"pad":{p}}}"#);
+        let parse = |s: &str| read_json_body(&with_len(&s.len().to_string()), Some(s.as_bytes()), 4096);
+        for p in ["1e400", "-1e400", "[1e400]"] {
+            let v = parse(&pad(p));
+            assert_eq!(
+                v.as_ref().map(|v| &v["subscription"]),
+                Some(&json!({ "endpoint": "e" })),
+                "{p}"
+            );
+        }
+        assert_eq!(parse(&pad("-1e400")).map(|v| v["pad"].clone()), Some(json!(null)));
+        let deep = pad(&format!("{}1{}", "[".repeat(2000), "]".repeat(2000)));
+        let v = parse(&deep);
+        assert_eq!(
+            v.as_ref().map(|v| &v["subscription"]),
+            Some(&json!({ "endpoint": "e" }))
+        );
+        assert_eq!(
+            v.as_ref().and_then(|v| v["pad"][0][0].as_array()).map(Vec::len),
+            Some(1)
+        );
+        let shallow = pad(&format!("{}1{}", "[".repeat(100), "]".repeat(100)));
+        let mut inner = parse(&shallow).map(|v| v["pad"].clone());
+        for _ in 0..99 {
+            inner = inner.and_then(|v| v.get(0).cloned());
+        }
+        assert_eq!(inner, Some(json!([1])));
+        for bad in ["1e", "[01]", "[1,]", "\"\u{1}\""] {
+            assert_eq!(parse(&pad(bad)), None, "{bad}");
+            let nested = pad(&format!("{}{bad}{}", "[".repeat(200), "]".repeat(200)));
+            assert_eq!(parse(&nested), None, "nested {bad}");
+        }
+    }
 }

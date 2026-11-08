@@ -83,9 +83,9 @@ async fn records_the_first_list_silently_then_pushes_only_what_is_new_per_city()
     let file = temp_file("first");
     let sent: Sent = Arc::default();
     let s = PushNews::new(file.clone(), send(sent.clone(), 201), list(lists.clone())).load();
-    assert!(s.add(&sub(1), City::Bb));
-    assert!(s.add(&sub(2), City::Gzm));
-    assert!(s.add(&sub(2), City::Bb));
+    assert!(s.add(&sub(1), &json!(sub(1)), City::Bb));
+    assert!(s.add(&sub(2), &json!(sub(2)), City::Gzm));
+    assert!(s.add(&sub(2), &json!(sub(2)), City::Bb));
     assert_eq!(s.size(), 2);
     s.tick().await;
     assert_eq!(sent.lock().unwrap().len(), 0);
@@ -138,16 +138,16 @@ async fn drops_a_subscription_the_push_service_reports_gone_removing_the_last_ci
         list(vec![(City::Bb, bb.clone())]),
     )
     .load();
-    s.add(&sub(1), City::Bb);
-    s.add(&sub(2), City::Bb);
-    s.add(&sub(2), City::Gzm);
+    s.add(&sub(1), &json!(sub(1)), City::Bb);
+    s.add(&sub(2), &json!(sub(2)), City::Bb);
+    s.add(&sub(2), &json!(sub(2)), City::Gzm);
     s.tick().await;
     *bb.lock().unwrap() = vec![item(1, 1, "KB"), item(2, 1, "KB")];
     s.tick().await;
     assert_eq!(sent.lock().unwrap().len(), 2);
     assert_eq!(s.size(), 0);
-    s.add(&sub(3), City::Bb);
-    s.add(&sub(3), City::Gzm);
+    s.add(&sub(3), &json!(sub(3)), City::Bb);
+    s.add(&sub(3), &json!(sub(3)), City::Gzm);
     s.remove(&sub(3).endpoint, City::Bb);
     assert_eq!(s.size(), 1);
     s.remove(&sub(3).endpoint, City::Gzm);

@@ -126,7 +126,7 @@ pub(crate) fn hh_mm_of_secs(sec: f64) -> String {
 }
 
 /// `mzkSymbols ?? (mzkSymbol ? [mzkSymbol] : [])`
-fn mzk_symbols_of(m: &WireStop) -> Vec<String> {
+pub(crate) fn mzk_symbols_of(m: &WireStop) -> Vec<String> {
     match (&m.mzk_symbols, &m.mzk_symbol) {
         (Some(all), _) => all.clone(),
         (None, Some(s)) if !s.is_empty() => vec![s.clone()],
@@ -408,16 +408,6 @@ fn mzk_rows<T: BbKinds>(bb: &Bb<T>, mzk: &MzkPoller<T::Mzk>, rt: &Value) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The routes run these on hyper's multi-threaded runtime: the futures must stay `Send`.
-    #[allow(dead_code)]
-    fn services_are_send<T: BbKinds>(bb: &'static Bb<T>, group: &'static [WireStop]) {
-        fn send<F: Send>(_: F) {}
-        send(stop_board(bb, "x"));
-        send(group_board(bb, group));
-        send(crate::mzk_trip::resolve_mzk_trip(bb, "mzk:1", true));
-        send(crate::announcements::fetch_announcements(bb, "bb"));
-    }
 
     #[test]
     fn hh_mm_follows_js_remainder_and_pad() {

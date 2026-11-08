@@ -48,6 +48,7 @@ async fn get(q: &str, photon: &Fake) -> Response<Body> {
         param: String::new(),
         query: format!("city=gzm&q={}", encode_uri_component(q)),
         headers,
+        ..Default::default()
     };
     geocode::handle(&req, photon).await.expect("a zbiorkom request")
 }
@@ -121,4 +122,36 @@ async fn rejects_a_too_short_query_and_hides_upstream_failures_behind_a_502() {
     let res = get("Katowice Mariacka", &photon).await;
     assert_eq!(res.status(), 502);
     assert_eq!(json_body(res).await["error"], "Upstream request failed");
+}
+
+/// Rust only (owned mode, no TS test covers BB): a BB request gets BB's box and keeps only the hits inside it;
+/// proxy mode's `handle` leaves it to Node.
+#[tokio::test]
+async fn owned_mode_geocodes_bb_inside_its_own_box() {
+    let mut headers = HeaderMap::new();
+    headers.insert("x-forwarded-for", HeaderValue::from_static("10.9.1.1"));
+    let req = ApiRequest {
+        query: format!("q={}", encode_uri_component("Bielsko Sportowa")),
+        headers,
+        ..Default::default()
+    };
+    let photon = Fake::new(|_| {
+        let mut body: Value = serde_json::from_str(&photon()).unwrap();
+        body["features"].as_array_mut().unwrap().push(json!({
+            "type": "Feature",
+            "geometry": { "type": "Point", "coordinates": [19.0456, 49.8224] },
+            "properties": { "name": "Sportowa", "city": "Bielsko-Biała" },
+        }));
+        Ok(ok(body.to_string()))
+    });
+    assert!(geocode::handle(&req, &photon).await.is_none());
+    let res = geocode::handle_owned(&req, &photon).await;
+    assert_eq!(res.status(), 200);
+    assert_eq!(
+        json_body(res).await["results"],
+        json!([{ "name": "Sportowa", "detail": "Bielsko-Biała", "lat": 49.8224, "lon": 19.0456 }])
+    );
+    let urls = photon.urls();
+    let query = urls[0].split_once('?').map_or("", |(_, q)| q);
+    assert_eq!(query_param(query, "bbox").as_deref(), Some("18.8,49.65,19.37,50.06"));
 }

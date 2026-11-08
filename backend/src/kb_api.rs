@@ -177,7 +177,8 @@ fn js_number(n: &serde_json::Number) -> Option<Value> {
         .ok()
 }
 
-fn js_key_order(v: &mut Value) {
+/// A parsed value as V8 holds it: objects in `Object.keys` order, integral numbers as integers (see `js_json_parse`).
+pub fn js_key_order(v: &mut Value) {
     match v {
         Value::Number(n) => {
             if let Some(js) = js_number(n) {

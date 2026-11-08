@@ -1,6 +1,7 @@
-//! server/api/trips/route.ts for a batch holding a zbiorkom id: the whole batch is validated as the TS does, the
-//! zbiorkom ids come from their cities' feeds, the rest (KB, MZK) from Node in one sub-request, and the two parts
-//! are merged into the answer the one TS route would give.
+//! server/api/trips/route.ts. Proxy mode, for a batch holding a zbiorkom id: the whole batch is validated as the TS
+//! does, the zbiorkom ids come from their cities' feeds, the rest (KB, MZK) from Node in one sub-request, and the
+//! two parts are merged into the answer the one TS route would give. Owned mode (`get_owned`): every batch, all
+//! in-process.
 
 use std::sync::Arc;
 
@@ -11,11 +12,16 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use serde_json::value::RawValue;
 
+use super::trip::{mzk_trip_body, spread};
 use super::{ApiRequest, NodeClient, NodeResponse, batch_ids, json_cached, node_headers, node_response, zb_live};
-use crate::api_helpers::{bad_request, is_valid_id, query_param, zb_enabled};
+use crate::api_helpers::{bad_request, is_valid_id, query_param, upstream_error, zb_enabled};
 use crate::gzm::{GzmLive, Lookup, ZbTransport};
 use crate::http::Body;
+use crate::kb_api::{KbSource, join_all};
+use crate::mzk_trip::resolve_mzk_trip;
+use crate::poller_singleton::{Bb, BbKinds};
 use crate::rate_limit::{allow_request, too_many_requests};
+use crate::shape_store::ShapePrio;
 use crate::shared::cities::zb_city_of;
 use crate::{js, logger};
 
@@ -29,10 +35,11 @@ pub struct ZbTrips {
     pub loading: bool,
 }
 
+/// A trip answered here, or Node's verbatim.
 #[derive(Serialize)]
 #[serde(untagged)]
 enum Trip {
-    Zb(Value),
+    Built(Value),
     Node(Box<RawValue>),
 }
 
@@ -59,20 +66,10 @@ pub async fn handle<T: ZbTransport>(
     node: &NodeClient,
     live: impl Fn(&'static str) -> Arc<GzmLive<T>>,
 ) -> Option<Response<Body>> {
-    let param = query_param(&req.query, "ids").unwrap_or_default();
-    if param.is_empty() {
-        return Some(bad_request("Missing ?ids= query parameter"));
-    }
-    let ids = batch_ids(&param);
-    if ids.is_empty() {
-        return Some(bad_request("ids list cannot be empty"));
-    }
-    if ids.len() > MAX_BATCH_IDS {
-        return Some(bad_request(&format!("Exceeded maximum of {MAX_BATCH_IDS} ids")));
-    }
-    if let Some(bad) = ids.iter().find(|id| !is_valid_id(id)) {
-        return Some(bad_request(&format!("Invalid trip id: {bad}")));
-    }
+    let ids = match checked_ids(req) {
+        Ok(ids) => ids,
+        Err(res) => return Some(res),
+    };
     let (zb_ids, rest): (Vec<String>, Vec<String>) = ids.into_iter().partition(|id| zb_city_of(id).is_some());
     let node_part = if rest.is_empty() {
         // Math.max(1, 0): a zbiorkom id costs no upstream fetch; a mixed batch is charged by Node for its own ids
@@ -85,6 +82,105 @@ pub async fn handle<T: ZbTransport>(
         Some(node.get(&path, node_headers(&req.headers)).await)
     };
     Some(merge_trips(node_part, || zb_trips(&zb_ids, live)))
+}
+
+/// The batch's ids after the TS checks (present, non-empty, at most 300, each `is_valid_id`); Err = the 400.
+fn checked_ids(req: &ApiRequest) -> Result<Vec<String>, Response<Body>> {
+    let param = query_param(&req.query, "ids").unwrap_or_default();
+    if param.is_empty() {
+        return Err(bad_request("Missing ?ids= query parameter"));
+    }
+    let ids = batch_ids(&param);
+    if ids.is_empty() {
+        return Err(bad_request("ids list cannot be empty"));
+    }
+    if ids.len() > MAX_BATCH_IDS {
+        return Err(bad_request(&format!("Exceeded maximum of {MAX_BATCH_IDS} ids")));
+    }
+    if let Some(bad) = ids.iter().find(|id| !is_valid_id(id)) {
+        return Err(bad_request(&format!("Invalid trip id: {bad}")));
+    }
+    Ok(ids)
+}
+
+/// GET /api/trips?ids=<any batch> in owned mode: zbiorkom ids from their cities' feeds, KB ids from `bb.api()`
+/// (cached shared objects spread, never mutated, with a background road-shape ref), MZK ids from mzk_trip.
+pub async fn get_owned<T: BbKinds>(req: &ApiRequest, bb: &'static Bb<T>) -> Response<Body> {
+    let ids = match checked_ids(req) {
+        Ok(ids) => ids,
+        Err(res) => return res,
+    };
+    let api = bb.api();
+    let (zb_ids, rest): (Vec<String>, Vec<String>) = ids.iter().cloned().partition(|id| zb_city_of(id).is_some());
+    let (mzk_ids, kb_ids): (Vec<String>, Vec<String>) = rest.into_iter().partition(|id| id.starts_with("mzk:"));
+    // one token per id that costs an upstream fetch (MZK ids always do), so a batch is not a 300x amplifier
+    let cost = (mzk_ids.len() + kb_ids.iter().filter(|id| !api.has_cached_trip(id, 0)).count()).max(1);
+    if !allow_request(&req.ip(), cost as f64) {
+        return too_many_requests();
+    }
+    // a zbiorkom-only batch needs neither BB poller
+    if !(kb_ids.is_empty() && mzk_ids.is_empty())
+        && let Err(err) = bb.start_poller().await
+    {
+        return upstream_error("trips", err);
+    }
+    let zb = zb_trips(&zb_ids, zb_live);
+    let mut trips: IndexMap<String, Trip> = zb.trips.into_iter().map(|(k, v)| (k, Trip::Built(v))).collect();
+    let mut failed = 0;
+    if !kb_ids.is_empty() {
+        let kb = api.fetch_trips_batch(&kb_ids, 0).await;
+        failed += kb.failed;
+        for (id, t) in kb.trips {
+            let t = if t.is_object() || t.is_array() {
+                let mut o = spread(Some(&t));
+                o.extend(bb.kb_shape_ref(&t, ShapePrio::Background));
+                Value::Object(o)
+            } else {
+                Value::clone(&t)
+            };
+            trips.insert(id, Trip::Built(t));
+        }
+    }
+    if !mzk_ids.is_empty() {
+        let res = join_all(mzk_ids.iter().map(|id| resolve_mzk_trip(bb, id, false))).await;
+        for (id, r) in mzk_ids.into_iter().zip(res) {
+            match r {
+                Ok(Some(m)) if js::truthy(m.get("trip")) => {
+                    trips.insert(id, Trip::Built(Value::Object(mzk_trip_body(&m))));
+                }
+                Ok(_) => {}
+                Err(_) => failed += 1,
+            }
+        }
+    }
+    // a failed fetch is not "no such trip": never cache it, and with nothing resolved let the client fall back
+    if failed == ids.len() {
+        return upstream_error("trips", format_args!("all {failed} trip fetches failed"));
+    }
+    let pending = trips.values().any(|t| matches!(t, Trip::Built(v) if is_pending(v)));
+    answer(trips, failed > 0 || zb.loading, pending)
+}
+
+fn is_pending(t: &Value) -> bool {
+    t.get("shape_status").and_then(Value::as_str) == Some("pending")
+}
+
+/// The TS answer: keys in `Object.keys` order (index-like ids ascending first), `no_store` = a fetch failed or a
+/// feed is loading, `pending` = a road shape is still being built.
+fn answer(mut trips: IndexMap<String, Trip>, no_store: bool, pending: bool) -> Response<Body> {
+    js::sort_object_keys(&mut trips);
+    let cache = match (no_store, pending) {
+        (true, _) => "no-store",
+        (false, true) => "public, max-age=300",
+        (false, false) => "public, max-age=3600",
+    };
+    json_cached(
+        &TripsBody {
+            count: trips.len(),
+            trips,
+        },
+        cache,
+    )
 }
 
 /// Each zbiorkom id's static trip, the TS loop over `zbIds` (a disabled city's ids are skipped).
@@ -136,27 +232,12 @@ pub fn merge_trips(node: Option<Result<NodeResponse, String>>, zb: impl FnOnce()
         }
     }
     let zb = zb();
-    pending |= zb
-        .trips
-        .values()
-        .any(|t| t.get("shape_status").and_then(Value::as_str) == Some("pending"));
-    let mut trips: IndexMap<String, Trip> = zb.trips.into_iter().map(|(k, v)| (k, Trip::Zb(v))).collect();
+    pending |= zb.trips.values().any(is_pending);
+    let mut trips: IndexMap<String, Trip> = zb.trips.into_iter().map(|(k, v)| (k, Trip::Built(v))).collect();
     for (k, v) in node_trips {
         trips.insert(k, Trip::Node(v));
     }
-    js::sort_object_keys(&mut trips);
-    let cache = match (failed || zb.loading, pending) {
-        (true, _) => "no-store",
-        (false, true) => "public, max-age=300",
-        (false, false) => "public, max-age=3600",
-    };
-    json_cached(
-        &TripsBody {
-            count: trips.len(),
-            trips,
-        },
-        cache,
-    )
+    answer(trips, failed || zb.loading, pending)
 }
 
 #[cfg(test)]

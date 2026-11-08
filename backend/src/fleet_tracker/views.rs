@@ -80,11 +80,11 @@ impl FleetTracker {
         self.lock().stats()
     }
 
-    /// `getVersion()`, `getFleetSummary()` and `getStats()` under one lock (the GZM list body): an update in between
-    /// cannot mix two polls into one body.
-    pub fn list_snapshot(&self) -> (u64, Vec<FleetSummaryItem>, FleetStats) {
+    /// `getVersion()`, `getFleetSummary(filter)` and `getStats()` under one lock (the list bodies): an update in
+    /// between cannot mix two polls into one body.
+    pub fn list_snapshot(&self, filter: &FleetSummaryFilter<'_>) -> (u64, Vec<FleetSummaryItem>, FleetStats) {
         let s = self.lock();
-        (s.version, s.fleet_summary(&FleetSummaryFilter::default()), s.stats())
+        (s.version, s.fleet_summary(filter), s.stats())
     }
 }
 
