@@ -85,7 +85,7 @@ export const CITY: Record<City, CityConfig> = {
     zoom: 11,
     stopMinZoom: 15,
     logo: "/gzm-logo.svg",
-    color: ZB_CITIES.gzm.color,
+    color: ZB_CITIES.gzm.color ?? null,
     // the server's SDIP overlay moves a vehicle every ~5 s (p50); it polls SDIP only while this is requested
     vehiclesRefreshMs: 5000,
     attribution: "ZTM / Metropolia GZM (CC BY)",

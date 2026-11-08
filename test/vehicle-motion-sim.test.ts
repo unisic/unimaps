@@ -3,7 +3,7 @@
  *   true bus (accelerate / cruise / brake, dwells, a red light)
  *   → upstream position updates every 6–18 s
  *   → server poll every ~10 s (midpoint fix_at, moving-pair cruise speed — the
- *     real lib/route-info functions)
+ *     server's rules, test/support/route-info-sim.ts)
  *   → client poll every 4 s with network jitter
  *   → 60 Hz frames through the real motion store.
  * Pins the user-visible properties: no backward driving, no big jumps in
@@ -19,7 +19,7 @@ import {
   type MotionInput,
   type MotionSample,
 } from "../lib/client/vehicleMotion";
-import { estimateFixAt, nextSpeed } from "../lib/route-info";
+import { estimateFixAt, nextSpeed } from "./support/route-info-sim";
 import { preparePolyline, type LatLng } from "../lib/shared/polyline";
 
 const LAT0 = 49.8;

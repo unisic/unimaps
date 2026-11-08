@@ -1,6 +1,6 @@
 /**
  * Writes a .br and a .gz next to every compressible file of the static build (default out/), so
- * server/static.ts sends them as they are and no request pays for compression. Skips a sibling that
+ * backend/src/static_files.rs sends them as they are and no request pays for compression. Skips a sibling that
  * would not be smaller.
  */
 import fs from "node:fs";

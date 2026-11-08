@@ -8,34 +8,25 @@
     "node": ">=24"
   },
   "overrides": {
-    "protobufjs-cli": {
-      "glob": "^14.0.2"
-    },
-    "markdown-it": "^14.3.3",
     "@typescript-eslint/typescript-estree": {
       "minimatch": "^11.0.1"
     }
   },
   "scripts": {
-    "dev": "tsx watch --clear-screen=false server/dev.ts",
-    "build": "vite build && node scripts/compress-static.mjs out && node scripts/build-server.mjs",
-    "start": "node dist/server.mjs",
+    "dev": "node scripts/dev.mjs",
+    "build": "vite build && node scripts/compress-static.mjs out",
+    "start": "cargo run --release --manifest-path backend/Cargo.toml",
     "lint": "eslint .",
     "typecheck": "svelte-check --tsconfig ./tsconfig.json",
     "test": "node --import tsx --test \"test/**/*.test.ts\"",
-    "test:fleet": "tsx scripts/test-live-fleet.ts",
-    "build:gtfs": "tsx scripts/build-gtfs.ts",
+    "build:gtfs": "cargo run --release --manifest-path backend/Cargo.toml -- build-gtfs",
     "build:phototrans": "tsx scripts/build-phototrans.ts",
-    "benchmark": "tsx scripts/benchmark-search.ts",
     "benchmark:site": "tsx scripts/benchmark-site.ts"
   },
   "dependencies": {
     "@maplibre/maplibre-gl-leaflet": "^0.1.4",
-    "fflate": "^0.8.3",
-    "gtfs-realtime-bindings": "^2.2.0",
     "leaflet": "^1.9.4",
-    "maplibre-gl": "^6.16.0",
-    "p-limit": "^7.3.3"
+    "maplibre-gl": "^6.16.0"
   },
   "devDependencies": {
     "@phosphor-icons/react": "^2.1.10",
@@ -43,7 +34,6 @@
     "@tailwindcss/postcss": "^4.3.3",
     "@types/leaflet": "^1.9.22",
     "@types/node": "^24",
-    "esbuild": "^0.28.2",
     "eslint": "^9",
     "svelte": "^5.57.3",
     "svelte-check": "^4.7.7",

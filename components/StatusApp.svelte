@@ -4,7 +4,7 @@
   import { fmtInt, pluralPl } from "@/components/brygady/common";
   import ErrorState from "@/components/ui/ErrorState.svelte";
   import SkeletonRows from "@/components/ui/SkeletonRows.svelte";
-  import type { SourceState, SourceStatus, StatusBody } from "@/lib/city-status";
+  import type { SourceState, SourceStatus, StatusBody } from "@/lib/shared/status";
   import { fetchJSON } from "@/lib/client/api";
 
   // the server sweeps at most every 2 min, a faster poll would only re-read its memo

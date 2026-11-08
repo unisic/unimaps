@@ -1,0 +1,46 @@
+[package]
+name = "unimaps"
+version = "0.1.0"
+edition = "2024"
+# AtomicUsize::try_update (let chains need 1.88)
+rust-version = "1.95"
+
+[dependencies]
+aes-gcm = "0.10.3"
+bytes = "1.12.1"
+dotenvy = "0.15.7"
+# gzip of the prebuilt API bodies (api_helpers::prebuilt_json), the zlib-rs backend zip already uses
+flate2 = { version = "1.1.11", default-features = false, features = ["zlib-rs"] }
+hkdf = "0.12.4"
+http-body-util = "0.1.5"
+hyper = { version = "1.12.0", features = ["http1", "server"] }
+hyper-util = { version = "0.1.21", features = ["tokio"] }
+icu_collator = "2.4.0"
+icu_locale_core = { version = "2.4.0", default-features = false }
+icu_normalizer = { version = "2.4.0", default-features = false, features = ["compiled_data"] }
+icu_properties = { version = "2.4.0", default-features = false, features = ["compiled_data"] }
+indexmap = { version = "2.14.2", features = ["serde"] }
+jiff = { version = "0.2.39", features = ["tzdb-bundle-always"] }
+libc = "0.2"
+p256 = { version = "0.14.0", default-features = false, features = ["ecdh", "ecdsa", "getrandom", "std"] }
+# brotli, gzip, deflate: Node's fetch asks for and decodes them (zbiorkom answers ~8.6x smaller)
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider", "brotli", "gzip", "deflate"] }
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.154", features = ["float_roundtrip", "preserve_order"] }
+sha1 = "0.10.6"
+sha2 = "0.10.9"
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "signal", "time", "io-util", "sync"] }
+url = "2.5.8"
+zip = { version = "9.4.1", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+
+[dev-dependencies]
+# paused clock for the TTL tests
+tokio = { version = "1.54.1", features = ["test-util"] }
+
+[profile.release]
+strip = true
+
+[lints.clippy]
+# a route helper's Err is the Response the route returns right away; boxing it only adds an allocation
+result_large_err = "allow"

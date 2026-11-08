@@ -25,7 +25,8 @@ function pages(): Plugin {
     },
     configureServer(server) {
       // /brygady is a module URL to Vite (app/brygady.ts) unless the browser sends Sec-Fetch-Dest: document, which it
-      // omits on a non-secure origin (http://<LAN IP>:8080 from a phone): name the page, as server/static.ts does
+      // omits on a non-secure origin (http://<LAN IP>:8080 from a phone): name the page, as
+      // backend/src/static_files.rs does
       server.middlewares.use((req, _res, next) => {
         const url = req.url ?? "/";
         const cut = url.search(/[?#]/);
@@ -37,8 +38,8 @@ function pages(): Plugin {
         res.setHeader("content-type", "application/manifest+json");
         res.end(body());
       });
-      // after Vite's own middlewares only a page or a miss is left; a miss gets the 404 page, as server/static.ts
-      // answers it in production (Vite's mpa mode ends it empty)
+      // after Vite's own middlewares only a page or a miss is left; a miss gets the 404 page, as
+      // backend/src/static_files.rs answers it in production (Vite's mpa mode ends it empty)
       return () =>
         server.middlewares.use((req, res, next) => {
           const path = (req.url ?? "/").split(/[?#]/)[0];
@@ -59,7 +60,6 @@ function pages(): Plugin {
 export default defineConfig(({ command }) => ({
   root: at("./app"),
   publicDir: at("./public"),
-  // the dev server runs inside server/dev.ts on the API's own port
   appType: "mpa",
   resolve: { alias: { "@": at(".") } },
   define: {
@@ -68,7 +68,14 @@ export default defineConfig(({ command }) => ({
     "process.env.NODE_ENV": JSON.stringify(command === "build" ? "production" : "development"),
   },
   plugins: [svelte({ configFile: at("./svelte.config.mjs") }), pages()],
-  server: { fs: { allow: [at(".")] } },
+  server: {
+    fs: { allow: [at(".")] },
+    host: process.env.HOST || "0.0.0.0",
+    port: Number(process.env.PORT) || 8080,
+    strictPort: true,
+    // /api goes to the Rust server scripts/dev.mjs starts beside this one; xfwd hands it the client's address
+    proxy: { "^/api(?:[/?]|$)": { target: `http://127.0.0.1:${Number(process.env.KB_API_PORT) || 8081}`, xfwd: true } },
+  },
   // the map chunk is import()ed after the city pick: found that late, these were optimized in two rounds and the
   // first round's leaflet chunk no longer matched (SyntaxError on load); maplibre-gl-leaflet patches that one L
   optimizeDeps: { include: ["leaflet", "maplibre-gl", "@maplibre/maplibre-gl-leaflet"] },

@@ -11,6 +11,7 @@ describe("zbiorkom city registry", () => {
       const c = ZB_CITIES[s];
       assert.match(s, /^[a-zA-Z]+$/, s);
       assert.ok(c.name && c.agency, s);
+      assert.equal(c.center.length, 2, s);
       assert.ok(c.center[0] > 49 && c.center[0] < 55 && c.center[1] > 14 && c.center[1] < 24.2, s);
       assert.ok(c.zoom >= 9 && c.zoom <= 14, s);
     }
@@ -45,6 +46,8 @@ describe("zbiorkom city registry", () => {
     assert.equal(zbCityOf("mzk:13954"), null);
     assert.equal(zbCityOf("kb:0123"), null);
     assert.equal(zbCityOf("warsaw"), null);
+    // no ':' at all: never the id minus its last character
+    assert.equal(zbCityOf("gzm1"), null);
     assert.equal(zbCityOf(42), null);
     assert.equal(zbCityOf(null), null);
   });
