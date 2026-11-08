@@ -1,9 +1,12 @@
-//! test/kb-progress.test.ts, the pure parts; the real captures in test/fixtures/kb-delay come in through
-//! vectors/kb_progress.json (stepKbProgress replayed in TS over them and seeded variants, every output compared).
+//! test/kb-progress.test.ts, plus vectors/kb_progress.json (stepKbProgress replayed in TS over the real captures in
+//! test/fixtures/kb-delay and seeded variants, every output compared).
 
 use serde::Deserialize;
+use serde_json::Value;
 use unimaps::kb_progress::*;
+use unimaps::poller::{is_feed_stale, kb_next_stop_index};
 use unimaps::shared::polyline::{LatLng, prepare_polyline};
+use unimaps::vehicle::VehiclePos;
 
 const fn at(h: i64, m: i64, s: i64) -> f64 {
     (h * 3600 + m * 60 + s) as f64
@@ -653,4 +656,518 @@ fn golden_step_kb_progress() {
         }
     }
     assert!(n >= 3000);
+}
+
+/* ------------------------------------------------------------------ real captures (test/fixtures/kb-delay) */
+
+#[derive(Deserialize, Clone)]
+struct FxStop {
+    lat: Option<f64>,
+    lon: Option<f64>,
+    plan: String,
+}
+
+#[derive(Deserialize, Clone)]
+struct FxSample {
+    t: f64,
+    local: f64,
+    lat: f64,
+    lon: f64,
+    vti: Option<i64>,
+    ndi: Option<i64>,
+    at: bool,
+    est0: Option<String>,
+}
+
+#[derive(Deserialize, Clone)]
+struct Fx {
+    stops: Vec<FxStop>,
+    samples: Vec<FxSample>,
+}
+
+fn load_fx(name: &str) -> Fx {
+    let path = format!("{}/../test/fixtures/kb-delay/{name}.json", env!("CARGO_MANIFEST_DIR"));
+    serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+}
+
+fn hhmm(s: Option<&str>) -> Option<f64> {
+    let mut it = s
+        .filter(|s| !s.is_empty())?
+        .split(':')
+        .map(|x| x.parse::<f64>().unwrap_or(f64::NAN));
+    let h = it.next().unwrap_or(f64::NAN);
+    let m = it.next().unwrap_or(f64::NAN);
+    Some(h * 3600.0 + m * 60.0)
+}
+
+/// JS numeric coercion of a TS `x!` operand (null -> 0)
+fn js0(x: Option<f64>) -> f64 {
+    x.unwrap_or(0.0)
+}
+
+fn plan_of(fx: &Fx) -> Vec<Option<f64>> {
+    fx.stops.iter().map(|s| hhmm(Some(&s.plan))).collect()
+}
+
+/// `plan[j] as number` / `cr[j] as number` with j from trueLast (-1 = undefined = NaN)
+fn nth(xs: &[Option<f64>], j: i64) -> f64 {
+    usize::try_from(j)
+        .ok()
+        .and_then(|j| xs.get(j).copied().flatten())
+        .unwrap_or(f64::NAN)
+}
+
+/// parsePosition parity: trunc(estimates[0].arrival_abs - plan[ndi ?? vti])
+fn parity_delay(s: &FxSample, plan: &[Option<f64>]) -> Option<f64> {
+    let tgt = s.ndi.filter(|&n| n >= 0 && (n as usize) < plan.len()).or(s.vti);
+    let arr = hhmm(s.est0.as_deref())?;
+    let sched = plan.get(usize::try_from(tgt?).ok()?).copied().flatten()?;
+    Some(wrap(arr - sched).trunc())
+}
+
+struct Replayed {
+    s: FxSample,
+    delay_up: Option<f64>,
+    o: KbProgOut,
+}
+
+fn replay(fx: &Fx, samples: &[FxSample]) -> Vec<Replayed> {
+    let stop_pts: Vec<Option<LatLng>> = fx
+        .stops
+        .iter()
+        .map(|s| match (s.lat, s.lon) {
+            (Some(lat), Some(lon)) => Some([lat, lon]),
+            _ => None,
+        })
+        .collect();
+    let geom = straight_geom(&stop_pts).expect("fixture has a usable geometry");
+    let plan = plan_of(fx);
+    let mut st: Option<KbProgState> = None;
+    samples
+        .iter()
+        .map(|s| {
+            let delay_up = parity_delay(s, &plan);
+            let (vti, ndi) = (s.vti.map(Value::from), s.ndi.map(Value::from));
+            let next_up = kb_next_stop_index(vti.as_ref(), ndi.as_ref(), s.at, plan.len());
+            let inp = KbProgIn {
+                geom: &geom,
+                plan: &plan,
+                lat: s.lat,
+                lon: s.lon,
+                t_epoch: s.t / 1000.0,
+                local_secs: s.local,
+                vti: s.vti,
+                next_up,
+                delay_up,
+            };
+            let o = step_kb_progress(&inp, st.as_ref());
+            st = o.state;
+            Replayed {
+                s: s.clone(),
+                delay_up,
+                o,
+            }
+        })
+        .collect()
+}
+
+/// what upstream does while its index is stuck: vti/ndi frozen, estimates[0] clamped to "now" (the current minute)
+fn stuck_at(samples: &[FxSample], vti: i64, ndi: i64, from_local: f64) -> Vec<FxSample> {
+    samples
+        .iter()
+        .map(|s| {
+            if s.local < from_local {
+                return s.clone();
+            }
+            let est0 = format!(
+                "{:02}:{:02}",
+                (s.local / 3600.0).floor() as i64 % 24,
+                (s.local / 60.0).floor() as i64 % 60
+            );
+            FxSample {
+                vti: Some(vti),
+                ndi: Some(ndi),
+                at: false,
+                est0: Some(est0),
+                ..s.clone()
+            }
+        })
+        .collect()
+}
+
+/// Independent ground truth: time (epoch s) of the closest approach of the sampled track to each stop, taken in
+/// stop order (the first run of segments within 80 m after the previous stop's pass).
+fn crossings(fx: &Fx) -> Vec<Option<f64>> {
+    let pts: Vec<(f64, f64, f64)> = fx.samples.iter().map(|s| (s.t / 1000.0, s.lat, s.lon)).collect();
+    let mut out = Vec::new();
+    let mut after = f64::NEG_INFINITY;
+    for st in &fx.stops {
+        let (Some(slat), Some(slon)) = (st.lat, st.lon) else {
+            out.push(None);
+            continue;
+        };
+        let kx = 111_320.0 * (slat * std::f64::consts::PI / 180.0).cos();
+        let mut best: Option<(f64, f64)> = None;
+        let mut in_run = false;
+        for w in pts.windows(2) {
+            let ((at_, alat, alon), (bt, blat, blon)) = (w[0], w[1]);
+            if bt < after {
+                continue;
+            }
+            let ax = (alon - slon) * kx;
+            let ay = (alat - slat) * 110_540.0;
+            let bx = (blon - slon) * kx;
+            let by = (blat - slat) * 110_540.0;
+            let (dx, dy) = (bx - ax, by - ay);
+            let l2 = dx * dx + dy * dy;
+            let u = if l2 == 0.0 {
+                0.0
+            } else {
+                (-(ax * dx + ay * dy) / l2).clamp(0.0, 1.0)
+            };
+            let d = (ax + u * dx).hypot(ay + u * dy);
+            if d < 80.0 {
+                in_run = true;
+                if best.is_none_or(|(bd, _)| d < bd) {
+                    best = Some((d, at_ + u * (bt - at_)));
+                }
+            } else if in_run {
+                break;
+            }
+        }
+        out.push(best.map(|b| b.1));
+        if let Some((_, t)) = best {
+            after = t;
+        }
+    }
+    out
+}
+
+/// last stop passed at epoch-second t according to the independent crossings
+fn true_last(cr: &[Option<f64>], t: f64) -> i64 {
+    cr.iter()
+        .rposition(|c| c.is_some_and(|c| c <= t))
+        .map_or(-1, |i| i as i64)
+}
+
+/* stalled upstream stop index on a plain route (real capture, line 116, 22:49-22:57) */
+
+fn stall_116() -> (Fx, Vec<Replayed>) {
+    let fx = load_fx("stall-116");
+    let rows = replay(&fx, &fx.samples);
+    (fx, rows)
+}
+
+#[test]
+fn upstreams_delay_inflates_1_min_min_5_11_min_while_the_bus_runs_on_time() {
+    let (_, rows) = stall_116();
+    let stalled: Vec<&Replayed> = rows
+        .iter()
+        .filter(|r| r.s.vti == Some(5) && r.s.ndi == Some(6))
+        .collect();
+    assert!(stalled.len() >= 25);
+    assert!(js0(stalled[0].delay_up) >= 300.0 && js0(stalled[stalled.len() - 1].delay_up) >= 600.0);
+}
+
+#[test]
+fn the_gps_delay_stays_within_90_s_flagged_stale_from_the_second_poll_on() {
+    let (_, rows) = stall_116();
+    let stalled: Vec<&Replayed> = rows
+        .iter()
+        .filter(|r| r.s.vti == Some(5) && r.s.ndi == Some(6) && r.s.local >= at(22, 49, 25))
+        .collect();
+    assert!(stalled.len() >= 25);
+    for r in stalled {
+        assert!(r.o.stale, "stale at {}", r.s.local);
+        assert!(matches!(r.o.src, DelaySrc::Gps | DelaySrc::GpsHeld), "{:?}", r.o.src);
+        assert!(
+            js0(r.o.delay).abs() <= 90.0,
+            "GPS delay {:?} at {}",
+            r.o.delay,
+            r.s.local
+        );
+    }
+}
+
+#[test]
+fn matches_the_independent_closest_approach_delay_at_the_last_passed_stop_90_s() {
+    let (fx, rows) = stall_116();
+    let cr = crossings(&fx);
+    let plan = plan_of(&fx);
+    let mut n = 0;
+    for r in &rows {
+        if !r.o.stale || r.o.src != DelaySrc::Gps {
+            continue;
+        }
+        let j = true_last(&cr, r.s.t / 1000.0);
+        if j < 0 || nth(&cr, j).is_nan() {
+            continue;
+        }
+        let cross_local = r.s.local - (r.s.t / 1000.0 - nth(&cr, j));
+        let obs = wrap(cross_local - nth(&plan, j));
+        assert!(
+            (js0(r.o.delay) - obs).abs() <= 90.0,
+            "GPS {:?} vs observed {obs} at {}",
+            r.o.delay,
+            r.s.local
+        );
+        n += 1;
+    }
+    assert!(n >= 20);
+}
+
+#[test]
+fn after_upstream_resyncs_vti_15_it_is_in_sync_again_and_upstreams_value_is_used() {
+    let (_, rows) = stall_116();
+    let after: Vec<&Replayed> = rows
+        .iter()
+        .filter(|r| r.s.vti == Some(15) && r.s.local >= at(22, 56, 10))
+        .collect();
+    assert!(after.len() >= 3);
+    for r in after {
+        assert!(!r.o.stale);
+        assert_eq!(r.o.delay, r.delay_up);
+    }
+}
+
+#[test]
+fn second_stall_vti_18_for_15_min_gps_delay_3_min_where_upstream_reaches_11() {
+    let fx = load_fx("stall-116-b");
+    let rb = replay(&fx, &fx.samples);
+    let stalled: Vec<&Replayed> = rb
+        .iter()
+        .filter(|r| r.s.vti == Some(18) && r.s.ndi == Some(19) && r.s.local >= at(23, 2, 0))
+        .collect();
+    assert!(stalled.len() > 20);
+    assert!(
+        stalled
+            .iter()
+            .map(|r| r.delay_up.unwrap_or(0.0))
+            .fold(f64::NEG_INFINITY, f64::max)
+            >= 600.0
+    );
+    for r in &stalled {
+        assert!(
+            r.o.delay.is_none_or(|d| (-120.0..=180.0).contains(&d)),
+            "GPS {:?} at {}",
+            r.o.delay,
+            r.s.local
+        );
+    }
+    assert!(stalled.iter().filter(|r| r.o.src == DelaySrc::Gps).count() > 15);
+}
+
+/* midnight */
+
+#[test]
+fn a_trip_running_across_midnight_gives_exactly_the_same_result_as_the_same_trip_shifted_into_the_afternoon() {
+    let fx = load_fx("stall-116");
+    let shift = |secs: f64| -> Fx {
+        let hm = |v: Option<&str>| -> Option<String> {
+            let y = (hhmm(v)? + secs + 86400.0) % 86400.0;
+            Some(format!(
+                "{:02}:{:02}",
+                (y / 3600.0).floor() as i64,
+                (y / 60.0).floor() as i64 % 60
+            ))
+        };
+        Fx {
+            stops: fx
+                .stops
+                .iter()
+                .map(|st| FxStop {
+                    plan: hm(Some(&st.plan)).unwrap_or_default(),
+                    ..st.clone()
+                })
+                .collect(),
+            samples: fx
+                .samples
+                .iter()
+                .map(|sm| FxSample {
+                    local: (sm.local + secs + 86400.0) % 86400.0,
+                    est0: hm(sm.est0.as_deref()),
+                    ..sm.clone()
+                })
+                .collect(),
+        }
+    };
+    let base = replay(&fx, &fx.samples);
+    // 22:49 -> 00:09: the first stops are planned before and the rest after midnight
+    let night_fx = shift(80.0 * 60.0);
+    let night = replay(&night_fx, &night_fx.samples);
+    // 22:49 -> 14:49 (no midnight in the trip at all)
+    let noon_fx = shift(-8.0 * 3600.0);
+    let noon = replay(&noon_fx, &noon_fx.samples);
+    assert!(
+        night.iter().all(|r| r.s.local < 3600.0),
+        "polls are after midnight while the first stops are planned before it"
+    );
+    for (i, r) in base.iter().enumerate() {
+        for other in [&night[i], &noon[i]] {
+            assert_eq!(other.o.stale, r.o.stale);
+            assert_eq!(other.o.last_idx, r.o.last_idx);
+            assert_eq!(other.delay_up, r.delay_up);
+            assert!(
+                (other.o.delay.is_none() && r.o.delay.is_none()) || (js0(other.o.delay) - js0(r.o.delay)).abs() < 1e-6,
+                "delay {:?} vs {:?} at sample {i}",
+                other.o.delay,
+                r.o.delay
+            );
+        }
+    }
+}
+
+/* out-and-back spur: index stuck at the apex while the bus drives the return leg (real capture, line 136) */
+
+fn spur_136() -> Vec<Replayed> {
+    let fx = load_fx("spur-136");
+    replay(&fx, &fx.samples)
+}
+
+#[test]
+fn locks_onto_the_return_leg_from_the_first_poll_vti_is_a_lower_bound_and_flags_the_index_stale() {
+    let rows = spur_136();
+    assert_eq!(rows[0].s.vti, Some(23));
+    let last = rows[0].o.last_idx;
+    assert!(
+        js0(last.map(|i| i as f64)) >= 25.0,
+        "bus is past the return Centrum (25), got {last:?}"
+    );
+    assert!(rows[0].o.stale);
+}
+
+#[test]
+fn shows_an_early_bus_where_upstreams_stale_estimate_says_it_is_late() {
+    let rows = spur_136();
+    let last = &rows[rows.len() - 1];
+    assert!(js0(last.delay_up) > 60.0, "upstream {:?}", last.delay_up);
+    assert!(js0(last.o.delay) < -90.0, "GPS {:?}", last.o.delay);
+}
+
+/* loop trip, upstream in sync (real capture, line 120, Szczyrk Biła loop) */
+
+fn idx0(i: Option<i64>) -> f64 {
+    js0(i.map(|i| i as f64))
+}
+
+#[test]
+fn never_flags_stale_and_returns_exactly_upstreams_value_zero_behaviour_change() {
+    let fx = load_fx("healthy-120-loop");
+    let rows = replay(&fx, &fx.samples);
+    assert!(rows.len() > 30);
+    for r in &rows {
+        assert!(
+            !r.o.stale,
+            "stale at {} last={:?} vti={:?}",
+            r.s.local, r.o.last_idx, r.s.vti
+        );
+        assert_eq!(r.o.delay, r.delay_up);
+    }
+}
+
+#[test]
+fn tracks_the_bus_monotonically_through_the_loop_apex_and_passes_the_loop_stops_in_order() {
+    let fx = load_fx("healthy-120-loop");
+    let rows = replay(&fx, &fx.samples);
+    let mut prev = -1.0;
+    let mut max_last = -1.0_f64;
+    for r in &rows {
+        assert!(js0(r.o.d) >= prev - 1e-6);
+        prev = js0(r.o.d);
+        max_last = max_last.max(idx0(r.o.last_idx));
+    }
+    assert!(max_last >= 28.0, "reached the end of the loop, last={max_last}");
+}
+
+/* line 120 loop with a stalled index (the healthy capture, upstream frozen as observed on 116 / 136) */
+
+fn check_stalled_loop(vti: i64, from_local: f64, first_sample: usize) {
+    let fx = load_fx("healthy-120-loop");
+    let cr = crossings(&fx);
+    let plan = plan_of(&fx);
+    let stuck = stuck_at(&fx.samples, vti, vti + 1, from_local);
+    let rows = replay(&fx, stuck.get(first_sample..).unwrap_or_default());
+    let mut flagged = 0;
+    let mut prev_last = -1.0;
+    for r in &rows {
+        if r.s.local < from_local || !r.o.stale {
+            continue;
+        }
+        flagged += 1;
+        let j = true_last(&cr, r.s.t / 1000.0);
+        // the stops around the apex (22..25) are only ~190 m apart and the straight chords cut the real road,
+        // so the index may run up to two stops ahead there for a poll or two
+        let tol = if (21..=25).contains(&j) { 2.0 } else { 1.0 };
+        let last = idx0(r.o.last_idx);
+        assert!(
+            (last - j as f64).abs() <= tol,
+            "last {:?} vs true {j} at {}",
+            r.o.last_idx,
+            r.s.local
+        );
+        assert!(last >= prev_last, "progress never goes backwards");
+        prev_last = last;
+        let cross_local = r.s.local - (r.s.t / 1000.0 - nth(&cr, j));
+        let obs = wrap(cross_local - nth(&plan, j));
+        if r.o.src == DelaySrc::Gps {
+            assert!(
+                (js0(r.o.delay) - obs).abs() <= 120.0,
+                "GPS {:?} vs observed {obs} at {}",
+                r.o.delay,
+                r.s.local
+            );
+        }
+    }
+    assert!(flagged >= 15, "stale detected for {flagged} polls");
+    let last_row = &rows[rows.len() - 1];
+    assert!(
+        js0(last_row.delay_up) >= 240.0,
+        "upstream would show {:?}",
+        last_row.delay_up
+    );
+    assert!(js0(last_row.o.delay).abs() <= 120.0, "GPS {:?}", last_row.o.delay);
+    assert!(idx0(last_row.o.last_idx) >= 28.0);
+}
+
+/// stuck right after the apex (Biła -> Beskid Arena): the state of the screenshot (bus past Nowy Kościół, header +5 min)
+#[test]
+fn index_stuck_at_the_apex_vti_23_ndi_24_gps_progress_follows_the_bus_through_the_return_leg_delay_stays_within_2_min()
+{
+    check_stalled_loop(23, at(23, 3, 40), 0);
+}
+
+/// stuck BEFORE the loop: neither the outbound loop stops nor the return leg are ever registered
+#[test]
+fn index_stuck_at_szczyrk_centrum_vti_19_ndi_20_gps_progress_follows_the_bus_through_the_return_leg_delay_stays_within_2_min()
+ {
+    check_stalled_loop(19, at(22, 58, 0), 0);
+}
+
+/// cold start (server restart) in the middle of the return leg
+#[test]
+fn cold_start_on_the_return_leg_index_stuck_at_the_apex_gps_progress_follows_the_bus_through_the_return_leg_delay_stays_within_2_min()
+ {
+    check_stalled_loop(23, at(23, 3, 40), 30);
+}
+
+/* poller glue */
+
+#[test]
+fn a_gps_replaced_delay_must_not_hide_a_frozen_feed_from_the_ghost_filter() {
+    let v = |delay: Option<f64>, delay_up: Option<Option<f64>>, last_moved_at: f64| VehiclePos {
+        delay,
+        delay_up,
+        last_moved_at,
+        ..Default::default()
+    };
+    assert!(is_feed_stale(&v(Some(30.0), Some(None), 0.0), 1000.0, 300.0));
+    assert!(!is_feed_stale(&v(Some(30.0), Some(Some(30.0)), 0.0), 1000.0, 300.0));
+    assert!(
+        is_feed_stale(&v(None, None, 0.0), 1000.0, 300.0),
+        "MZK-style vehicle without delayUp"
+    );
+    assert!(
+        !is_feed_stale(&v(None, Some(None), 900.0), 1000.0, 300.0),
+        "moved recently"
+    );
 }

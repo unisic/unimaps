@@ -1,13 +1,23 @@
 //! Per-vehicle route math the pollers attach to positions for the client motion engine, port of the pure part of
 //! `lib/route-info.ts`.
 
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::Arc;
+
 use serde_json::{Map, Value};
 
 use crate::js::{num_value, round, round1};
 use crate::kb_progress::DelaySrc;
-use crate::shape_store::{ShapeGeometry, ShapeSrc};
+use crate::shape_patterns::KbPattern;
+use crate::shape_store::{ShapeGeometry, ShapePrio, ShapeSrc};
 use crate::shared::polyline::project_on_polyline;
 use crate::vehicle::VehiclePos;
+
+/// What the KB poller needs from the shape store (kept narrow for tests).
+pub trait KbShapeSink: Send + Sync {
+    fn touch_kb(&self, p: &KbPattern, prio: ShapePrio);
+    fn geometry(&self, key: &str) -> Option<Arc<ShapeGeometry>>;
+}
 
 /// The previous fix of a vehicle as `estimate_fix_at` reads it.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -176,8 +186,13 @@ pub fn sched_speed(stops: &[Option<f64>], times: &[Option<f64>], d: f64) -> Opti
 /// Maps a shape key to its wire id (`<key>.<rev6>`).
 pub type WireIdFn<'a> = dyn Fn(&str) -> Option<String> + 'a;
 
-/// `vehicleExtras`: the route-info wire fields appended to `vehicle_to_json`, keys in its order.
+/// `vehicleExtras`: the route-info wire fields appended to `vehicle_to_json`, keys in its order. Never panics: a
+/// failing `wire_id` drops every extra (the TS try/catch returning `{}`), never the vehicle.
 pub fn vehicle_extras(v: &VehiclePos, wire_id: Option<&WireIdFn>, now_epoch: f64) -> Map<String, Value> {
+    catch_unwind(AssertUnwindSafe(|| extras(v, wire_id, now_epoch))).unwrap_or_default()
+}
+
+fn extras(v: &VehiclePos, wire_id: Option<&WireIdFn>, now_epoch: f64) -> Map<String, Value> {
     let mut out = Map::new();
     if let Some(f) = v.fix_at.filter(|f| f.is_finite()) {
         out.insert("fix_at".into(), num_value(round1(f)));

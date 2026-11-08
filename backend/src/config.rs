@@ -30,8 +30,34 @@ fn in_output(name: &str) -> String {
         .into_owned()
 }
 
+pub static BASE_URL: LazyLock<String> =
+    LazyLock::new(|| env_str("KB_BASE_URL", "https://komunikacjabeskidzka.kiedyprzyjedzie.pl"));
 pub static AGENCY_TIMEZONE: LazyLock<String> = LazyLock::new(|| env_str("KB_AGENCY_TIMEZONE", "Europe/Warsaw"));
+pub static DEFAULT_STOPS_REVISION: LazyLock<String> = LazyLock::new(|| env_str("KB_STOPS_REVISION", "6829"));
+/// HTTP timeout in seconds (aiohttp "total" equivalent).
+pub static HTTP_TIMEOUT: LazyLock<i64> = LazyLock::new(|| env_int("KB_HTTP_TIMEOUT", 20, 1));
+pub static DEFAULT_CONCURRENCY: LazyLock<i64> = LazyLock::new(|| env_int("KB_CONCURRENCY", 40, 1));
 pub static RATE_LIMIT_GLOBAL: LazyLock<i64> = LazyLock::new(|| env_int("KB_RATE_LIMIT_GLOBAL", 500, 1));
+
+/// Live poller tuning (seconds unless noted).
+pub static LIVE_FULL_SCAN_INTERVAL: LazyLock<i64> = LazyLock::new(|| env_int("KB_SCAN_INTERVAL", 90, 1));
+pub static LIVE_REFRESH_INTERVAL: LazyLock<i64> = LazyLock::new(|| env_int("KB_REFRESH_INTERVAL", 10, 1));
+pub static LIVE_CANDIDATE_HORIZON_SEC: LazyLock<i64> = LazyLock::new(|| env_int("KB_CANDIDATE_HORIZON", 7200, 1));
+pub static LIVE_404_CACHE_SEC: LazyLock<i64> = LazyLock::new(|| env_int("KB_404_CACHE", 30, 0));
+pub static LIVE_STOP_EMPTY_CACHE_SEC: LazyLock<i64> = LazyLock::new(|| env_int("KB_STOP_EMPTY_CACHE", 120, 0));
+pub static LIVE_STOP_FAR_CACHE_SEC: LazyLock<i64> = LazyLock::new(|| env_int("KB_STOP_FAR_CACHE", 180, 0));
+pub static LIVE_STOP_FAR_THRESHOLD_SEC: LazyLock<i64> = LazyLock::new(|| env_int("KB_STOP_FAR_THRESHOLD", 1800, 1));
+pub static LIVE_SMART_SCAN_INTERVAL: LazyLock<i64> = LazyLock::new(|| env_int("KB_SMART_SCAN_INTERVAL", 30, 1));
+pub static LIVE_SMART_SCAN_WINDOW_SEC: LazyLock<i64> = LazyLock::new(|| env_int("KB_SMART_SCAN_WINDOW", 600, 0));
+/// Max stops per departures request: upstream silently caps every `/api/departures?places=` reply at 6 boards.
+pub static LIVE_BATCH_SIZE: LazyLock<i64> = LazyLock::new(|| env_int("KB_BATCH_SIZE", 6, 1));
+/// Ghost filter: hidden once not moved more than STALE_MOVE_EPS m for STALE_VEHICLE s with no live delay.
+pub static LIVE_STALE_VEHICLE_SEC: LazyLock<i64> = LazyLock::new(|| env_int("KB_STALE_VEHICLE_SEC", 300, 1));
+pub static LIVE_STALE_MOVE_EPS_M: LazyLock<i64> = LazyLock::new(|| env_int("KB_STALE_MOVE_EPS_M", 15, 0));
+/// GPS correction of the KB live delay (lib/kb-progress.ts); KB_GPS_DELAY=0 keeps upstream's value.
+pub static GPS_DELAY: LazyLock<bool> = LazyLock::new(|| env_str("KB_GPS_DELAY", "1") != "0");
+/// How often the poller re-fetches the stop list; a failed reload keeps the old list and retries in 30 min.
+pub static STOPS_RELOAD_SEC: LazyLock<i64> = LazyLock::new(|| env_int("KB_STOPS_RELOAD_SEC", 86_400, 1));
 pub static GZM_ENABLED: LazyLock<bool> = LazyLock::new(|| env_int("KB_GZM", 1, 0) != 0);
 pub static ZB_ENABLED: LazyLock<bool> = LazyLock::new(|| env_int("KB_ZB", 1, 0) != 0);
 
@@ -44,6 +70,9 @@ pub static GTFS_DIR: LazyLock<String> = LazyLock::new(|| env_str("KB_GTFS_DIR", 
 /// MZK static timetable built from OnTime for the connection search (lib/mzk-timetable.ts).
 pub static MZK_TIMETABLE_FILE: LazyLock<String> =
     LazyLock::new(|| env_str("KB_MZK_TIMETABLE_FILE", &in_output("mzk-timetable.v1.json")));
+/// MZK stop bearings learned from running courses (lib/mzk-stop-dirs.ts).
+pub static MZK_STOP_DIRS_FILE: LazyLock<String> =
+    LazyLock::new(|| env_str("KB_MZK_STOP_DIRS_FILE", &in_output("mzk-stop-dirs.v1.json")));
 
 /// Web push: the VAPID pair and pending alerts; the subject is the contact push services see (mailto: or https:).
 pub static PUSH_DIR: LazyLock<String> = LazyLock::new(|| env_str("KB_PUSH_DIR", &in_output("push")));

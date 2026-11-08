@@ -1,12 +1,17 @@
-//! Ports of test/route-info.test.ts (minus vehicleExtras, kbNextStopIndex) and test/route-info-continuity.test.ts,
+//! Ports of test/route-info.test.ts and test/route-info-continuity.test.ts,
 //! plus golden vectors from scripts/dump-vectors.ts.
 
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use unimaps::js;
+use unimaps::kb_progress::DelaySrc;
 use unimaps::mzk_shape::{MzkStopIndices, mzk_remap_dist, mzk_shape_from_course_details, mzk_stop_indices};
-use unimaps::route_info::{PrevFix, estimate_fix_at, kb_ahead_m, kb_dist_along, next_speed, sched_speed};
+use unimaps::poller::kb_next_stop_index;
+use unimaps::route_info::{
+    PrevFix, estimate_fix_at, kb_ahead_m, kb_dist_along, next_speed, sched_speed, vehicle_extras,
+};
 use unimaps::shape_store::{ShapeGeometry, ShapeSrc, finalize_shape};
 use unimaps::shared::polyline::{LatLng, decode_polyline, prepare_polyline};
+use unimaps::vehicle::VehiclePos;
 
 const LAT0: f64 = 49.8;
 const LON0: f64 = 19.0;
@@ -162,35 +167,166 @@ fn kb_dist_along_uses_upstream_window() {
     assert_eq!(dist(&g, p(300.0, 400.0), Some(0), Some(1), None, None), None);
 }
 
+/* ---------------- vehicleExtras ---------------- */
+
+fn extras_v() -> VehiclePos {
+    VehiclePos {
+        fix_at: Some(1000.04),
+        next_stop_seq: Some(3),
+        speed: Some(9.87),
+        speed_at: Some(995.0),
+        shape_key: Some("kb:0123456789ab".into()),
+        dist_m: Some(412.6),
+        dist_rev: Some("abcdef".into()),
+        ..Default::default()
+    }
+}
+
+/// the TS `shapes = { wireId: (k) => `${k}.abcdef` }`
+fn ex(v: &VehiclePos, now: f64) -> Value {
+    Value::Object(vehicle_extras(v, Some(&|k: &str| Some(format!("{k}.abcdef"))), now))
+}
+
 #[test]
-fn kb_dist_along_continuity() {
+fn emits_only_known_fields_dist_gated_on_the_served_rev() {
+    let v = extras_v();
+    assert_eq!(
+        ex(&v, 1000.0),
+        json!({ "fix_at": 1000, "next_stop_seq": 3, "speed": 9.9, "shape": "kb:0123456789ab.abcdef", "dist_m": 413 })
+    );
+    let other_rev = VehiclePos {
+        dist_rev: Some("000000".into()),
+        ..extras_v()
+    };
+    assert_eq!(ex(&other_rev, 1000.0).get("dist_m"), None);
+    assert_eq!(vehicle_extras(&v, Some(&|_: &str| None), 1000.0).get("shape"), None);
+    assert_eq!(ex(&v, 1200.0).get("speed"), None, "stale speed");
+    assert_eq!(vehicle_extras(&VehiclePos::default(), None, 0.0), Map::new());
+    // a course not begun (layover, depot run) is not on its shape yet: no along-route motion on the wire
+    let not_started = VehiclePos {
+        not_started: true,
+        ..extras_v()
+    };
+    assert_eq!(
+        ex(&not_started, 1000.0),
+        json!({ "fix_at": 1000, "next_stop_seq": 3, "not_started": true })
+    );
+    let sched = VehiclePos {
+        sched_speed: Some(8.333),
+        ..extras_v()
+    };
+    assert_eq!(ex(&sched, 1000.0).get("sched_speed"), Some(&json!(8.3)));
+    let sched_not_started = VehiclePos {
+        sched_speed: Some(8.333),
+        not_started: true,
+        ..extras_v()
+    };
+    assert_eq!(ex(&sched_not_started, 1000.0).get("sched_speed"), None);
+}
+
+#[test]
+fn never_throws() {
+    let bad = |_: &str| -> Option<String> { panic!("x") };
+    assert_eq!(vehicle_extras(&extras_v(), Some(&bad), 1000.0), Map::new());
+}
+
+#[test]
+fn gps_progress_extras_delay_src_geo_seq_only_while_upstream_s_stop_index_is_stale() {
+    let v = extras_v();
+    assert_eq!(ex(&v, 1000.0).get("geo_seq"), None);
+    assert_eq!(ex(&v, 1000.0).get("delay_src"), None);
+    let stale = ex(
+        &VehiclePos {
+            delay_src: Some(DelaySrc::Gps),
+            geo_last_seq: Some(27),
+            ..extras_v()
+        },
+        1000.0,
+    );
+    assert_eq!(stale.get("delay_src"), Some(&json!("gps")));
+    assert_eq!(stale.get("geo_seq"), Some(&json!(27)));
+    let unknown = VehiclePos {
+        delay_src: Some(DelaySrc::Unknown),
+        ..extras_v()
+    };
+    assert_eq!(ex(&unknown, 1000.0).get("delay_src"), Some(&json!("unknown")));
+    let before_first = VehiclePos {
+        geo_last_seq: Some(-1),
+        ..extras_v()
+    };
+    assert_eq!(
+        ex(&before_first, 1000.0).get("geo_seq"),
+        None,
+        "before the first stop: no hint"
+    );
+}
+
+/* ---------------- kbNextStopIndex (parsePosition parity) ---------------- */
+
+#[test]
+fn ndi_first_else_vti_skips_the_stop_being_served() {
+    let n = |vti: Value, ndi: Value, at: bool| kb_next_stop_index(Some(&vti), Some(&ndi), at, 10);
+    assert_eq!(n(json!(2), json!(3), false), Some(3));
+    assert_eq!(n(json!(2), Value::Null, false), Some(2));
+    assert_eq!(n(json!(2), Value::Null, true), Some(3));
+    assert_eq!(n(json!(2), json!(2), true), Some(3));
+    assert_eq!(n(json!(9), Value::Null, true), None);
+    assert_eq!(n(Value::Null, Value::Null, false), None);
+    assert_eq!(n(json!(2), json!(99), false), Some(2));
+}
+
+/* ---------------- test/route-info-continuity.test.ts ---------------- */
+
+#[test]
+fn stale_vti_stuck_before_the_apex_plus_the_hint_on_the_return_leg_the_return_leg_stays_the_return_leg() {
     let g = out_and_back();
-    // stale vti before the apex + the hint on the return leg: the return leg stays the return leg
+    // bus is on the way back at x=700 (s=1310); upstream still says "last stop 1 (s=500), next 2 (s=1000)": its window
+    // [400, 1100] contains the OUTBOUND twin of that position (s=700, 5 m away) but not the return leg
     near(
         dist(&g, p(700.0, 5.0), Some(1), Some(2), Some(1250.0), None),
         1310.0,
         1.0,
     );
-    // without the hint: the outbound twin (the documented cold-start ambiguity)
+    // without the hint upstream's window is all there is -> the outbound twin (the documented cold-start ambiguity)
     near(dist(&g, p(700.0, 5.0), Some(1), Some(2), None, None), 700.0, 1.0);
-    // beyond the forward window: upstream's window; a wider window accepts it
+}
+
+#[test]
+fn a_fix_beyond_the_forward_window_falls_back_to_upstreams_window_and_a_wider_window_accepts_it() {
+    let g = out_and_back();
+    // hint 0, fix at x=900 outbound: 900 m ahead of the hint; window [-60, 500] misses it -> vti window [400, 1100]
     near(dist(&g, p(900.0, 5.0), Some(1), Some(2), Some(0.0), None), 900.0, 1.0);
     near(
         dist(&g, p(900.0, 5.0), Some(1), Some(2), Some(0.0), Some(1500.0)),
         900.0,
         1.0,
     );
-    // never walks back more than jitter; 200 m back = upstream's window decides
-    near(dist(&g, p(290.0, 5.0), Some(0), Some(1), Some(300.0), None), 290.0, 1.0);
+}
+
+#[test]
+fn the_forward_window_never_walks_the_bus_back_more_than_gps_jitter() {
+    let g = out_and_back();
+    near(dist(&g, p(290.0, 5.0), Some(0), Some(1), Some(300.0), None), 290.0, 1.0); // 10 m back: jitter
+    // 200 m back is not in [hint-60, ...]: upstream's window decides
     near(dist(&g, p(100.0, 5.0), Some(0), Some(1), Some(300.0), None), 100.0, 1.0);
-    // no hint, no vti: strict whole-line search
+}
+
+#[test]
+fn no_hint_no_vti_strict_whole_line_search_at_most_40_m() {
+    let g = out_and_back();
     assert_eq!(dist(&g, p(300.0, 400.0), None, None, None, None), None);
     near(dist(&g, p(300.0, 5.0), None, None, None, None), 300.0, 1.0);
 }
 
+/// GZM 107_5003, line 707: the bus drove on steadily, the old closest-to-hint tie-break kept the outbound twin and
+/// walked dist_m back 7468 -> 7359 (one poll per step) before it jumped to 7691
 #[test]
-fn kb_dist_along_real_u_turn_never_steps_back() {
-    let fx: Value = serde_json::from_str(include_str!("../../test/fixtures/route-info-uturn-live.json")).unwrap();
+fn the_chain_never_steps_back_more_than_gps_jitter() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../test/fixtures/route-info-uturn-live.json"
+    );
+    let fx: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
     let pts = decode_polyline(fx["poly"].as_str().unwrap(), 6);
     let stops: Vec<f64> = fx["stops"]
         .as_array()
@@ -220,18 +356,18 @@ fn kb_dist_along_real_u_turn_never_steps_back() {
 }
 
 #[test]
-fn kb_ahead_m_cases() {
-    for (gap, want) in [
-        (0.0, 500.0),
-        (12.0, 510.0),
-        (30.0, 1050.0),
-        (45.0, 1500.0),
-        (600.0, 2000.0),
-        (-5.0, 500.0),
-        (f64::NAN, 500.0),
-    ] {
-        assert_eq!(kb_ahead_m(gap), want, "{gap}");
-    }
+fn kb_ahead_m_500_m_at_the_normal_poll_cadence_plus_30_m_per_second_of_gap_capped_at_2_km() {
+    assert_eq!(kb_ahead_m(0.0), 500.0);
+    assert_eq!(kb_ahead_m(12.0), 510.0); // 30*12 + 150
+    assert_eq!(kb_ahead_m(30.0), 1050.0);
+    assert_eq!(kb_ahead_m(45.0), 1500.0);
+    assert_eq!(kb_ahead_m(600.0), 2000.0); // gap is capped at 90 s, window at 2 km
+}
+
+#[test]
+fn kb_ahead_m_garbage_gaps_clock_steps_fall_back_to_the_base_window() {
+    assert_eq!(kb_ahead_m(-5.0), 500.0);
+    assert_eq!(kb_ahead_m(f64::NAN), 500.0);
 }
 
 fn course() -> Value {
