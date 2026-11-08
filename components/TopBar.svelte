@@ -43,6 +43,7 @@
     BugIcon,
     CardsIcon,
     DownloadSimpleIcon,
+    HeartIcon,
     MegaphoneSimpleIcon,
     MoonIcon,
     NavigationArrowIcon,
@@ -337,6 +338,16 @@
           </span>
         </div>
       {/if}
+      <a
+        href="https://ko-fi.com/unisic"
+        target="_blank"
+        rel="noopener noreferrer"
+        class="group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-text transition-colors hover:bg-tint/5"
+      >
+        <Icon icon={HeartIcon} weight="fill" class="text-[17px] text-primary" />
+        <span class="flex-1">Wesprzyj nas</span>
+        {@render arrow()}
+      </a>
       <a
         href="https://github.com/unisic/unimaps/issues/new"
         target="_blank"
