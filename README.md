@@ -15,9 +15,9 @@ fleet at once: every running vehicle with its delay, stop departure boards,
 trip timelines on road geometry and a journey planner. It also publishes a
 GTFS feed and a GTFS-Realtime feed.
 
-Unimaps runs as one Node.js process: a plain `node:http` server serves the map
-(a static Svelte 5 build), the JSON API and the feeds, and the pollers run in
-the same process. No separate scraper daemon and no database.
+Unimaps runs as one Rust process (`backend/`, binary `unimaps`): it serves the
+map (a static Svelte 5 build), the JSON API and the feeds, and the pollers run
+in the same process. No separate scraper daemon and no database.
 
 ## Features
 
@@ -42,7 +42,7 @@ the same process. No separate scraper daemon and no database.
 |---|---|---|
 | Bielsko-Biała | Komunikacja Beskidzka (KB), MZK Bielsko-Biała | KiedyPrzyjedzie (KB), OnTime (MZK), stops of both merged into one list |
 | Metropolia GZM | ZTM: buses, trams, trolleybuses | GTFS and positions, SDIP overlay every 5 s |
-| 53 other cities (`lib/shared/cities.ts`: Warsaw, Kraków, Łódź, Wrocław, Poznań, Tricity, Szczecin, Lublin, …) | the local operator of each | GTFS and positions |
+| 53 other cities (`lib/shared/cities.json`: Warsaw, Kraków, Łódź, Wrocław, Poznań, Tricity, Szczecin, Lublin, …) | the local operator of each | GTFS and positions |
 
 On first visit the map asks for a city and remembers it. `?city=<slug>` opens a city (`gzm`, `warsaw`, `krakow`, …).
 The cities are isolated: a GZM or other-city failure never touches Bielsko-Biała data. The other cities are
@@ -52,21 +52,28 @@ They have no fleet history, SDIP overlay or announcements.
 
 ## Run
 
-Requires Node.js 24 or newer.
+Requires Node.js 24 or newer (frontend build and dev server) and Rust 1.88 or
+newer (the server).
 
 ```bash
 git clone https://github.com/unisic/unimaps.git
 cd unimaps
 npm install
-npm run dev          # map + pollers on http://localhost:8080
+npm run dev          # map on http://localhost:8080 (Vite), API + pollers on 127.0.0.1:8081
 ```
+
+`npm run dev` runs the server with `cargo run` and proxies `/api` to it from
+Vite. A server-side edit needs a restart.
 
 Production:
 
 ```bash
-npm run build        # static frontend in out/ + dist/server.mjs (one file, no node_modules needed)
-npm start            # node dist/server.mjs on port 8080 (PORT, HOST)
+npm run build        # static frontend in out/ (precompressed)
+npm start            # cargo run --release: map + API on port 8080 (PORT, HOST), serving ./out
 ```
+
+The release binary (`backend/target/release/unimaps`) needs no Node.js at run
+time; point `KB_STATIC_DIR` at the `out/` directory when it runs elsewhere.
 
 Docker:
 
@@ -74,10 +81,9 @@ Docker:
 docker compose up -d --build
 ```
 
-In the image the Rust server (`backend/`, binary `/app/unimaps`) listens on
-8080, serves the frontend and passes `/api` to the Node API it starts on
-127.0.0.1:8090; the backend moves to Rust stage by stage. If either process
-exits, the container stops.
+The image holds the static `unimaps` binary and `out/`, nothing else. It
+listens on 8080 and serves the frontend and the API; `unimaps healthcheck` is
+the container healthcheck.
 
 The healthcheck marks the container `unhealthy` when the scan loop stalls or
 upstream goes stale (`/api/health` answers 503). `restart: unless-stopped`
@@ -106,6 +112,7 @@ Checks: `npm run typecheck`, `npm run lint`, `npm test`; in `backend/`:
 | `/api/fleet`, `/api/fleet/:side`, `/api/fleet/:side/history`, `/api/fleet/timeline` | Fleet and brigades; `history` = the vehicle's courses on past days (MZK 28, GZM 14) |
 | `/api/announcements` | Service announcements: KB + MZK, or the ZTM news page for `?city=gzm` |
 | `/api/health` | Status, scan counters, feed age, shape store |
+| `/api/status` | Whether each city's live data is flowing (the `/status` page) |
 
 List endpoints take `?city=<slug>` (`gzm`, `warsaw`, …); without it they answer for Bielsko-Biała.
 Ids of those cities carry the slug as prefix (`gzm:<stop_id>`, `gzm:<trip_id>`,
@@ -147,14 +154,14 @@ npm run build:gtfs -- --date 2026-11-02 --out output/gtfs
 
 Flags: `--date YYYY-MM-DD` (default today), `--out DIR`, `--concurrency N`,
 `--no-zip`, `--single-day`. Output is written atomically, including
-`kb_gtfs.zip`.
+`kb_gtfs.zip`. This is `unimaps build-gtfs`; it reads no `.env` file.
 
 ## Vehicle photos and specs
 
 The fleet cards (GZM and MZK Bielsko-Biała) show each vehicle's photos and
 technical data from [phototrans.eu](https://phototrans.eu). phototrans refuses
 datacenter IPs, so the server never contacts it: the data lives in
-`lib/phototrans.json`, which is bundled into `dist/server.mjs`, and the browser
+`lib/phototrans.json`, which is compiled into the server binary, and the browser
 loads each thumbnail from phototrans itself. To refresh it, run this from a home
 connection (one page per second, ~1700 pages, ~30 min) and commit the file:
 

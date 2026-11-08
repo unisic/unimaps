@@ -18,7 +18,7 @@ export function formatDistance(m: number): string {
   return `${(m / 1000).toFixed(1).replace(".", ",")} km`;
 }
 
-/* same pace as the server router (lib/router.ts WALK_MPS) */
+/* same pace as the server router (backend/src/router.rs WALK_MPS) */
 const WALK_MPS = 1.1;
 
 /** "~7 min pieszo". ponytail: straight line, a real foot route would need the OSRM foot profile. */

@@ -31,7 +31,7 @@ struct Lines<L> {
     lines: Vec<L>,
 }
 
-/// GET /api/lines?city=<zbiorkom slug>; None = a BB request (`get_bb` in owned mode, Node in proxy mode).
+/// GET /api/lines?city=<zbiorkom slug>; None = a BB request (`get_bb`).
 pub fn get(req: &ApiRequest) -> Option<Response<Body>> {
     handle(req, zb_live)
 }

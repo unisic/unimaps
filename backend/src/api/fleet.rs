@@ -86,8 +86,7 @@ pub(super) fn gzm_tracker() -> &'static FleetTracker {
     get_gzm_fleet_tracker()
 }
 
-/// GET /api/fleet?city=<zbiorkom slug>; None = a BB request (`get_bb` in owned mode,
-/// Node in proxy mode).
+/// GET /api/fleet?city=<zbiorkom slug>; None = a BB request (`get_bb`).
 pub fn get(req: &ApiRequest) -> Option<Response<Body>> {
     blocking_io(|| handle(req, gzm_tracker))
 }

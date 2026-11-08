@@ -1,7 +1,6 @@
 //! server/api/stop/[designator]/departures/route.ts: a zbiorkom pole's board (with `all=1` the whole stop's) from
 //! the city's local feed plus the live join, never an upstream call; a BB stop's merged KB + MZK board behind the
-//! 4 s micro-cache (`crate::stop_board`). A call from our own Node child (push alerts reading a zbiorkom board)
-//! carries the per-start token and skips the rate limit.
+//! 4 s micro-cache (`crate::stop_board`).
 
 use std::sync::Arc;
 
@@ -9,7 +8,7 @@ use hyper::Response;
 use hyper::header::{HeaderValue, PRAGMA};
 use serde::Serialize;
 
-use super::{ApiRequest, is_internal, json_cached, zb_live};
+use super::{ApiRequest, json_cached, zb_live};
 use crate::api_helpers::{bad_request, is_valid_id, not_found, query_param, upstream_error, warming, zb_enabled};
 use crate::departures_board_cache::BoardLeg;
 use crate::fleet_tracker::blocking_io;
@@ -28,15 +27,14 @@ pub(super) fn json_no_store(data: &impl Serialize) -> Response<Body> {
     res
 }
 
-/// GET /api/stop/<zbiorkom designator>/departures[?all=1]; None = not a zbiorkom stop (`get_bb` in owned mode,
-/// Node in proxy mode).
+/// GET /api/stop/<zbiorkom designator>/departures[?all=1]; None = not a zbiorkom stop (`get_bb`).
 pub fn get(req: &ApiRequest) -> Option<Response<Body>> {
     handle(req, zb_live)
 }
 
 /// The rate-limit gate, the designator and `?all=` checks every branch makes first; Ok = `all=1`.
 fn checked(req: &ApiRequest) -> Result<bool, Response<Body>> {
-    if !is_internal(&req.headers) && !allow_request(&req.ip(), 1.0) {
+    if !allow_request(&req.ip(), 1.0) {
         return Err(too_many_requests());
     }
     if !is_valid_id(&req.param) {
@@ -121,48 +119,4 @@ pub async fn get_bb<T: BbKinds>(req: &ApiRequest, bb: &'static Bb<T>) -> Respons
         poles: (group.len() > 1).then_some(group.len()),
         warnings: (!board.failed.is_empty()).then_some(&board.failed),
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use hyper::StatusCode;
-    use hyper::header::HeaderMap;
-
-    use super::*;
-    use crate::api::{INTERNAL_TOKEN, set_internal_token};
-    use crate::gzm::HttpZb;
-
-    fn req(ip: &str, token: Option<&str>) -> ApiRequest {
-        let mut headers = HeaderMap::new();
-        headers.insert("x-forwarded-for", HeaderValue::from_str(ip).unwrap());
-        if let Some(t) = token {
-            headers.insert("x-kb-internal", HeaderValue::from_str(t).unwrap());
-        }
-        ApiRequest {
-            param: "gzm:1".into(),
-            query: String::new(),
-            headers,
-            ..Default::default()
-        }
-    }
-
-    fn status(req: &ApiRequest) -> StatusCode {
-        let live = Arc::new(GzmLive::new("gzm", HttpZb).with_feed(Arc::new(|| None)));
-        handle(req, |_| live).unwrap().status()
-    }
-
-    #[test]
-    fn internal_token_skips_the_rate_limit() {
-        set_internal_token("ab".repeat(32));
-        let token = INTERNAL_TOKEN.get().unwrap().clone();
-        let ip = "203.0.113.77";
-        // drained right before each call: the bucket refills one token per 25 ms
-        let limited = (0..3).any(|_| {
-            while allow_request(ip, 1.0) {}
-            status(&req(ip, None)) == StatusCode::TOO_MANY_REQUESTS
-        });
-        assert!(limited);
-        while allow_request(ip, 1.0) {}
-        assert_eq!(status(&req(ip, Some(&token))), StatusCode::SERVICE_UNAVAILABLE);
-    }
 }

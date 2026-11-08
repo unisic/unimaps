@@ -3,7 +3,7 @@
  * slug. The slug is the `?city=` value, the id prefix (`krakow:<stop_id>`, `krakow:<type>_<vehicle>`)
  * and the storage-key suffix. Shared by the server and the client: no Node imports.
  * "gzm" is the first and fullest of them (SDIP overlay, fleet history, news); the rest get the
- * feed and the positions only, loaded on first request (lib/gzm-feed.ts).
+ * feed and the positions only, loaded on first request (backend/src/gzm_feed.rs).
  */
 import data from "./cities.json" with { type: "json" };
 

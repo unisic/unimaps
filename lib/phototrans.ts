@@ -2,11 +2,10 @@
  * Vehicle data and photos from phototrans.eu for the GZM and MZK Bielsko-Biała fleet cards.
  * phototrans' Cloudflare refuses datacenter IPs (production got 403 on every lookup), so the server
  * never contacts it: `npm run build:phototrans` crawls the operators' current fleet from a home
- * connection into lib/phototrans.json, esbuild bundles that file into dist/server.mjs, and the
- * browser loads each thumbnail from phototrans itself.
+ * connection into lib/phototrans.json with the parsers below, backend/src/phototrans.rs compiles
+ * that file in and does the lookup, and the browser loads each thumbnail from phototrans itself.
  */
-import type { FleetFuelType, FleetLengthCategory, VehiclePhoto, VehicleTech } from "./shared/fleet";
-import data from "./phototrans.json" with { type: "json" };
+import type { FleetFuelType, FleetLengthCategory } from "./shared/fleet";
 
 export const PT_BASE = "https://phototrans.eu/";
 
@@ -38,52 +37,8 @@ export interface PtVehicle {
   p: string[][];
 }
 
-export interface PtIndex {
-  generated: string;
-  groups: PtGroup[];
-  /** key `<city>:<side number>`: "gzm:108_410", "bb:123" (leading zeros dropped) */
-  vehicles: Record<string, PtVehicle>;
-}
-
-const INDEX: PtIndex = data;
-
+/** index key `<city>:<side number>`: "gzm:108_410", "bb:123" (leading zeros dropped) */
 export const ptKey = (city: "bb" | "gzm", side: string) => `${city}:${side.replace(/(^|_)0+(?=\d)/g, "$1")}`;
-
-export interface PtLookup {
-  group: PtGroup;
-  len: FleetLengthCategory | null;
-  fuel: FleetFuelType | null;
-  tech: VehicleTech;
-  photos: VehiclePhoto[];
-}
-
-/** The index entry of one fleet vehicle, null when phototrans has none. */
-export function ptVehicle(city: "bb" | "gzm", side: string): PtLookup | null {
-  const key = ptKey(city, side);
-  const v = Object.hasOwn(INDEX.vehicles, key) ? INDEX.vehicles[key] : undefined;
-  const group = v ? INDEX.groups[v.g] : undefined;
-  if (!v || !group) return null;
-  return {
-    group,
-    len: lengthOf(group.model, group.modules, group.kind),
-    fuel: fuelOf(group.model, group.engine, group.kind),
-    tech: {
-      ...(group.body ? { body: group.body } : {}),
-      ...(group.engine ? { engine: group.engine } : {}),
-      ...(group.gearbox ? { gearbox: group.gearbox } : {}),
-      ...(group.doors ? { doors: group.doors } : {}),
-      ...(v.b !== null ? { built: v.b } : {}),
-      ...(group.since !== null ? { since: group.since } : {}),
-      page: `${PT_BASE}15,${v.v},${group.op}.html`,
-    },
-    photos: v.p.map(([thumb, author, date]) => ({
-      thumb: `${PT_BASE}images/photos/thumbnail/${thumb}.jpg`,
-      page: `${PT_BASE}14,${thumb.slice(thumb.indexOf("/") + 1)},0.html`,
-      author,
-      date: date || null,
-    })),
-  };
-}
 
 // ---- page parsers (used by scripts/build-phototrans.ts) ----
 

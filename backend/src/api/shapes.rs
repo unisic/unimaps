@@ -1,7 +1,5 @@
-//! server/api/shapes/route.ts. Proxy mode, for a batch holding a zbiorkom shape id: the whole request is validated
-//! as the TS does, zbiorkom shapes come from their cities' feeds (a `near` box re-aims their running road matches),
-//! store shapes (kb:, mzk:) from Node in one sub-request, merged into the answer the one TS route would give. Owned
-//! mode (`get_owned`): store shapes from `bb.shapes()` in-process.
+//! server/api/shapes/route.ts: store shapes (kb:, mzk:) from `bb.shapes()`, zbiorkom shapes from their cities'
+//! feeds (a `near` box re-aims their running road matches).
 
 use std::sync::Arc;
 
@@ -9,11 +7,10 @@ use bytes::Bytes;
 use hyper::header::{CACHE_CONTROL, HeaderValue};
 use hyper::{Response, StatusCode};
 use indexmap::IndexMap;
-use serde::{Deserialize, Serialize};
-use serde_json::value::RawValue;
+use serde::Serialize;
 
-use super::{ApiRequest, NodeClient, NodeResponse, batch_ids, json_cached, node_headers, node_response, zb_live};
-use crate::api_helpers::{bad_request, etag_matches, internal_error, is_valid_shape_id, query_param, zb_enabled};
+use super::{ApiRequest, batch_ids, json_cached, zb_live};
+use crate::api_helpers::{bad_request, etag_matches, is_valid_shape_id, query_param, zb_enabled};
 use crate::gzm::{GzmLive, ZbTransport};
 use crate::gzm_feed::{ShapeLookup, ShapePayload};
 use crate::http::{Body, full, header_str};
@@ -27,24 +24,10 @@ const MAX_IDS: usize = 50;
 const MAX_IDS_PARAM: usize = 1300;
 const IMMUTABLE: &str = "public, max-age=31536000, immutable";
 
-/// Node's shape verbatim, or a payload looked up here (store or feed).
-#[derive(Serialize)]
-#[serde(untagged)]
-enum Shape {
-    Node(Box<RawValue>),
-    Local(ShapePayload),
-}
-
-#[derive(Deserialize)]
-struct NodeShapes {
-    shapes: IndexMap<String, Box<RawValue>>,
-    missing: Vec<String>,
-}
-
 #[derive(Serialize)]
 struct ShapesBody {
     precision: u8,
-    shapes: IndexMap<String, Shape>,
+    shapes: IndexMap<String, ShapePayload>,
     missing: Vec<String>,
 }
 
@@ -121,41 +104,19 @@ fn checked(req: &ApiRequest) -> Result<Batch, Response<Body>> {
     })
 }
 
-/// GET /api/shapes?ids=<batch with a zbiorkom id>[&near=s,w,n,e].
-pub async fn get(req: &ApiRequest, node: &NodeClient) -> Option<Response<Body>> {
-    handle(req, node, zb_live).await
-}
-
-/// The route with each city's live layer from `live` (the started registry entry in `get`, a rigged one in a
-/// test); `node` is asked only when the batch holds a store id.
-pub async fn handle<T: ZbTransport>(
-    req: &ApiRequest,
-    node: &NodeClient,
-    live: impl Fn(&'static str) -> Arc<GzmLive<T>>,
-) -> Option<Response<Body>> {
-    let Batch {
-        by_city,
-        store,
-        focus,
-        etag_hit,
-    } = match checked(req) {
-        Ok(b) => b,
-        Err(res) => return Some(res),
-    };
-    let node_part = if store.is_empty() {
-        None
-    } else {
-        // no If-None-Match: the whole batch has two ids or more, so the TS never answers it 304, but Node would
-        // answer its one-id part 304 without a body
-        let path = format!("/api/shapes?ids={}", store.join(","));
-        Some(node.get(&path, node_headers(&req.headers)).await)
-    };
-    Some(merge_shapes(node_part, || zb_shapes(&by_city, focus, live), etag_hit))
-}
-
-/// GET /api/shapes?ids=<any batch>[&near=s,w,n,e] in owned mode: store ids from `bb.shapes()` (read-only, never
-/// routes or fetches), then each zbiorkom city's feed shapes.
+/// GET /api/shapes?ids=<any batch>[&near=s,w,n,e]: store ids from `bb.shapes()` (read-only, never routes or
+/// fetches), then each zbiorkom city's feed shapes.
 pub async fn get_owned<T: BbKinds>(req: &ApiRequest, bb: &'static Bb<T>) -> Response<Body> {
+    handle(req, bb, zb_live).await
+}
+
+/// The route with each city's live layer from `live` (the started registry entry in `get_owned`, a rigged one in a
+/// test).
+pub async fn handle<T: BbKinds, Z: ZbTransport>(
+    req: &ApiRequest,
+    bb: &'static Bb<T>,
+    live: impl Fn(&'static str) -> Arc<GzmLive<Z>>,
+) -> Response<Body> {
     let b = match checked(req) {
         Ok(b) => b,
         Err(res) => return res,
@@ -173,11 +134,10 @@ pub async fn get_owned<T: BbKinds>(req: &ApiRequest, bb: &'static Bb<T>) -> Resp
         });
         out = bb.shapes().lookup(&b.store);
     }
-    let zb = zb_shapes(&b.by_city, b.focus, zb_live);
-    let mut shapes: IndexMap<String, Shape> = out.shapes.into_iter().map(|(k, v)| (k, Shape::Local(v))).collect();
-    shapes.extend(zb.shapes.into_iter().map(|(k, v)| (k, Shape::Local(v))));
+    let zb = zb_shapes(&b.by_city, b.focus, live);
+    out.shapes.extend(zb.shapes);
     out.missing.extend(zb.missing);
-    answer(shapes, out.missing, out.exact && zb.exact, b.etag_hit)
+    answer(out.shapes, out.missing, out.exact && zb.exact, b.etag_hit)
 }
 
 /// The TS loop over `byCity`: each enabled city's feed shapes (a disabled city's ids are missing, never exact).
@@ -208,40 +168,9 @@ fn zb_shapes<T: ZbTransport>(
     out
 }
 
-/// Node's answer for the store ids (None = the batch had none) merged with the zbiorkom half `zb`, which runs only
-/// when the answer is a merge: any other Node status (its 429, its 500 for a store lookup that threw) goes out as
-/// is. Store shapes first, then zbiorkom; `etag_hit` = a one-id batch whose If-None-Match names it (304 when exact).
-pub fn merge_shapes(
-    node: Option<Result<NodeResponse, String>>,
-    zb: impl FnOnce() -> ShapeLookup,
-    etag_hit: bool,
-) -> Response<Body> {
-    let mut shapes = IndexMap::new();
-    let mut missing = Vec::new();
-    let mut exact = true;
-    match node {
-        None => {}
-        Some(Ok(res)) if res.status == StatusCode::OK => match serde_json::from_slice::<NodeShapes>(&res.body) {
-            Ok(body) => {
-                // Node's own Cache-Control over its part: immutable = every store id an exact hit
-                exact = res.headers.get(CACHE_CONTROL).is_some_and(|v| v == IMMUTABLE);
-                shapes = body.shapes.into_iter().map(|(k, v)| (k, Shape::Node(v))).collect();
-                missing = body.missing;
-            }
-            Err(err) => return internal_error("shapes", format_args!("node answer unreadable: {err}")),
-        },
-        Some(Ok(res)) => return node_response(res),
-        Some(Err(err)) => return internal_error("shapes", format_args!("node: {err}")),
-    }
-    let zb = zb();
-    shapes.extend(zb.shapes.into_iter().map(|(k, v)| (k, Shape::Local(v))));
-    missing.extend(zb.missing);
-    answer(shapes, missing, exact && zb.exact, etag_hit)
-}
-
 /// The TS answer: immutable when every id is an exact hit (then a one-id `etag_hit` is a bodiless 304), else
 /// short-lived.
-fn answer(shapes: IndexMap<String, Shape>, missing: Vec<String>, exact: bool, etag_hit: bool) -> Response<Body> {
+fn answer(shapes: IndexMap<String, ShapePayload>, missing: Vec<String>, exact: bool, etag_hit: bool) -> Response<Body> {
     let cache = if exact { IMMUTABLE } else { "public, max-age=30" };
     if exact && etag_hit {
         let mut res = Response::new(full(Bytes::new()));
@@ -262,21 +191,10 @@ fn answer(shapes: IndexMap<String, Shape>, missing: Vec<String>, exact: bool, et
 #[cfg(test)]
 mod tests {
     use http_body_util::BodyExt;
-    use hyper::header::HeaderMap;
 
     use super::*;
     use crate::js::JsNum;
     use crate::shape_store::ShapeSrc;
-
-    fn node(status: u16, cache: &str, body: &str) -> Option<Result<NodeResponse, String>> {
-        let mut headers = HeaderMap::new();
-        headers.insert(CACHE_CONTROL, HeaderValue::from_str(cache).unwrap());
-        Some(Ok(NodeResponse {
-            status: StatusCode::from_u16(status).unwrap(),
-            headers,
-            body: Bytes::from(body.to_owned()),
-        }))
-    }
 
     fn zb(exact: bool) -> ShapeLookup {
         let mut shapes = IndexMap::new();
@@ -309,53 +227,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn merge_follows_the_ts_answer() {
-        let r = parts(merge_shapes(None, || zb(true), false)).await;
+    async fn answer_follows_the_ts_route() {
+        let r = parts(answer(zb(true).shapes, zb(true).missing, true, false)).await;
         assert_eq!((r.0, r.1.as_str()), (StatusCode::OK, IMMUTABLE));
         assert_eq!(
             r.2,
             format!(r#"{{"precision":6,"shapes":{{{ZB}}},"missing":["gzm:nope"]}}"#)
         );
 
-        let r = parts(merge_shapes(None, || zb(true), true)).await;
+        let r = parts(answer(zb(true).shapes, zb(true).missing, true, true)).await;
         assert_eq!(
             (r.0, r.1.as_str(), r.2.as_str()),
             (StatusCode::NOT_MODIFIED, IMMUTABLE, "")
         );
-        assert_eq!(parts(merge_shapes(None, || zb(false), true)).await.0, StatusCode::OK);
-
-        // store shapes verbatim and first, missing likewise; a non-exact store part makes the whole answer short-lived
-        let store = r#"{"precision":6,"shapes":{"kb:0123456789ab.0c9e1f":{"len":1e+21}},"missing":["mzk:1"]}"#;
-        for (cache, want) in [(IMMUTABLE, IMMUTABLE), ("public, max-age=30", "public, max-age=30")] {
-            let r = parts(merge_shapes(node(200, cache, store), || zb(true), false)).await;
-            assert_eq!((r.0, r.1.as_str()), (StatusCode::OK, want));
-            assert_eq!(
-                r.2,
-                format!(
-                    r#"{{"precision":6,"shapes":{{"kb:0123456789ab.0c9e1f":{{"len":1e+21}},{ZB}}},"missing":["mzk:1","gzm:nope"]}}"#
-                )
-            );
-        }
-
-        for (status, body) in [
-            (429, r#"{"error":"Too many requests"}"#),
-            (500, r#"{"error":"Internal error"}"#),
-        ] {
-            let mut ran = false;
-            let r = parts(merge_shapes(
-                node(status, "", body),
-                || {
-                    ran = true;
-                    zb(true)
-                },
-                false,
-            ))
-            .await;
-            assert_eq!((r.0.as_u16(), r.2.as_str()), (status, body));
-            assert!(!ran);
-        }
-        let r = parts(merge_shapes(Some(Err("refused".into())), || zb(true), false)).await;
-        assert_eq!(r.0, StatusCode::INTERNAL_SERVER_ERROR);
+        let r = parts(answer(zb(false).shapes, zb(false).missing, false, true)).await;
+        assert_eq!((r.0, r.1.as_str()), (StatusCode::OK, "public, max-age=30"));
     }
 
     #[test]

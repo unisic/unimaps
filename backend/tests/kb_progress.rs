@@ -1,6 +1,10 @@
 //! test/kb-progress.test.ts, plus vectors/kb_progress.json (stepKbProgress replayed in TS over the real captures in
 //! test/fixtures/kb-delay and seeded variants, every output compared).
 
+#[path = "support/active_stop.rs"]
+mod active_stop;
+
+use active_stop::{Vehicle, find_active_stop};
 use serde::Deserialize;
 use serde_json::Value;
 use unimaps::kb_progress::*;
@@ -1148,6 +1152,35 @@ fn index_stuck_at_szczyrk_centrum_vti_19_ndi_20_gps_progress_follows_the_bus_thr
 fn cold_start_on_the_return_leg_index_stuck_at_the_apex_gps_progress_follows_the_bus_through_the_return_leg_delay_stays_within_2_min()
  {
     check_stalled_loop(23, at(23, 3, 40), 30);
+}
+
+#[test]
+fn feeding_the_gps_index_to_the_client_s_find_active_stop_keeps_the_bus_on_the_return_leg() {
+    let fx = load_fx("healthy-120-loop");
+    let stuck = stuck_at(&fx.samples, 19, 20, at(22, 58, 0));
+    let rows = replay(&fx, &stuck);
+    let pts: Vec<Option<(f64, f64)>> = fx.stops.iter().map(|s| s.lat.zip(s.lon)).collect();
+    let mut checked = 0;
+    for r in &rows {
+        let Some(last) = r.o.last_idx.filter(|l| r.o.stale && (25..=28).contains(l)) else {
+            continue;
+        };
+        let v = Vehicle {
+            lat: r.s.lat,
+            lon: r.s.lon,
+            at_stop: Some(false),
+            current_stop_sequence: Some(last),
+        };
+        let (index, _) = find_active_stop(&pts, &v, Some(last));
+        let index = index as i64;
+        assert!(
+            index >= last && index <= last + 1,
+            "client index {index} vs GPS last {last} at {}",
+            r.s.local
+        );
+        checked += 1;
+    }
+    assert!(checked >= 8, "checked {checked}");
 }
 
 /* poller glue */

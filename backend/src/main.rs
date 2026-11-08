@@ -1,13 +1,9 @@
-//! The Unimaps server. `unimaps` (or `unimaps serve`) listens on HOST:PORT and serves the static build
-//! (KB_STATIC_DIR, default <cwd>/out). With KB_NODE_CMD set (proxy mode) it starts that Node process as a child and
-//! hands it the API, but for the zbiorkom cities (GZM booted here) and /api/health, which it answers itself. Without
-//! it (owned mode) there is no Node: this process boots the BB pollers, GZM and the push ticks (server/http.ts boot())
-//! and answers every API request. `unimaps healthcheck` exits 0 when /api/health answers 2xx (Docker / compose
-//! healthcheck).
+//! The Unimaps server. `unimaps` (or `unimaps serve`) listens on HOST:PORT, serves the static build (KB_STATIC_DIR,
+//! default <cwd>/out), boots the BB pollers, GZM and the push ticks (server/http.ts boot()) and answers every API
+//! request. `unimaps healthcheck` exits 0 when /api/health answers 2xx (Docker / compose healthcheck).
 
-use std::ffi::OsString;
 use std::io::{Read, Write};
-use std::net::{IpAddr, SocketAddr, TcpStream};
+use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -16,23 +12,18 @@ use std::time::Duration;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper_util::rt::{TokioIo, TokioTimer};
-use rand_core::{OsRng, RngCore};
 use tokio::net::TcpListener;
-use tokio::process::{Child, Command};
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::Semaphore;
-use unimaps::{
-    api, config, fetch, gtfs_builder, gzm, gzm_fleet, http, logger, poller_singleton, push_alerts, push_news,
-    static_files,
-};
+use unimaps::{config, fetch, gtfs_builder, gzm, http, logger, poller_singleton, push_alerts, push_news, static_files};
 
 /// ponytail: one cap for every open connection (idle keep-alive ones included, ~8 KB of buffers each).
 const MAX_CONNECTIONS: usize = 1024;
 /// an idle keep-alive connection, or one still sending its headers, is closed after this (Node: 5 s idle, 60 s for
 /// headers); it bounds how long one client holds a MAX_CONNECTIONS slot without sending anything
 const HEADER_TIMEOUT: Duration = Duration::from_secs(10);
-/// how long the Node child gets to flush its stores after SIGTERM (owned mode: the pollers to stop)
-const CHILD_GRACE: Duration = Duration::from_secs(5);
+/// how long the pollers get to stop and flush their stores after SIGTERM
+const STOP_GRACE: Duration = Duration::from_secs(5);
 /// server/http.ts listen(): `setTimeout(() => process.exit(0), 100)` after SIGTERM/SIGINT
 const EXIT_GRACE: Duration = Duration::from_millis(100);
 
@@ -50,11 +41,14 @@ fn port_var(name: &str, default: u16) -> u16 {
 
 /// server/env.ts: .env.<mode>.local, .env.local, .env.<mode>, .env; a variable already set always wins.
 /// Called before any thread exists (dotenvy writes the process environment).
+/// Mode: NODE_ENV when set (`npm run dev` sets "development"), else "production" for a release build
+/// (as the old bundle, which inlined NODE_ENV) and "development" for a debug one.
 fn load_env_files() {
-    let mode = if var("NODE_ENV").as_deref() == Some("production") {
-        "production"
-    } else {
-        "development"
+    let mode = match var("NODE_ENV").as_deref() {
+        Some("production") => "production",
+        Some(_) => "development",
+        None if cfg!(debug_assertions) => "development",
+        None => "production",
     };
     for f in [
         format!(".env.{mode}.local"),
@@ -91,53 +85,6 @@ fn healthcheck() -> ExitCode {
     }
 }
 
-fn spawn_node(cmd: &str, port: u16, env: Vec<(OsString, OsString)>) -> std::io::Result<Child> {
-    let mut parts = cmd.split_whitespace();
-    let prog = parts
-        .next()
-        .ok_or_else(|| std::io::Error::other("KB_NODE_CMD is empty"))?;
-    // the environment before .env loading: Node reads the .env files itself, with its own parser
-    Command::new(prog)
-        .args(parts)
-        .env_clear()
-        .envs(env)
-        .env("PORT", port.to_string())
-        .env("HOST", "127.0.0.1")
-        .spawn()
-}
-
-/// KB_ZB_REMOTE for the Node child: this server's own origin, 127.0.0.1 when it listens on every interface (a
-/// dual-stack `::` takes IPv4 too, while ::1 is missing when IPv6 is disabled on lo).
-fn self_origin(host: &str, port: u16) -> String {
-    match host.parse::<IpAddr>() {
-        Ok(ip) if ip.is_unspecified() => format!("http://127.0.0.1:{port}"),
-        Ok(IpAddr::V6(ip)) => format!("http://[{ip}]:{port}"),
-        _ => format!("http://{host}:{port}"),
-    }
-}
-
-/// 32 random bytes as hex: the secret our Node child shows in x-kb-internal.
-fn internal_token() -> String {
-    let mut b = [0u8; 32];
-    OsRng.fill_bytes(&mut b);
-    b.iter().map(|x| format!("{x:02x}")).collect()
-}
-
-/// The child's environment: the one from before .env loading, plus what makes it a sibling of this process. With
-/// KB_ZB_REMOTE set, Node's startGzm/startZb are no-ops and it reads zbiorkom boards from here; the OSRM floor
-/// splits the public host's rate between both processes.
-fn node_env(mut env: Vec<(OsString, OsString)>, origin: String, token: &str) -> Vec<(OsString, OsString)> {
-    env.push(("KB_ZB_REMOTE".into(), origin.into()));
-    env.push(("KB_INTERNAL_TOKEN".into(), token.into()));
-    if *config::PUBLIC_OSRM && config::env_int("KB_OSRM_MIN_INTERVAL_MS", 1100, 250) < config::PUBLIC_OSRM_SHARED_MS {
-        env.push((
-            "KB_OSRM_MIN_INTERVAL_MS".into(),
-            config::PUBLIC_OSRM_SHARED_MS.to_string().into(),
-        ));
-    }
-    env
-}
-
 async fn accept_loop(listener: TcpListener, app: Arc<http::App>) {
     let slots = Arc::new(Semaphore::new(MAX_CONNECTIONS));
     loop {
@@ -166,7 +113,7 @@ async fn accept_loop(listener: TcpListener, app: Arc<http::App>) {
     }
 }
 
-async fn serve(base_env: Vec<(OsString, OsString)>) -> ExitCode {
+async fn serve() -> ExitCode {
     let root = var("KB_STATIC_DIR").map_or_else(
         || std::env::current_dir().unwrap_or_default().join("out"),
         PathBuf::from,
@@ -178,21 +125,7 @@ async fn serve(base_env: Vec<(OsString, OsString)>) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let node_port = port_var("KB_NODE_PORT", 8090);
     let (host, port) = (var("HOST").unwrap_or_else(|| "0.0.0.0".into()), port_var("PORT", 8080));
-    let mut child = match var("KB_NODE_CMD").map(|cmd| {
-        let token = internal_token();
-        let env = node_env(base_env, self_origin(&host, port), &token);
-        api::set_internal_token(token);
-        spawn_node(&cmd, node_port, env)
-    }) {
-        None => None,
-        Some(Ok(c)) => Some(c),
-        Some(Err(e)) => {
-            logger::error("http", format_args!("KB_NODE_CMD: {e}"));
-            return ExitCode::FAILURE;
-        }
-    };
     let listener = match TcpListener::bind((host.as_str(), port)).await {
         Ok(l) => l,
         Err(e) => {
@@ -201,59 +134,29 @@ async fn serve(base_env: Vec<(OsString, OsString)>) -> ExitCode {
         }
     };
     logger::info("http", format_args!("listening on http://{host}:{port}"));
-    let app = if child.is_some() {
-        // server/http.ts boot()'s GZM beside the BB pollers (a no-op with KB_GZM=0); other zbiorkom cities start on
-        // their first request and the registry arms its own idle sweep
-        gzm::start_gzm();
-        http::App::new(statics, node_port, true)
-    } else {
-        boot();
-        http::App::owned(statics)
-    };
+    boot();
     let (mut term, mut int) = (
         signal(SignalKind::terminate()).expect("SIGTERM"),
         signal(SignalKind::interrupt()).expect("SIGINT"),
     );
-    let app = Arc::new(app);
-    let exited = tokio::select! {
-        _ = accept_loop(listener, app) => Ok("SIGTERM"),
-        _ = term.recv() => Ok("SIGTERM"),
-        _ = int.recv() => Ok("SIGINT"),
-        st = async { match child.as_mut() { Some(c) => c.wait().await, None => std::future::pending().await } } => Err(st),
+    let sig = tokio::select! {
+        _ = accept_loop(listener, Arc::new(http::App::owned(statics))) => "SIGTERM",
+        _ = term.recv() => "SIGTERM",
+        _ = int.recv() => "SIGINT",
     };
-    let Some(c) = child.as_mut() else {
-        // lib/poller-singleton.ts's signal handler: shape store, fleet trackers and GZM fleet flushed, pollers stopped.
-        // ponytail: the TS exits 100 ms after the signal without awaiting the stop; here the stop gets up to
-        // CHILD_GRACE (5 s), past which the process exits 0 anyway (run_to_exit: blocking work gets EXIT_GRACE)
-        if let Ok(sig) = exited
-            && tokio::time::timeout(CHILD_GRACE, poller_singleton::bb().shutdown(sig))
-                .await
-                .is_err()
-        {
-            logger::warn("rt", "pollers did not stop in time");
-        }
-        return ExitCode::SUCCESS;
-    };
-    // the GZM fleet tracker's debounced save (TS poller-singleton flushes on SIGTERM/SIGINT); a no-op when never built
-    let _ = tokio::task::spawn_blocking(gzm_fleet::flush_gzm_fleet).await;
-    if let Err(st) = exited {
-        // one failure domain: Docker's restart policy brings both back
-        let st = st.map_or_else(|e| e.to_string(), |s| s.to_string());
-        logger::error("http", format_args!("node exited ({st}), stopping"));
-        return ExitCode::FAILURE;
-    }
-    if let Some(pid) = c.id() {
-        // SAFETY: kill(2) on the pid of our own child, which has not been reaped yet
-        unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
-        if tokio::time::timeout(CHILD_GRACE, c.wait()).await.is_err() {
-            logger::warn("http", "node did not exit in time, killing it");
-            let _ = c.kill().await;
-        }
+    // lib/poller-singleton.ts's signal handler: shape store, fleet trackers and GZM fleet flushed, pollers stopped.
+    // ponytail: the TS exits 100 ms after the signal without awaiting the stop; here the stop gets up to STOP_GRACE
+    // (5 s), past which the process exits 0 anyway (run_to_exit: blocking work gets EXIT_GRACE)
+    if tokio::time::timeout(STOP_GRACE, poller_singleton::bb().shutdown(sig))
+        .await
+        .is_err()
+    {
+        logger::warn("rt", "pollers did not stop in time");
     }
     ExitCode::SUCCESS
 }
 
-/// server/http.ts boot() in owned mode: the BB pollers, GZM beside them (its failure never touches BB) and, with
+/// server/http.ts boot(): the BB pollers, GZM beside them (its failure never touches BB) and, with
 /// push on, the push stores, so alerts persisted before a restart fire without waiting for a request.
 fn boot() {
     // the call loads the shape store before accept_loop runs, as startPoller() inside boot() does in the TS
@@ -407,7 +310,6 @@ fn run_to_exit(rt: tokio::runtime::Runtime, serve: impl Future<Output = ExitCode
 }
 
 fn main() -> ExitCode {
-    let base_env: Vec<_> = std::env::vars_os().collect();
     let args: Vec<String> = std::env::args_os().map(|a| a.to_string_lossy().into_owned()).collect();
     // `tsx scripts/build-gtfs.ts` reads no .env file, the server entries do
     if args.get(1).map(String::as_str) == Some("build-gtfs") {
@@ -418,12 +320,12 @@ fn main() -> ExitCode {
         Some("healthcheck") => healthcheck(),
         None | Some("serve") => run_to_exit(
             tokio::runtime::Builder::new_multi_thread()
-                // tokio's default is 512; compose's pids_limit (256) counts threads, Node's included
+                // tokio's default is 512; compose's pids_limit (256) counts threads
                 .max_blocking_threads(32)
                 .enable_all()
                 .build()
                 .expect("tokio runtime"),
-            serve(base_env),
+            serve(),
         ),
         Some(other) => {
             eprintln!("unknown command {other:?}; usage: unimaps [serve | healthcheck | build-gtfs]");
@@ -434,7 +336,7 @@ fn main() -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::{boot, parse_gtfs_args, run_to_exit, self_origin};
+    use super::{boot, parse_gtfs_args, run_to_exit};
     use std::process::ExitCode;
     use std::time::{Duration, Instant};
 
@@ -531,14 +433,5 @@ mod tests {
             parse(&["--date=a", "--date", "b", "--no-zip", "--single-day", "--zip"]),
             Ok((Some("b".into()), true, true))
         );
-    }
-
-    #[test]
-    fn self_origin_is_ipv4_loopback_for_any_wildcard_bind() {
-        assert_eq!(self_origin("0.0.0.0", 8080), "http://127.0.0.1:8080");
-        assert_eq!(self_origin("::", 8080), "http://127.0.0.1:8080");
-        assert_eq!(self_origin("::1", 8081), "http://[::1]:8081");
-        assert_eq!(self_origin("192.0.2.4", 8080), "http://192.0.2.4:8080");
-        assert_eq!(self_origin("localhost", 8080), "http://localhost:8080");
     }
 }

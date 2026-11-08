@@ -1,4 +1,4 @@
-//! The owned-mode front (no Node child, `App::owned`): server/http.ts's route table checks in its order, answered
+//! The front (`App::owned`): server/http.ts's route table checks in its order, answered
 //! by Rust. Only routes that touch no upstream run here (no BB branch: the KB and MZK clients are live), zbiorkom's
 //! feed URL is a refused port. Push writes its VAPID pair and stores under the temp KB_OUTPUT_DIR; every alert and
 //! news subscription is removed in the same test, so no push tick (30 s, 15 min) ever reads a board.
@@ -109,6 +109,44 @@ fn http11_without_host_400_empty() {
     let r = raw("GET /api/stops HTTP/1.1\r\n\r\n", b"");
     assert_eq!((r.status, r.body.as_str()), (400, ""));
     assert_eq!(r.header("connection"), Some("close"));
+}
+
+#[test]
+fn query_is_read_once_as_url_search() {
+    // new URL("http://h/api/vehicles??city=bb&city=gzm").searchParams: keys "?city" and "city", get("city") = "gzm"
+    let r = request("GET", "/api/vehicles??city=bb&city=gzm", b"");
+    // no zbiorkom poll ever lands here: the GZM vehicles body before the first one
+    assert_eq!(r.status, 200, "{}", r.head);
+    assert!(r.body.contains(r#""count":0"#), "{}", r.body);
+}
+
+#[test]
+fn a_host_with_a_query_moves_the_query_like_url_search() {
+    // new URL("http://a?city=gzm&/api/vehicles").search = "?city=gzm&/api/vehicles": a GZM request in TS
+    let r = raw(
+        "GET /api/vehicles HTTP/1.1\r\nHost: a?city=gzm&\r\nConnection: close\r\n\r\n",
+        b"",
+    );
+    assert_eq!(r.status, 200, "{}", r.head);
+    assert!(r.body.contains(r#""count":0"#), "{}", r.body);
+}
+
+#[test]
+fn a_host_new_url_rejects_400() {
+    // server/http.ts: new Request(`http://${host}${req.url}`) throws -> 400 {"error":"Bad request"}
+    for host in ["a:b", "example.com:99999", "a b"] {
+        for path in ["/api/vehicles?city=gzm", "/api/health"] {
+            let r = raw(
+                &format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"),
+                b"",
+            );
+            assert_eq!(
+                (r.status, r.body.as_str()),
+                (400, r#"{"error":"Bad request"}"#),
+                "{host} {path}"
+            );
+        }
+    }
 }
 
 #[test]

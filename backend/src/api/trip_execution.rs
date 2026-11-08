@@ -1,5 +1,5 @@
 //! server/api/trip_execution/route.ts: the zbiorkom branch (the live trip of a vehicle on the city's map, answered
-//! from memory) and, in owned mode, the BB branch (KB upstream passthrough fed into the poller, MZK from mzk_trip).
+//! from memory) and the BB branch (KB upstream passthrough fed into the poller, MZK from mzk_trip).
 
 use std::sync::Arc;
 
@@ -39,8 +39,7 @@ fn zb_exec_ok(id: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-'))
 }
 
-/// GET /api/trip_execution?exec_id=<zbiorkom vehicle id>[&index=N]; None = not a zbiorkom id (`get_bb` in owned
-/// mode, Node in proxy mode).
+/// GET /api/trip_execution?exec_id=<zbiorkom vehicle id>[&index=N]; None = not a zbiorkom id (`get_bb`).
 pub fn get(req: &ApiRequest) -> Option<Response<Body>> {
     handle(req, zb_live)
 }

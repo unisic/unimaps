@@ -3,7 +3,7 @@
  * classes, text folding for search, line ordering.
  *
  * Isomorphic and pure (no DOM / Node imports, relative imports only — node:test loads it
- * directly). lib/fleet-tracker.ts builds these shapes; components/brygady/* render them.
+ * directly). backend/src/fleet_tracker/ builds these shapes; components/brygady/* render them.
  *
  * What the data can and cannot say. OnTime (MZK) publishes running vehicles with their
  * course, stop list (per-segment `distance`, so real course length is known) and delay. It
@@ -11,7 +11,7 @@
  * we show the lines a vehicle served today instead of inventing one. Everything in
  * `todayCourses` was observed live; nothing is back-filled.
  *
- * Metropolia GZM (lib/gzm-fleet.ts) publishes the GTFS brigade of every trip, so its courses
+ * Metropolia GZM (backend/src/gzm_fleet.rs) publishes the GTFS brigade of every trip, so its courses
  * carry `brigade` and the next course comes from the brigade's schedule. Its vehicles are keyed
  * by "<company code>_<fleet number>" (fleet numbers repeat across companies); GZM publishes no
  * equipment data, so producer, year, length and fuel come from phototrans (lib/phototrans.ts) or stay
@@ -281,8 +281,6 @@ export interface FleetTimelinePoint {
   veryLate: number;
 }
 
-export const TIMELINE_SLOT_SECS = 300;
-
 /* ── punctuality ─────────────────────────────────────────────────────────────── */
 
 /** On time = at most 1 min early and at most 3 min late (the usual Polish operator rule). */
@@ -297,10 +295,6 @@ export function classifyDelay(delaySec: number): DelayClass {
   if (delaySec <= ON_TIME_MAX_SEC) return "onTime";
   if (delaySec <= VERY_LATE_SEC) return "late";
   return "veryLate";
-}
-
-export function isOnTime(delaySec: number): boolean {
-  return classifyDelay(delaySec) === "onTime";
 }
 
 export function median(values: readonly number[]): number | null {

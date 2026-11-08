@@ -67,7 +67,7 @@ mod zbiorkom_residency {
     }
 }
 
-// describe("prebuiltJson"): tests/api_helpers.rs prebuilt_json_builds_and_gzips_a_body_once_for_concurrent_first_requests.
+// describe("prebuiltJson"): tests/api_helpers.rs prebuilt_json_builds_and_gzips_once_per_owner.
 
 mod connections_memo {
     use super::*;

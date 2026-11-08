@@ -183,6 +183,37 @@ fn json_with_etag_a_changed_body_gets_a_new_etag_and_the_full_response() {
     assert_ne!(etag_of(&res), etag);
 }
 
+// test/zb-residency.test.ts describe("prebuiltJson")
+#[tokio::test]
+async fn prebuilt_json_builds_and_gzips_once_per_owner() {
+    use std::io::Read;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let owner: Arc<()> = Arc::new(());
+    let builds = AtomicUsize::new(0);
+    let build = || {
+        builds.fetch_add(1, Ordering::SeqCst);
+        json!({"n": 1}).to_string()
+    };
+    let mut gz = HeaderMap::new();
+    gz.insert("accept-encoding", HeaderValue::from_static("gzip, br"));
+    let mut etag = HeaderMap::new();
+    etag.insert("etag", HeaderValue::from_static("\"e\""));
+    let r1 = prebuilt_json(&gz, &owner, build, etag);
+    let r2 = prebuilt_json(&HeaderMap::new(), &owner, build, HeaderMap::new());
+    assert_eq!(builds.load(Ordering::SeqCst), 1);
+    assert_eq!(r1.headers().get("content-encoding").unwrap(), "gzip");
+    assert_eq!(r1.headers().get("etag").unwrap(), "\"e\"");
+    let zipped = r1.into_body().collect().await.unwrap().to_bytes();
+    let mut text = String::new();
+    flate2::read::GzDecoder::new(&zipped[..])
+        .read_to_string(&mut text)
+        .unwrap();
+    assert_eq!(text, r#"{"n":1}"#);
+    assert!(r2.headers().get("content-encoding").is_none());
+    assert_eq!(r2.into_body().collect().await.unwrap().to_bytes(), r#"{"n":1}"#);
+}
+
 /// server/api/vehicles/route.ts gzips each body once on Node's single thread; clients whose polls X-Next-Update
 /// bunches onto the same body change must share that one gzip (and one build), not each compress their own.
 #[tokio::test]

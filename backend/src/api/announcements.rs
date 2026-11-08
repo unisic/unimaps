@@ -20,7 +20,7 @@ struct Announcements<'a> {
     hash: String,
 }
 
-/// GET /api/announcements?city=<zbiorkom slug>; None = a BB request (`get_bb` in owned mode, Node in proxy mode).
+/// GET /api/announcements?city=<zbiorkom slug>; None = a BB request (`get_bb`).
 pub async fn get(req: &ApiRequest) -> Option<Response<Body>> {
     let slug = match req.zb_city() {
         Ok(slug) => slug,

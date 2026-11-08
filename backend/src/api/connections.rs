@@ -103,7 +103,7 @@ struct Answer<'a> {
     connections: &'a [ConnectionItinerary],
 }
 
-/// GET /api/connections?city=<zbiorkom slug>&from=..&to=..; None = a BB request (`get_bb`, Node in proxy mode).
+/// GET /api/connections?city=<zbiorkom slug>&from=..&to=..; None = a BB request (`get_bb`).
 pub fn get(req: &ApiRequest) -> Option<Response<Body>> {
     handle(req, zb_live)
 }

@@ -50,7 +50,7 @@ async fn get(q: &str, photon: &Fake) -> Response<Body> {
         headers,
         ..Default::default()
     };
-    geocode::handle(&req, photon).await.expect("a zbiorkom request")
+    geocode::handle(&req, photon).await
 }
 
 async fn json_body(res: Response<Body>) -> Value {
@@ -124,10 +124,9 @@ async fn rejects_a_too_short_query_and_hides_upstream_failures_behind_a_502() {
     assert_eq!(json_body(res).await["error"], "Upstream request failed");
 }
 
-/// Rust only (owned mode, no TS test covers BB): a BB request gets BB's box and keeps only the hits inside it;
-/// proxy mode's `handle` leaves it to Node.
+/// Rust only (no TS test covers BB): a BB request gets BB's box and keeps only the hits inside it.
 #[tokio::test]
-async fn owned_mode_geocodes_bb_inside_its_own_box() {
+async fn geocodes_bb_inside_its_own_box() {
     let mut headers = HeaderMap::new();
     headers.insert("x-forwarded-for", HeaderValue::from_static("10.9.1.1"));
     let req = ApiRequest {
@@ -144,8 +143,7 @@ async fn owned_mode_geocodes_bb_inside_its_own_box() {
         }));
         Ok(ok(body.to_string()))
     });
-    assert!(geocode::handle(&req, &photon).await.is_none());
-    let res = geocode::handle_owned(&req, &photon).await;
+    let res = geocode::handle(&req, &photon).await;
     assert_eq!(res.status(), 200);
     assert_eq!(
         json_body(res).await["results"],

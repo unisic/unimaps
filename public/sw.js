@@ -55,7 +55,7 @@ self.addEventListener("message", (event) => {
   if (event.data && event.data.type === "SKIP_WAITING") self.skipWaiting();
 });
 
-// a departure alert pushed by the server (lib/push-alerts.ts) while no page is open
+// a departure alert pushed by the server (backend/src/push_alerts.rs) while no page is open
 self.addEventListener("push", (event) => {
   let m = null;
   try {

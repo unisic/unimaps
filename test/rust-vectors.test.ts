@@ -1,7 +1,7 @@
 /**
- * The golden vectors backend/tests/*.rs check the Rust port against, read back through the TS: a change to the
- * shared departure, alert or detour logic fails here until `node --import tsx scripts/dump-vectors.ts` is rerun, and the
- * regenerated vectors then fail the Rust tests until backend/src/shared is changed the same way.
+ * The golden vectors backend/tests/*.rs check the Rust port against, read back through the TS: the browser keeps its
+ * own copy of the shared departure, alert and detour logic, so a change to it fails here until backend/src/shared is
+ * changed the same way and the vector files are updated by hand (their generator went with the Node backend).
  */
 import assert from "node:assert/strict";
 import fs from "node:fs";

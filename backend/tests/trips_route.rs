@@ -1,6 +1,6 @@
-//! test/trips-route.test.ts: the owned-mode GET /api/trips over a started `Bb` whose KB client is a fake
+//! test/trips-route.test.ts: GET /api/trips over a started `Bb` whose KB client is a fake
 //! (support/stops_fake.rs `cached_trips` / `failing_trips`), never upstream. "has no POST handler" is
-//! `api::tests::owned_mode_route_table_methods_and_allow` (/api/trips allows "GET, HEAD, OPTIONS" only).
+//! `api::tests::route_table_methods_and_allow` (/api/trips allows "GET, HEAD, OPTIONS" only).
 
 #[allow(dead_code)]
 #[path = "support/stops_fake.rs"]

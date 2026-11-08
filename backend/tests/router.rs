@@ -1,7 +1,6 @@
 //! test/router.test.ts, test/router-mzk.test.ts and the golden vectors of lib/router.ts (scripts/dump-vectors.ts:
 //! the fixture feed with the captured MZK timetable, and a seeded synthetic zbiorkom-style index with pickup flags,
-//! dates and live delays). test/router-oracle.test.ts is not ported: it pins the TS router to a brute-force profile
-//! on the same corridors the vectors pin this port to.
+//! dates and live delays). test/router-oracle.test.ts is tests/router_oracle.rs.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -492,6 +491,7 @@ fn falls_back_to_the_next_service_day_without_a_date() {
         Some(3),
     );
     assert!(!res.is_empty());
+    assert!(res[0].day_label.is_some() || !res[0].date.is_empty());
 }
 
 #[test]
@@ -546,6 +546,34 @@ fn resolves_stops_with_punctuation_and_street_names() {
 #[test]
 fn resolves_no_stop_from_input_without_letters_or_digits() {
     assert!(kb("-", "SZCZYRK SKALITE", Some(DATE), Some(14 * 3600), None).is_empty());
+}
+
+// "treats a NaN limit and minimum transfer as unset": NaN has no i32, so the route's unparsed value is None
+#[test]
+fn an_unset_limit_and_minimum_transfer_search_as_the_default() {
+    let unset = RouteQuery {
+        from: "BIELSKO-BIAŁA WAPIENICA CENTRUM",
+        to: "SZCZYRK SKALITE",
+        date: Some(DATE),
+        after_secs: Some(14 * 3600),
+        limit: None,
+        min_transfer_secs: None,
+        ..Default::default()
+    };
+    let plain = RouteQuery {
+        from: "BIELSKO-BIAŁA WAPIENICA CENTRUM",
+        to: "SZCZYRK SKALITE",
+        date: Some(DATE),
+        after_secs: Some(14 * 3600),
+        ..Default::default()
+    };
+    let res = find_connections(&unset, Some(&KB));
+    same(
+        &res,
+        &serde_json::to_value(find_connections(&plain, Some(&KB))).unwrap(),
+        &"unset",
+    );
+    assert!(!res.is_empty());
 }
 
 // test/router-mzk.test.ts: the fixture feed plus one captured MZK course (line 22, 5088899)

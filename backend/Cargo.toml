@@ -13,8 +13,8 @@ dotenvy = "0.15.7"
 flate2 = { version = "1.1.11", default-features = false, features = ["zlib-rs"] }
 hkdf = "0.12.4"
 http-body-util = "0.1.5"
-hyper = { version = "1.12.0", features = ["http1", "server", "client"] }
-hyper-util = { version = "0.1.21", features = ["tokio", "client-legacy", "http1"] }
+hyper = { version = "1.12.0", features = ["http1", "server"] }
+hyper-util = { version = "0.1.21", features = ["tokio"] }
 icu_collator = "2.4.0"
 icu_locale_core = { version = "2.4.0", default-features = false }
 icu_normalizer = { version = "2.4.0", default-features = false, features = ["compiled_data"] }
@@ -28,11 +28,10 @@ rand_core = { version = "0.6.4", features = ["getrandom"] }
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider", "brotli", "gzip", "deflate"] }
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 serde = { version = "1.0.229", features = ["derive"] }
-# raw_value: a merged trips/shapes batch passes Node's part through byte for byte
-serde_json = { version = "1.0.154", features = ["float_roundtrip", "preserve_order", "raw_value"] }
+serde_json = { version = "1.0.154", features = ["float_roundtrip", "preserve_order"] }
 sha1 = "0.10.6"
 sha2 = "0.10.9"
-tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "signal", "process", "time", "io-util", "sync"] }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "signal", "time", "io-util", "sync"] }
 url = "2.5.8"
 zip = { version = "9.4.1", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 

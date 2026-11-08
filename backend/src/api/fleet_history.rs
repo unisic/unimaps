@@ -10,8 +10,7 @@ use crate::gzm_fleet::is_gzm_side;
 use crate::http::Body;
 use crate::poller_singleton::{Bb, BbKinds};
 
-/// GET /api/fleet/<side>/history?city=<zbiorkom slug>; None = a BB request (`get_bb` in owned mode,
-/// Node in proxy mode).
+/// GET /api/fleet/<side>/history?city=<zbiorkom slug>; None = a BB request (`get_bb`).
 pub fn get(req: &ApiRequest) -> Option<Response<Body>> {
     blocking_io(|| handle(req, gzm_tracker))
 }

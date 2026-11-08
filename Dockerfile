@@ -6,7 +6,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 
-# ---- build: static frontend (out/, precompressed) + one-file server bundle (dist/server.mjs) ----
+# ---- build: static frontend (out/, precompressed) ----
 FROM node:24-alpine AS build
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
@@ -25,17 +25,15 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/backend/target \
     cargo build --release --locked && cp target/release/unimaps /unimaps
 
-# ---- runner: the bundle needs no node_modules ----
-FROM node:24-alpine AS runner
+# ---- runner: the binary and the static build, nothing else ----
+# the musl binary is static; this base already has the CA bundle (ca-certificates-bundle) rustls reads, and
+# jiff bundles its own tzdb, so no apk add
+FROM alpine:3.24 AS runner
 WORKDIR /app
-# unimaps listens on PORT and starts the Node API (still the whole /api) on 127.0.0.1:8090 with KB_NODE_CMD
-ENV NODE_ENV=production \
-    PORT=8080 \
-    KB_NODE_CMD="node server.mjs"
+ENV PORT=8080
 
 RUN addgroup -S unimaps -g 1001 && adduser -S unimaps -u 1001 -G unimaps
 
-COPY --from=build --chown=unimaps:unimaps /app/dist/server.mjs ./server.mjs
 COPY --from=build --chown=unimaps:unimaps /app/out ./out
 COPY --from=rust /unimaps ./unimaps
 

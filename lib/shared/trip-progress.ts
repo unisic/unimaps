@@ -6,7 +6,7 @@
  * (opposite sides of one road, 14-50 m apart, but 1-3 km apart ALONG the route), and upstream's
  * `vehicle_trip_index` freezes for minutes whenever a pole is passed outside its ~65 m geofence.
  * Neither a position-only search nor a hint-driven tie-break can tell the legs apart then. The
- * server tracks every vehicle with continuity (see kbDistAlong in lib/route-info.ts), so its
+ * server tracks every vehicle with continuity (see kb_dist_along in backend/src/route_info.rs), so its
  * `dist_m` is leg-aware; this module only maps that chainage to stop semantics.
  *
  * No "use client", no Node imports, relative imports only (node:test loads it).

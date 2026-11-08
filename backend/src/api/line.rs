@@ -32,8 +32,7 @@ struct LineBody<'a> {
     variants: Vec<Variant>,
 }
 
-/// GET /api/line?name=<line>[&date=YYYY-MM-DD]&city=<zbiorkom slug>; None = a BB request (`get_bb`, Node in proxy
-/// mode).
+/// GET /api/line?name=<line>[&date=YYYY-MM-DD]&city=<zbiorkom slug>; None = a BB request (`get_bb`).
 pub fn get(req: &ApiRequest) -> Option<Response<Body>> {
     handle(req, zb_live)
 }

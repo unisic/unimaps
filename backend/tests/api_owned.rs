@@ -1,11 +1,10 @@
-//! The owned mode end to end: `App::owned` (no KB_NODE_CMD, no Node) behind main.rs's accept loop, with the live
-//! `poller_singleton::bb()`, push and GZM, every upstream a refused port. The cases named after
-//! scripts/http-contract.test.ts are its counterparts in owned mode (api_front.rs has them in proxy mode); the
-//! BB route answers are the TS server's under the same environment (server/main.ts, no network, 2026-11-08).
+//! The server end to end: `App::owned` behind main.rs's accept loop, with the live `poller_singleton::bb()`, push
+//! and GZM, every upstream a refused port. The cases named after scripts/http-contract.test.ts are its
+//! counterparts here; the BB route answers are the TS server's under the same environment (server/main.ts, no
+//! network, 2026-11-08).
 //! MZK has no URL setting (rozklady.bielsko.pl, as in the TS) and web push posts to the push services, so
 //! HTTP(S)_PROXY points at the refused port too: reqwest reads it and every outbound call fails at connect.
 
-use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -26,8 +25,6 @@ const DEAD: &str = "http://127.0.0.1:9";
 struct Owned {
     front: Front,
     dir: PathBuf,
-    /// KB_NODE_PORT: a Node would be reached here, and nothing may connect
-    node: TcpListener,
     /// `<cwd>/output` before the server started: where a path that ignored KB_OUTPUT_DIR would land
     cwd_output: Vec<(PathBuf, u64, SystemTime)>,
 }
@@ -38,22 +35,12 @@ static OWNED: LazyLock<Owned> = LazyLock::new(|| {
     let _ = std::fs::remove_dir_all(&dir);
     let out = dir.join("out");
     write_build(&out);
-    let node = TcpListener::bind("127.0.0.1:0").unwrap();
-    node.set_nonblocking(true).unwrap();
     // SAFETY: runs once, before anything in this binary reads the environment (every test starts with OWNED)
     unsafe {
         std::env::set_var("KB_OUTPUT_DIR", dir.join("output"));
         std::env::set_var("KB_PUSH_DIR", dir.join("output/push"));
         std::env::set_var("KB_STATIC_DIR", &out);
-        std::env::set_var("KB_NODE_PORT", node.local_addr().unwrap().port().to_string());
-        for k in [
-            "KB_NODE_CMD",
-            "KB_ZB_REMOTE",
-            "KB_INTERNAL_TOKEN",
-            "NO_PROXY",
-            "no_proxy",
-            "REQUEST_METHOD",
-        ] {
+        for k in ["NO_PROXY", "no_proxy", "REQUEST_METHOD"] {
             std::env::remove_var(k);
         }
         for k in [
@@ -78,12 +65,7 @@ static OWNED: LazyLock<Owned> = LazyLock::new(|| {
         std::env::set_var("KB_LOG_LEVEL", "error");
     }
     let front = Front::serve(Path::new(&std::env::var_os("KB_STATIC_DIR").unwrap()));
-    Owned {
-        front,
-        dir,
-        node,
-        cwd_output,
-    }
+    Owned { front, dir, cwd_output }
 });
 
 /// Every file under `dir` with its size and mtime, sorted; empty when `dir` does not exist.
@@ -313,7 +295,7 @@ fn head_gtfs_rt_has_the_length_of_get_and_no_body() {
 }
 
 #[test]
-fn bb_routes_answer_with_upstreams_dead_no_node_no_file_outside_the_temp_dir() {
+fn bb_routes_answer_with_upstreams_dead_no_file_outside_the_temp_dir() {
     const FAILED: &str = r#"{"error":"Upstream request failed"}"#;
     let started = std::time::Instant::now();
     for (path, status, cache, body) in [
@@ -445,7 +427,6 @@ fn bb_routes_answer_with_upstreams_dead_no_node_no_file_outside_the_temp_dir() {
 
     assert_eq!(get("/api/push").status, 200);
     assert!(started.elapsed().as_secs() < 60, "{:?}", started.elapsed());
-    assert!(OWNED.node.accept().is_err(), "a request reached KB_NODE_PORT");
     assert!(OWNED.dir.join("output/push/vapid.json").is_file());
     assert_eq!(
         snapshot(&std::env::current_dir().unwrap().join("output")),

@@ -3,7 +3,7 @@
  * motion engine. Both sides MUST measure distance with the same metric, or the
  * server's stop distances / `dist_m` drift from the client's own `cum` — so all
  * along-route metres in the app come from `segMeters` here (the same planar
- * formula as lib/geo.ts metersBetween).
+ * formula as backend/src/geo.rs meters_between).
  *
  * No "use client", no Node imports, relative imports only (node:test loads it).
  */
@@ -20,7 +20,7 @@ export interface LatLonBox {
 const M_PER_DEG = 111_320;
 const RAD = Math.PI / 180;
 
-/** Planar metres between two nearby points — identical to lib/geo.ts metersBetween. */
+/** Planar metres between two nearby points — identical to backend/src/geo.rs meters_between. */
 export function segMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
   const dLat = (lat2 - lat1) * M_PER_DEG;
   const dLon = (lon2 - lon1) * M_PER_DEG * Math.cos(((lat1 + lat2) / 2) * RAD);

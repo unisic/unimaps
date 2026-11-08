@@ -1,6 +1,6 @@
 /**
  * "Powiadom mnie" rules shared by the page watcher (lib/client/alerts.ts) and the server's web push
- * (lib/push-alerts.ts): one decision, one message, so the two never disagree about a departure.
+ * (backend/src/push_alerts.rs): one decision, one message, so the two never disagree about a departure.
  */
 import { minutesUntil, resolveTiming, rowKey, type TimingRow } from "@/lib/shared/departures";
 

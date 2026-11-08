@@ -1,5 +1,5 @@
 //! server/api/trip/[tripId]/route.ts: the zbiorkom branch (a static trip of the city's feed; opening it requests
-//! the road match of its shape) and, in owned mode, the BB branch (KB upstream passthrough, MZK from mzk_trip).
+//! the road match of its shape) and the BB branch (KB upstream passthrough, MZK from mzk_trip).
 
 use std::sync::Arc;
 
@@ -62,8 +62,7 @@ pub(super) fn mzk_trip_body(res: &Map<String, Value>) -> Map<String, Value> {
     out
 }
 
-/// GET /api/trip/<zbiorkom trip id>[?index=N]; None = not a zbiorkom trip (`get_bb` in owned mode, Node in proxy
-/// mode).
+/// GET /api/trip/<zbiorkom trip id>[?index=N]; None = not a zbiorkom trip (`get_bb`).
 pub fn get(req: &ApiRequest) -> Option<Response<Body>> {
     handle(req, zb_live)
 }

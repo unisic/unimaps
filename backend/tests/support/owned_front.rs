@@ -1,4 +1,4 @@
-//! The owned-mode front (`App::owned`, no Node) behind main.rs's accept loop on 127.0.0.1:0, and a raw HTTP/1.1
+//! The front (`App::owned`) behind main.rs's accept loop on 127.0.0.1:0, and a raw HTTP/1.1
 //! client: one connection per request, the head written verbatim, so a test can leave Host out.
 
 use std::io::{Read as _, Write as _};

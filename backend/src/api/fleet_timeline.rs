@@ -18,8 +18,7 @@ struct Timeline {
     points: Vec<FleetTimelinePoint>,
 }
 
-/// GET /api/fleet/timeline?city=<zbiorkom slug>; None = a BB request (`get_bb` in owned mode,
-/// Node in proxy mode).
+/// GET /api/fleet/timeline?city=<zbiorkom slug>; None = a BB request (`get_bb`).
 pub fn get(req: &ApiRequest) -> Option<Response<Body>> {
     blocking_io(|| handle(req, gzm_tracker))
 }

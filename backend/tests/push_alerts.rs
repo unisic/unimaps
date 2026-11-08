@@ -1,6 +1,6 @@
 //! test/push-alerts.test.ts: the server-side "Powiadom mnie" store over fake send and board fns.
-//! test/push-alerts-remote.test.ts is not ported: it covers the Node-only KB_ZB_REMOTE shim, Rust reads a zbiorkom
-//! board in-process (tests/push_alerts_zb.rs).
+//! test/push-alerts-remote.test.ts is not ported: it covers reading a zbiorkom board over HTTP, Rust reads it
+//! in-process (tests/push_alerts_zb.rs).
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};

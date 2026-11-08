@@ -1,7 +1,8 @@
 /**
- * The HTTP contract of the server front (server/http.ts + server/static.ts), checked from outside against a running
- * server, so the same file pins the Node server and the Rust one that replaces it (backend/). Needs a production
- * build in out/ and talks to the live upstreams through /api/health, so it is not part of `npm test` or CI:
+ * The HTTP contract of the server front (backend/src/http.rs + backend/src/static_files.rs), checked from outside
+ * against a running server; it was written against the former Node server and pins the Rust one to the same answers.
+ * Needs a production build in out/ and talks to the live upstreams through /api/health, so it is not part of
+ * `npm test` or CI:
  *   BASE_URL=http://127.0.0.1:8080 node --import tsx --test scripts/http-contract.test.ts
  */
 import assert from "node:assert/strict";

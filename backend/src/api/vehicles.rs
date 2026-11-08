@@ -17,7 +17,7 @@ use crate::poller_singleton::{Bb, BbKinds};
 const X_SERVER_TIME: HeaderName = HeaderName::from_static("x-server-time");
 const X_NEXT_UPDATE: HeaderName = HeaderName::from_static("x-next-update");
 
-/// GET /api/vehicles?city=<zbiorkom slug>; None = a BB request (`get_bb` in owned mode, Node in proxy mode).
+/// GET /api/vehicles?city=<zbiorkom slug>; None = a BB request (`get_bb`).
 pub fn get(req: &ApiRequest) -> Option<Response<Body>> {
     handle(req, zb_live)
 }

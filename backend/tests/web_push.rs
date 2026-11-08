@@ -84,6 +84,24 @@ fn golden_is_push_sub() {
     }
 }
 
+#[test]
+fn is_push_sub_accepts_the_push_services_only_with_a_real_p256_key() {
+    let sub = |endpoint: &str, p256dh: &str, auth: &str| serde_json::json!({ "endpoint": endpoint, "keys": { "p256dh": p256dh, "auth": auth } });
+    assert!(is_push_sub(&sub("https://fcm.googleapis.com/fcm/send/x", UA, AUTH)));
+    assert!(is_push_sub(&sub("https://web.push.apple.com/Q", UA, AUTH)));
+    assert!(is_push_sub(&sub(
+        "https://wns2-par02p.notify.windows.com/w/?token=1",
+        UA,
+        AUTH
+    )));
+    assert!(!is_push_sub(&sub("http://fcm.googleapis.com/x", UA, AUTH)));
+    assert!(!is_push_sub(&sub("https://127.0.0.1/x", UA, AUTH)));
+    assert!(!is_push_sub(&sub("https://evilfcm.googleapis.com.example/x", UA, AUTH)));
+    assert!(!is_push_sub(&sub("https://fcm.googleapis.com:8443/x", UA, AUTH)));
+    assert!(!is_push_sub(&sub("https://fcm.googleapis.com/x", "AAAA", AUTH)));
+    assert!(!is_push_sub(&sub("https://fcm.googleapis.com/x", UA, "AAAA")));
+}
+
 fn temp(name: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("unimaps-web-push-{}-{name}", std::process::id()));
     let _ = fs::remove_dir_all(&d);
@@ -151,6 +169,8 @@ fn vapid_auth_is_an_es256_jwt_for_the_origin() {
         Value::from(unimaps::config::PUSH_SUBJECT.as_str())
     );
     assert_eq!(String::from_utf8(b(parts[1])).unwrap(), claims);
+    let whole = vapid_auth("https://fcm.googleapis.com/fcm/send/abc", &k, 1_800_000_000.0).unwrap();
+    assert_eq!(String::from_utf8(b(whole.split('.').nth(1).unwrap())).unwrap(), claims);
     let sig = Signature::from_slice(&b(parts[2])).unwrap();
     let vk = VerifyingKey::from_sec1_bytes(&b(&k.public)).unwrap();
     vk.verify(format!("{}.{}", parts[0], parts[1]).as_bytes(), &sig)

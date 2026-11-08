@@ -1,5 +1,5 @@
 //! test/gzm-feed.test.ts (parse, shapes, upgrade, the OSRM matches of gzm_match, rejects, gzmRefreshDue,
-//! downloadGzmZip; serviceDayBase lives in src/time.rs) and the golden vectors of
+//! downloadGzmZip, serviceDayBase) and the golden vectors of
 //! lib/gzm-feed.ts (scripts/dump-vectors.ts: the support fixture and seeded hostile zbiorkom-style zips, some with
 //! stored road matches, then the shape lookup and upgrade on each).
 
@@ -1044,4 +1044,40 @@ async fn download_refuses_an_oversized_body_by_header_and_by_stream_leaving_no_t
         download_gzm_zip(&file, &url, None, MAX_ZIP_BYTES).await,
         Err("GZM GTFS HTTP 500".to_owned())
     );
+}
+
+fn warsaw(secs: i64) -> String {
+    let (date, s) = unimaps::time::agency_clock(Timestamp::from_second(secs).unwrap());
+    format!("{date} {:02}:{:02}", s / 3600, s % 3600 / 60)
+}
+
+fn day_base(date: &str) -> i64 {
+    unimaps::time::service_day_base(date.parse().unwrap())
+}
+
+#[test]
+fn service_day_base_is_local_midnight_on_a_plain_day() {
+    assert_eq!(
+        day_base("2026-10-28"),
+        "2026-10-27T23:00:00Z".parse::<Timestamp>().unwrap().as_second()
+    );
+}
+
+#[test]
+fn service_day_base_is_noon_minus_12_h_on_the_spring_forward_day() {
+    assert_eq!(
+        day_base("2027-03-28"),
+        "2027-03-27T22:00:00Z".parse::<Timestamp>().unwrap().as_second()
+    );
+    assert_eq!(
+        warsaw(day_base("2027-03-28") + 8 * 3600),
+        "2027-03-28 08:00",
+        "wall-clock times after the switch hold"
+    );
+}
+
+#[test]
+fn service_day_base_maps_25_10_on_the_fall_back_day_to_01_10_the_next_morning() {
+    assert_eq!(warsaw(day_base("2026-10-25") + 25 * 3600 + 600), "2026-10-26 01:10");
+    assert_eq!(warsaw(day_base("2026-10-25") + 12 * 3600), "2026-10-25 12:00");
 }

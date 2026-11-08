@@ -34,8 +34,7 @@ use crate::time::today_local;
 
 type Row = Map<String, Value>;
 
-/// GET /api/stop/<zbiorkom designator>/timetable[?date=YYYY-MM-DD]; None = not a zbiorkom stop (`get_bb` in owned
-/// mode, Node in proxy mode).
+/// GET /api/stop/<zbiorkom designator>/timetable[?date=YYYY-MM-DD]; None = not a zbiorkom stop (`get_bb`).
 pub fn get(req: &ApiRequest) -> Option<Response<Body>> {
     handle(req, zb_live)
 }

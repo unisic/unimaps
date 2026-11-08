@@ -185,7 +185,7 @@
   const isLiveWithLoc = $derived(trip.isLive && hasLiveCoords);
   /* MZK bus waiting at the first stop of a course that has not begun: OnTime's delay
      and per-stop times are a placeholder (now - scheduled start): show the schedule,
-     "czeka na odjazd" and never a delay (lib/mzk-state.ts) */
+     "czeka na odjazd" and never a delay (backend/src/mzk_state.rs) */
   const notStarted = $derived(isLiveWithLoc && currentVeh?.not_started === true);
 
   /* prefer the live poll's current stop over the snapshot; geo_seq (GPS, sent only while upstream's index is

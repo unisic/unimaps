@@ -15,7 +15,8 @@
 
 import { performance } from "node:perf_hooks";
 
-import { todayLocalISO } from "../lib/config";
+/** agency-local YYYY-MM-DD */
+const todayLocalISO = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Warsaw" }).format(new Date());
 
 const host = process.argv[2] || process.env.BENCHMARK_HOST || "http://127.0.0.1:8080";
 

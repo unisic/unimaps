@@ -16,8 +16,7 @@ use crate::phototrans::pt_vehicle;
 use crate::poller_singleton::{Bb, BbKinds};
 use crate::shared::fleet::FleetVehicleDetail;
 
-/// GET /api/fleet/<side>?city=<zbiorkom slug>; None = a BB request (`get_bb` in owned mode,
-/// Node in proxy mode).
+/// GET /api/fleet/<side>?city=<zbiorkom slug>; None = a BB request (`get_bb`).
 pub fn get(req: &ApiRequest) -> Option<Response<Body>> {
     blocking_io(|| {
         handle(req, || {

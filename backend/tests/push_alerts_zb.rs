@@ -1,5 +1,5 @@
-//! Rust counterpart of test/push-alerts-remote.test.ts: without Node's KB_ZB_REMOTE shim a zbiorkom alert reads its
-//! board in-process, from the city's local feed. Its own binary: the config is read from the environment once per
+//! Rust counterpart of test/push-alerts-remote.test.ts: a zbiorkom alert reads its board in-process, from the city's
+//! local feed. Its own binary: the config is read from the environment once per
 //! process, and every upstream URL points at a closed local port.
 
 use std::io::Write;

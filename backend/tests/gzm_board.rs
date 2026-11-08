@@ -1,4 +1,4 @@
-//! test/stop-group.test.ts (whole-stop board) and test/gzm-routes.test.ts (connection memo) over `GzmLive`'s route answers,
+//! test/stop-group.test.ts (nearestWithin, whole-stop board) and test/gzm-routes.test.ts (connection memo) over `GzmLive`'s route answers,
 //! plus the memo under concurrent searches and a feed swap.
 
 #[path = "support/gzm_fixture.rs"]
@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use gzm_fixture::{LAT, LON_A, LON_B, LON_C, at, files, load_gzm_feed};
 use serde_json::{Value, json};
+use unimaps::geo::nearest_within;
 use unimaps::gzm::{GzmLive, Lookup, ZbResponse, ZbTransport};
 use unimaps::gzm_feed::GzmFeed;
 use unimaps::router::RouteQuery;
@@ -61,6 +62,19 @@ fn found(l: Lookup<Value>) -> Value {
         Lookup::Found(v) => v,
         other => panic!("{other:?}"),
     }
+}
+
+#[test]
+fn nearest_within_keeps_the_points_within_the_radius_nearest_first_at_most_max() {
+    let all = [("far", 19.01), ("b", 19.002), ("self", 19.0), ("a", 19.001)];
+    let ids = |max| -> Vec<&str> {
+        nearest_within((LAT, all[2].1), all, |p| (LAT, p.1), 600.0, max)
+            .into_iter()
+            .map(|p| p.0)
+            .collect()
+    };
+    assert_eq!(ids(10), ["self", "a", "b"]);
+    assert_eq!(ids(2), ["self", "a"]);
 }
 
 #[test]

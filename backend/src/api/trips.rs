@@ -1,87 +1,40 @@
-//! server/api/trips/route.ts. Proxy mode, for a batch holding a zbiorkom id: the whole batch is validated as the TS
-//! does, the zbiorkom ids come from their cities' feeds, the rest (KB, MZK) from Node in one sub-request, and the
-//! two parts are merged into the answer the one TS route would give. Owned mode (`get_owned`): every batch, all
-//! in-process.
+//! server/api/trips/route.ts: zbiorkom ids from their cities' feeds, KB ids from `bb.api()`, MZK ids from
+//! mzk_trip, in one batch.
 
 use std::sync::Arc;
 
-use hyper::header::CACHE_CONTROL;
-use hyper::{Response, StatusCode};
+use hyper::Response;
 use indexmap::IndexMap;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::Value;
-use serde_json::value::RawValue;
 
 use super::trip::{mzk_trip_body, spread};
-use super::{ApiRequest, NodeClient, NodeResponse, batch_ids, json_cached, node_headers, node_response, zb_live};
+use super::{ApiRequest, batch_ids, json_cached, zb_live};
 use crate::api_helpers::{bad_request, is_valid_id, query_param, upstream_error, zb_enabled};
 use crate::gzm::{GzmLive, Lookup, ZbTransport};
 use crate::http::Body;
+use crate::js;
 use crate::kb_api::{KbSource, join_all};
 use crate::mzk_trip::resolve_mzk_trip;
 use crate::poller_singleton::{Bb, BbKinds};
 use crate::rate_limit::{allow_request, too_many_requests};
 use crate::shape_store::ShapePrio;
 use crate::shared::cities::zb_city_of;
-use crate::{js, logger};
 
 const MAX_BATCH_IDS: usize = 300;
 
 /// The zbiorkom half of a batch: trips found in the feeds; `loading` = a city's feed is still parsing (its ids are
 /// absent and the answer is not cached).
 #[derive(Debug, Default)]
-pub struct ZbTrips {
-    pub trips: IndexMap<String, Value>,
-    pub loading: bool,
-}
-
-/// A trip answered here, or Node's verbatim.
-#[derive(Serialize)]
-#[serde(untagged)]
-enum Trip {
-    Built(Value),
-    Node(Box<RawValue>),
-}
-
-#[derive(Deserialize)]
-struct NodeTrips {
-    trips: IndexMap<String, Box<RawValue>>,
+struct ZbTrips {
+    trips: IndexMap<String, Value>,
+    loading: bool,
 }
 
 #[derive(Serialize)]
 struct TripsBody {
     count: usize,
-    trips: IndexMap<String, Trip>,
-}
-
-/// GET /api/trips?ids=<batch with a zbiorkom id>.
-pub async fn get(req: &ApiRequest, node: &NodeClient) -> Option<Response<Body>> {
-    handle(req, node, zb_live).await
-}
-
-/// The route with each city's live layer from `live` (the started registry entry in `get`, a rigged one in a
-/// test); `node` is asked only when the batch holds a non-zbiorkom id.
-pub async fn handle<T: ZbTransport>(
-    req: &ApiRequest,
-    node: &NodeClient,
-    live: impl Fn(&'static str) -> Arc<GzmLive<T>>,
-) -> Option<Response<Body>> {
-    let ids = match checked_ids(req) {
-        Ok(ids) => ids,
-        Err(res) => return Some(res),
-    };
-    let (zb_ids, rest): (Vec<String>, Vec<String>) = ids.into_iter().partition(|id| zb_city_of(id).is_some());
-    let node_part = if rest.is_empty() {
-        // Math.max(1, 0): a zbiorkom id costs no upstream fetch; a mixed batch is charged by Node for its own ids
-        if !allow_request(&req.ip(), 1.0) {
-            return Some(too_many_requests());
-        }
-        None
-    } else {
-        let path = format!("/api/trips?ids={}", rest.join(","));
-        Some(node.get(&path, node_headers(&req.headers)).await)
-    };
-    Some(merge_trips(node_part, || zb_trips(&zb_ids, live)))
+    trips: IndexMap<String, Value>,
 }
 
 /// The batch's ids after the TS checks (present, non-empty, at most 300, each `is_valid_id`); Err = the 400.
@@ -103,9 +56,19 @@ fn checked_ids(req: &ApiRequest) -> Result<Vec<String>, Response<Body>> {
     Ok(ids)
 }
 
-/// GET /api/trips?ids=<any batch> in owned mode: zbiorkom ids from their cities' feeds, KB ids from `bb.api()`
-/// (cached shared objects spread, never mutated, with a background road-shape ref), MZK ids from mzk_trip.
+/// GET /api/trips?ids=<any batch>: zbiorkom ids from their cities' feeds, KB ids from `bb.api()` (cached shared
+/// objects spread, never mutated, with a background road-shape ref), MZK ids from mzk_trip.
 pub async fn get_owned<T: BbKinds>(req: &ApiRequest, bb: &'static Bb<T>) -> Response<Body> {
+    handle(req, bb, zb_live).await
+}
+
+/// The route with each city's live layer from `live` (the started registry entry in `get_owned`, a rigged one in a
+/// test).
+pub async fn handle<T: BbKinds, Z: ZbTransport>(
+    req: &ApiRequest,
+    bb: &'static Bb<T>,
+    live: impl Fn(&'static str) -> Arc<GzmLive<Z>>,
+) -> Response<Body> {
     let ids = match checked_ids(req) {
         Ok(ids) => ids,
         Err(res) => return res,
@@ -124,8 +87,8 @@ pub async fn get_owned<T: BbKinds>(req: &ApiRequest, bb: &'static Bb<T>) -> Resp
     {
         return upstream_error("trips", err);
     }
-    let zb = zb_trips(&zb_ids, zb_live);
-    let mut trips: IndexMap<String, Trip> = zb.trips.into_iter().map(|(k, v)| (k, Trip::Built(v))).collect();
+    let zb = zb_trips(&zb_ids, live);
+    let mut trips = zb.trips;
     let mut failed = 0;
     if !kb_ids.is_empty() {
         let kb = api.fetch_trips_batch(&kb_ids, 0).await;
@@ -138,7 +101,7 @@ pub async fn get_owned<T: BbKinds>(req: &ApiRequest, bb: &'static Bb<T>) -> Resp
             } else {
                 Value::clone(&t)
             };
-            trips.insert(id, Trip::Built(t));
+            trips.insert(id, t);
         }
     }
     if !mzk_ids.is_empty() {
@@ -146,7 +109,7 @@ pub async fn get_owned<T: BbKinds>(req: &ApiRequest, bb: &'static Bb<T>) -> Resp
         for (id, r) in mzk_ids.into_iter().zip(res) {
             match r {
                 Ok(Some(m)) if js::truthy(m.get("trip")) => {
-                    trips.insert(id, Trip::Built(Value::Object(mzk_trip_body(&m))));
+                    trips.insert(id, Value::Object(mzk_trip_body(&m)));
                 }
                 Ok(_) => {}
                 Err(_) => failed += 1,
@@ -157,7 +120,7 @@ pub async fn get_owned<T: BbKinds>(req: &ApiRequest, bb: &'static Bb<T>) -> Resp
     if failed == ids.len() {
         return upstream_error("trips", format_args!("all {failed} trip fetches failed"));
     }
-    let pending = trips.values().any(|t| matches!(t, Trip::Built(v) if is_pending(v)));
+    let pending = trips.values().any(is_pending);
     answer(trips, failed > 0 || zb.loading, pending)
 }
 
@@ -167,7 +130,7 @@ fn is_pending(t: &Value) -> bool {
 
 /// The TS answer: keys in `Object.keys` order (index-like ids ascending first), `no_store` = a fetch failed or a
 /// feed is loading, `pending` = a road shape is still being built.
-fn answer(mut trips: IndexMap<String, Trip>, no_store: bool, pending: bool) -> Response<Body> {
+fn answer(mut trips: IndexMap<String, Value>, no_store: bool, pending: bool) -> Response<Body> {
     js::sort_object_keys(&mut trips);
     let cache = match (no_store, pending) {
         (true, _) => "no-store",
@@ -199,133 +162,4 @@ fn zb_trips<T: ZbTransport>(ids: &[String], live: impl Fn(&'static str) -> Arc<G
         }
     }
     out
-}
-
-/// Node's answer for the non-zbiorkom ids (None = the batch had none) merged with the zbiorkom half `zb`, which runs
-/// only when the answer is a merge: a 4xx from Node (its rate limit) goes out as is. A 5xx, a failed call or an
-/// unreadable body counts as every Node id failed, which the TS route answers with a 200 `no-store` since the
-/// zbiorkom ids never fail. Keys follow `Object.keys` of the TS object: index-like (KB) ids ascending, then
-/// zbiorkom, then the rest of Node's in its order.
-pub fn merge_trips(node: Option<Result<NodeResponse, String>>, zb: impl FnOnce() -> ZbTrips) -> Response<Body> {
-    let mut node_trips = IndexMap::new();
-    let (mut failed, mut pending) = (false, false);
-    match node {
-        None => {}
-        Some(Ok(res)) if res.status.is_client_error() => return node_response(res),
-        Some(Ok(res)) if res.status == StatusCode::OK => match serde_json::from_slice::<NodeTrips>(&res.body) {
-            Ok(body) => {
-                // Node's own Cache-Control over its part: no-store = a fetch failed, 300 = a road shape is pending
-                let cc = res.headers.get(CACHE_CONTROL).and_then(|v| v.to_str().ok());
-                failed = cc == Some("no-store");
-                pending = cc == Some("public, max-age=300");
-                node_trips = body.trips;
-            }
-            Err(err) => {
-                logger::warn("trips", format_args!("node answer unreadable: {err}"));
-                failed = true;
-            }
-        },
-        Some(Ok(_)) => failed = true,
-        Some(Err(err)) => {
-            logger::warn("trips", format_args!("node: {err}"));
-            failed = true;
-        }
-    }
-    let zb = zb();
-    pending |= zb.trips.values().any(is_pending);
-    let mut trips: IndexMap<String, Trip> = zb.trips.into_iter().map(|(k, v)| (k, Trip::Built(v))).collect();
-    for (k, v) in node_trips {
-        trips.insert(k, Trip::Node(v));
-    }
-    answer(trips, failed || zb.loading, pending)
-}
-
-#[cfg(test)]
-mod tests {
-    use bytes::Bytes;
-    use http_body_util::BodyExt;
-    use hyper::header::{HeaderMap, HeaderValue};
-    use serde_json::json;
-
-    use super::*;
-
-    fn node(status: u16, cache: &str, body: &str) -> Option<Result<NodeResponse, String>> {
-        let mut headers = HeaderMap::new();
-        headers.insert(CACHE_CONTROL, HeaderValue::from_str(cache).unwrap());
-        Some(Ok(NodeResponse {
-            status: StatusCode::from_u16(status).unwrap(),
-            headers,
-            body: Bytes::from(body.to_owned()),
-        }))
-    }
-
-    fn zb(loading: bool) -> ZbTrips {
-        let mut trips = IndexMap::new();
-        trips.insert("gzm:tA".to_owned(), json!({"times": [], "shape_status": "road"}));
-        ZbTrips { trips, loading }
-    }
-
-    async fn parts(res: Response<Body>) -> (StatusCode, String, String) {
-        let cc = res
-            .headers()
-            .get(CACHE_CONTROL)
-            .map_or("", |v| v.to_str().unwrap())
-            .to_owned();
-        let status = res.status();
-        let body = res.into_body().collect().await.unwrap().to_bytes();
-        (status, cc, String::from_utf8(body.to_vec()).unwrap())
-    }
-
-    #[tokio::test]
-    async fn merge_follows_the_ts_answer() {
-        let r = parts(merge_trips(None, || zb(false))).await;
-        assert_eq!(r.0, StatusCode::OK);
-        assert_eq!(r.1, "public, max-age=3600");
-        assert_eq!(
-            r.2,
-            r#"{"count":1,"trips":{"gzm:tA":{"times":[],"shape_status":"road"}}}"#
-        );
-
-        assert_eq!(parts(merge_trips(None, || zb(true))).await.1, "no-store");
-
-        // Node's part verbatim (1e+21 stays as Node wrote it), index-like ids first, Node's pending shape counts
-        let body = r#"{"count":3,"trips":{"7":{"a":1e+21},"12":null,"mzk:9":{"shape_status":"pending"}}}"#;
-        let r = parts(merge_trips(node(200, "public, max-age=300", body), || zb(false))).await;
-        assert_eq!(r.1, "public, max-age=300");
-        assert_eq!(
-            r.2,
-            r#"{"count":4,"trips":{"7":{"a":1e+21},"12":null,"gzm:tA":{"times":[],"shape_status":"road"},"mzk:9":{"shape_status":"pending"}}}"#
-        );
-
-        let r = parts(merge_trips(node(200, "no-store", r#"{"count":0,"trips":{}}"#), || {
-            zb(false)
-        }))
-        .await;
-        assert_eq!(r.1, "no-store");
-
-        let mut ran = false;
-        let r = parts(merge_trips(node(429, "", r#"{"error":"Too many requests"}"#), || {
-            ran = true;
-            zb(false)
-        }))
-        .await;
-        assert_eq!(
-            (r.0, r.2.as_str()),
-            (StatusCode::TOO_MANY_REQUESTS, r#"{"error":"Too many requests"}"#)
-        );
-        assert!(!ran);
-
-        for failed in [
-            node(502, "", r#"{"error":"Upstream request failed"}"#),
-            Some(Err("refused".into())),
-        ] {
-            let r = parts(merge_trips(failed, || zb(false))).await;
-            assert_eq!(r.0, StatusCode::OK);
-            assert_eq!(r.1, "no-store");
-            assert_eq!(
-                r.2,
-                r#"{"count":1,"trips":{"gzm:tA":{"times":[],"shape_status":"road"}}}"#
-            );
-        }
-    }
 }

@@ -77,7 +77,12 @@ fn sibling(file: &Path, ext: &str) -> io::Result<Option<Bytes>> {
 }
 
 impl Static {
+    /// A missing root (no frontend build) loads nothing: every page then answers the bare 404 and the API still runs.
     pub fn load(root: &Path) -> io::Result<Self> {
+        if !root.try_exists()? {
+            crate::logger::warn("http", format_args!("no static build at {}", root.display()));
+            return Ok(Static { files: HashMap::new() });
+        }
         let mut paths = Vec::new();
         walk(root, &mut paths)?;
         let mut files = HashMap::new();
@@ -221,6 +226,12 @@ mod tests {
         assert_eq!(decode_uri_component("/%+1"), None);
         assert_eq!(decode_uri_component("/%C5"), None);
         assert_eq!(decode_uri_component("/%ED%A0%80"), None);
+    }
+
+    #[test]
+    fn missing_root_loads_nothing() {
+        let s = Static::load(Path::new("/nonexistent/unimaps-out")).unwrap();
+        assert!(s.files.is_empty());
     }
 
     #[test]

@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { metersBetween } from "../lib/geo";
 import {
   decodePolyline,
   encodePolyline,
@@ -21,6 +20,12 @@ const LAT0 = 49.8;
 const LON0 = 19.0;
 const KX = 111_320 * Math.cos(LAT0 * (Math.PI / 180));
 const P = (east: number, north: number): LatLng => [LAT0 + north / 111_320, LON0 + east / KX];
+/** independent of the module under test: backend/src/geo.rs meters_between */
+function metersBetween(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const dLat = (lat2 - lat1) * 111_320;
+  const dLon = (lon2 - lon1) * 111_320 * Math.cos(((lat1 + lat2) / 2) * (Math.PI / 180));
+  return Math.hypot(dLat, dLon);
+}
 
 describe("encode/decodePolyline", () => {
   it("matches Google's reference vector at precision 5", () => {

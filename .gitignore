@@ -31,6 +31,8 @@ yarn-error.log*
 # python legacy
 __pycache__/
 *.pyc
+
+# the former Node server bundle (dist/server.mjs): checkouts that built before the Rust move still have it
 /dist/
 
 # rust build output

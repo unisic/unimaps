@@ -23,6 +23,7 @@ import {
   operatorColor,
   przystanekPlural,
   secsFromHHMM,
+  tripTimeMatchesStop,
   wozPlural,
 } from "../lib/client/format";
 import type { TripTime, TripView } from "../lib/client/types";
@@ -437,5 +438,77 @@ describe("arrivedSecs / delayStatus", () => {
     assert.equal(delayStatus(-60), "Na czas");
     assert.equal(delayStatus(240), "Opóźniony 4 min");
     assert.equal(delayStatus(-150), "Przed czasem 3 min");
+  });
+});
+
+describe("hhmmFromSecs / secsFromHHMM (from the MZK timetable tests)", () => {
+  it("formats seconds to HH:MM correctly in 24h format with midnight wrap", () => {
+    assert.equal(hhmmFromSecs(0), "00:00");
+    assert.equal(hhmmFromSecs(3600), "01:00");
+    assert.equal(hhmmFromSecs(12 * 3600 + 30 * 60), "12:30");
+    assert.equal(hhmmFromSecs(23 * 3600 + 59 * 60), "23:59");
+    assert.equal(hhmmFromSecs(24 * 3600 + 15 * 60), "00:15"); // midnight wrap
+  });
+
+  it("parses HH:MM strings to agency-local seconds", () => {
+    assert.equal(secsFromHHMM("00:00"), 0);
+    assert.equal(secsFromHHMM("06:30"), 6 * 3600 + 30 * 60);
+    assert.equal(secsFromHHMM("14:45"), 14 * 3600 + 45 * 60);
+    assert.equal(secsFromHHMM("23:59"), 23 * 3600 + 59 * 60);
+  });
+});
+
+describe("tripTimeMatchesStop with merged stops", () => {
+  const mergedStop = {
+    id: "10021",
+    designator: "10021",
+    kbId: "10021",
+    mzkId: "mzk:2",
+    kbDesignator: "10021",
+    mzkDesignator: "mzk:2",
+    mzkSymbol: "2",
+    symbol: "2",
+  };
+
+  it("matches KB trip by numeric designator", () => {
+    assert.equal(tripTimeMatchesStop({ designator: 10021 }, mergedStop), true);
+  });
+
+  it("matches KB trip by place_id designator", () => {
+    assert.equal(tripTimeMatchesStop({ place_id: "10021" }, mergedStop), true);
+  });
+
+  it("matches MZK trip by mzk place_id", () => {
+    assert.equal(tripTimeMatchesStop({ place_id: "mzk:2" }, mergedStop), true);
+    assert.equal(tripTimeMatchesStop({ place_id: "2" }, mergedStop), true);
+  });
+
+  it("matches MZK trip by mzkId designator", () => {
+    assert.equal(tripTimeMatchesStop({ designator: "mzk:2" as unknown as number }, mergedStop), true);
+  });
+
+  it("does not match unrelated stops", () => {
+    assert.equal(tripTimeMatchesStop({ designator: 99999, place_id: "other" }, mergedStop), false);
+  });
+});
+
+describe("tripTimeMatchesStop with a station hub (several MZK symbols)", () => {
+  const hub = {
+    id: "10000",
+    designator: "184900",
+    kbId: "10000",
+    mzkId: "mzk:343",
+    kbDesignator: "184900",
+    mzkDesignator: "mzk:343",
+    mzkSymbol: "343",
+    mzkSymbols: ["343", "341", "264"],
+  };
+  it("matches an MZK trip calling at ANY symbol of the hub", () => {
+    for (const sym of ["343", "341", "264"]) {
+      assert.equal(tripTimeMatchesStop({ place_id: `mzk:${sym}` }, hub), true, sym);
+    }
+  });
+  it("does not match a symbol outside the hub", () => {
+    assert.equal(tripTimeMatchesStop({ place_id: "mzk:2" }, hub), false);
   });
 });

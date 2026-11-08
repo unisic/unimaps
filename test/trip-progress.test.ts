@@ -1,38 +1,23 @@
 /**
  * Where is a vehicle along its trip? Out-and-back / loop patterns (line 120's Szczyrk Biła loop).
  * Fixture: REAL upstream snapshots captured 2026-10-02 22:57-23:16 (test/fixtures/line120-loop-capture.json).
+ * The server chain on the same capture (fixture sanity, kbDistAlong replays) is backend/tests/trip_progress.rs.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { describe, it } from "node:test";
 
-import { kbNextStopIndex } from "../lib/poller";
-import { kbAheadM, kbDistAlong } from "../lib/route-info";
-import type { ShapeGeometry } from "../lib/shape-store";
 import { decodePolyline, preparePolyline, projectStopsAlong, type LatLng } from "../lib/shared/polyline";
 import { progressFromVehicle, stopAlongFor, stopsAtChainage } from "../lib/shared/trip-progress";
 
-interface Snap { t: number; lat: number; lon: number; vti: number; ndi: number; at: boolean }
-interface Fixture { polyline: string; stops: Array<{ i: number; name: string; lat: number; lon: number }>; snapshots: Snap[] }
+interface Fixture { polyline: string; stops: Array<{ i: number; name: string; lat: number; lon: number }> }
 const fx = JSON.parse(fs.readFileSync(path.join(process.cwd(), "test", "fixtures", "line120-loop-capture.json"), "utf8")) as Fixture;
 
 const stopPts: LatLng[] = fx.stops.map((s) => [s.lat, s.lon]);
 const routed = decodePolyline(fx.polyline, 6);
 const pl = preparePolyline(routed)!;
 const along = projectStopsAlong(pl, stopPts);
-const N = fx.stops.length;
-
-describe("fixture sanity", () => {
-  it("the loop's twin stops are 14-49 m apart but 0.9-2.8 km apart along the route", () => {
-    for (const [a, b] of [[20, 27], [21, 26], [22, 25]] as const) {
-      const dLat = (fx.stops[a].lat - fx.stops[b].lat) * 111_320;
-      const dLon = (fx.stops[a].lon - fx.stops[b].lon) * 111_320 * Math.cos((49.72 * Math.PI) / 180);
-      assert.ok(Math.hypot(dLat, dLon) < 50);
-      assert.ok(along[b]! - along[a]! > 900);
-    }
-  });
-});
 
 describe("stopAlongFor", () => {
   it("is the server's placement (projectStopsAlong on the same polyline)", () => {
@@ -96,46 +81,4 @@ describe("progressFromVehicle (what TripView calls)", () => {
     assert.equal(progressFromVehicle(A, "kb:abc.123456", { ...veh, dist_m: Number.NaN }, 0), null);
     assert.equal(progressFromVehicle(A, "kb:abc.123456", null, 0), null);
   });
-});
-
-/** what upstream really said, as a (stop index, at) pair — the loop pass registered every stop in order */
-const expected = (s: Snap) => (s.at ? { index: s.vti, at: true } : { index: Math.min(s.vti + 1, N - 1), at: false });
-/** while at a stop the next stop is an equally valid reading (the bus is leaving) */
-const sameStop = (got: number, exp: { index: number; at: boolean }) => got === exp.index || (exp.at && got === exp.index + 1);
-
-describe("server chain (kbDistAlong with the previous poll's dist_m as hint + stopsAtChainage) — real line-120 capture", () => {
-  const sg: ShapeGeometry = { pl, stops: along, rev: "000000", src: "osrm" };
-  /** what attachRouteInfo does per poll; `freezeAt` = upstream's index sticks there once the bus reaches it (a pole passed outside its geofence) */
-  function replay(freezeAt: number | null): string[] {
-    let hint: number | undefined;
-    let prevT: number | null = null;
-    const bad: string[] = [];
-    for (const s of fx.snapshots) {
-      const frozen = freezeAt !== null && s.vti >= freezeAt;
-      const vti = frozen ? freezeAt : s.vti;
-      const at = frozen ? false : s.at;
-      const ndi = frozen ? freezeAt + 1 : s.ndi;
-      const gapS = prevT === null ? 0 : (s.t - prevT) / 1000;
-      prevT = s.t;
-      const d = kbDistAlong(sg, s.lat, s.lon, vti, kbNextStopIndex(vti, ndi, at, N), hint, { aheadM: kbAheadM(gapS) });
-      if (d === null) {
-        bad.push(`${new Date(s.t).toISOString()} dist_m null`);
-        continue;
-      }
-      hint = d;
-      const r = stopsAtChainage(along, d, { vti, atStop: at });
-      if (!r || !sameStop(r.index, expected(s))) bad.push(`${new Date(s.t).toISOString()} upstream ${s.vti}${s.at ? "@" : ""} (sent ${vti}) -> ${r?.index}${r?.at ? "@" : ""}`);
-    }
-    return bad;
-  }
-
-  it("upstream right (the live case): index == upstream's at every snapshot, incl. both twin legs", () => {
-    assert.deepEqual(replay(null), []);
-  });
-
-  for (const K of [17, 19, 20, 21, 22, 23, 24, 25, 26]) {
-    it(`upstream index frozen at ${K} (the next pole was passed outside the geofence): the return leg is still counted`, () => {
-      assert.deepEqual(replay(K), []);
-    });
-  }
 });

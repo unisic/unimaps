@@ -13,12 +13,13 @@ use hyper::Response;
 use hyper::header::{HeaderMap, HeaderValue};
 use serde_json::{Value, json};
 use unimaps::api::{
-    ApiRequest, NodeClient, connections, lines, shapes, stop_departures, stop_timetable, stops, trip, trip_execution,
-    trips, vehicles,
+    ApiRequest, connections, lines, shapes, stop_departures, stop_timetable, stops, trip, trip_execution, trips,
+    vehicles,
 };
 use unimaps::api_helpers::{is_valid_id, is_valid_shape_id};
 use unimaps::gzm::{get_gzm, safe_gzm_health};
 use unimaps::http::Body;
+use unimaps::poller_singleton::bb;
 use unimaps::shared::cities::zb_city_of;
 
 static IP: AtomicUsize = AtomicUsize::new(0);
@@ -176,17 +177,14 @@ async fn trip_and_trips_static_trips_from_the_feed_an_unknown_id_is_empty_no_kb_
     assert!(rev_id(shape_id, "gzm:shA."), "{shape_id}");
     let none = json_of(trip::handle(&get("gzm:nope", "", &[]), |_| r.live.clone()).unwrap()).await;
     assert_eq!(none, json!({}));
-    // an all-zbiorkom batch never asks Node: port 1 would fail the fetch
-    let node = NodeClient::new(1);
-    let res = trips::handle(&get("", "ids=gzm:tA,gzm:nope", &[]), &node, |_| r.live.clone())
-        .await
-        .unwrap();
+    // an all-zbiorkom batch never starts the BB pollers nor fetches from KB
+    let res = trips::handle(&get("", "ids=gzm:tA,gzm:nope", &[]), bb(), |_| r.live.clone()).await;
     let cache = header(&res, "cache-control");
     let b = json_of(res).await;
     let keys: Vec<&String> = b["trips"].as_object().unwrap().keys().collect();
     assert_eq!(keys, ["gzm:tA"]);
     assert_eq!(b["trips"]["gzm:tA"]["times"].as_array().map(Vec::len), Some(3));
-    // a Node fetch would have failed and made it no-store
+    // a failed KB fetch would have made it no-store
     assert_eq!(cache.as_deref(), Some("public, max-age=3600"));
 }
 
@@ -241,10 +239,7 @@ async fn departures_and_timetable_from_the_feed_an_unknown_pole_is_a_404() {
 async fn shapes_feed_shapes_by_wire_id_beside_the_stores_missing_ids_listed() {
     let r = seeded().await;
     let id = FEED.shapes.wire_id("gzm:shA").unwrap_or_default();
-    let node = NodeClient::new(1);
-    let res = shapes::handle(&get("", &format!("ids={id},gzm:nope"), &[]), &node, |_| r.live.clone())
-        .await
-        .unwrap();
+    let res = shapes::handle(&get("", &format!("ids={id},gzm:nope"), &[]), bb(), |_| r.live.clone()).await;
     let cache = header(&res, "cache-control").unwrap_or_default();
     let body = json_of(res).await;
     let keys: Vec<&String> = body["shapes"].as_object().unwrap().keys().collect();
@@ -288,8 +283,7 @@ async fn every_branch_answers_503_retry_after_while_the_feed_loads() {
         assert_eq!(res.status(), 503);
         assert_eq!(header(&res, "retry-after").as_deref(), Some("10"));
     }
-    let node = NodeClient::new(1);
-    let res = trips::handle(&get("", "ids=gzm:tA", &[]), &node, live).await.unwrap();
+    let res = trips::handle(&get("", "ids=gzm:tA", &[]), bb(), live).await;
     assert_eq!(header(&res, "cache-control").as_deref(), Some("no-store"));
 }
 

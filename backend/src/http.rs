@@ -1,10 +1,6 @@
 //! server/http.ts: a trailing slash redirects, `/api` and `/api/*` go to the API, everything else to the static
-//! build. Owned mode (no Node child): Rust answers every API request with server/http.ts's route table, methods,
-//! OPTIONS/404/405/400/413/500 and HEAD. Proxy mode (a Node child, `App::new`): `crate::api::pick` chooses what Rust
-//! answers itself: GET/HEAD of every zbiorkom request (a list route with `?city=<zbiorkom slug>`, an id route with a
-//! zbiorkom id, the zbiorkom half of a mixed trips or shapes batch, whose other ids go to Node as a sub-request) and
-//! of /api/health (Node's BB health with Rust's "gzm"/"zb" blocks). The rest goes to the Node process on
-//! 127.0.0.1:KB_NODE_PORT, which owns BB, push, status, gtfs-rt, other methods, 404/405/OPTIONS/413.
+//! build. Every API request is answered here with server/http.ts's route table, methods, OPTIONS/404/405/400/413/500
+//! and HEAD.
 
 use std::convert::Infallible;
 use std::net::SocketAddr;
@@ -14,13 +10,10 @@ use bytes::Bytes;
 use http_body_util::{BodyExt, Full, combinators::BoxBody};
 use hyper::body::Incoming;
 use hyper::header::{ALLOW, CONNECTION, CONTENT_TYPE, HOST, HeaderMap, HeaderValue, LOCATION};
-use hyper::{Method, Request, Response, StatusCode, Uri, Version};
-use hyper_util::client::legacy::{Client, connect::HttpConnector};
-use hyper_util::rt::{TokioExecutor, TokioTimer};
+use hyper::{Method, Request, Response, StatusCode, Version};
 
 use crate::api;
 use crate::api_helpers::internal_error;
-use crate::logger;
 use crate::static_files::{Static, decode_uri_component};
 
 pub type Body = BoxBody<Bytes, hyper::Error>;
@@ -46,57 +39,11 @@ pub fn header_str(h: &HeaderMap, name: &str) -> Option<String> {
 
 pub struct App {
     pub statics: Static,
-    /// None = owned mode
-    proxy: Option<Proxy>,
-}
-
-struct Proxy {
-    node: Client<HttpConnector, Incoming>,
-    node_origin: String,
-    node_api: api::NodeClient,
-    /// false: a Node this process did not start, which owns the zbiorkom cities itself (no KB_ZB_REMOTE), so every
-    /// /api request goes to it as in stage 1 (main.rs no longer builds one; tests/api_front.rs does)
-    owns_zb: bool,
 }
 
 impl App {
-    /// Proxy mode: the API goes to the Node process on 127.0.0.1:`node_port`, but for what `api::pick` takes.
-    pub fn new(statics: Static, node_port: u16, owns_zb: bool) -> Self {
-        let node = Client::builder(TokioExecutor::new())
-            // under Node's 5 s keepAliveTimeout, so a pooled socket is never one Node is closing
-            .pool_idle_timeout(Duration::from_secs(4))
-            .pool_max_idle_per_host(64)
-            .pool_timer(TokioTimer::new())
-            .build_http();
-        App {
-            statics,
-            proxy: Some(Proxy {
-                node,
-                node_origin: format!("http://127.0.0.1:{node_port}"),
-                node_api: api::NodeClient::new(node_port),
-                owns_zb,
-            }),
-        }
-    }
-
-    /// Owned mode: no Node, Rust answers every API request.
     pub fn owned(statics: Static) -> Self {
-        App { statics, proxy: None }
-    }
-}
-
-/// Connection-scoped headers (RFC 9110 7.6.1): they describe one hop, never the next.
-pub(crate) fn strip_hop(h: &mut HeaderMap) {
-    for name in [
-        "connection",
-        "keep-alive",
-        "proxy-connection",
-        "transfer-encoding",
-        "te",
-        "trailer",
-        "upgrade",
-    ] {
-        h.remove(name);
+        App { statics }
     }
 }
 
@@ -123,41 +70,9 @@ pub async fn handle(app: &App, peer: SocketAddr, req: Request<Incoming>) -> Resu
     if path != "/api" && !path.starts_with("/api/") {
         return Ok(app.statics.serve(&req, path));
     }
-    let Some(px) = &app.proxy else {
-        let head = req.method() == Method::HEAD;
-        let res = owned(peer, req, path, &raw).await;
-        return Ok(if head { api::head_of(res).await } else { res });
-    };
-    if !px.owns_zb {
-        return Ok(proxy(px, peer, req, &raw).await);
-    }
-    // a Host new URL rejects: Node, which gets the same Host, answers 400 "Bad request" after its 404/405/400 checks;
-    // an HTTP/1.1 request without Host: Node's requireHostHeader answers 400 before any handler
-    let host_ok = req.version() != Version::HTTP_11 || req.headers().contains_key(HOST);
-    let Some(search) = url_search(req.headers(), &raw).filter(|_| host_ok) else {
-        return Ok(proxy(px, peer, req, &raw).await);
-    };
-    let _photon = match api::geocode::node_slot(req.method(), path, &search) {
-        Ok(slot) => slot,
-        Err(res) if req.method() == Method::HEAD => return Ok(api::head_of(res).await),
-        Err(res) => return Ok(res),
-    };
-    if let Some((route, param)) = api::pick(req.method(), path, &search) {
-        let mut headers = req.headers().clone();
-        forwarded_for(&mut headers, peer);
-        let api_req = api::ApiRequest {
-            param,
-            query: search,
-            headers,
-            method: Method::GET,
-            body: None,
-        };
-        let head = req.method() == Method::HEAD;
-        if let Some(res) = api::dispatch(&px.node_api, route, head, path, api_req).await {
-            return Ok(res);
-        }
-    }
-    Ok(proxy(px, peer, req, &raw).await)
+    let head = req.method() == Method::HEAD;
+    let res = owned(peer, req, path, &raw).await;
+    Ok(if head { api::head_of(res).await } else { res })
 }
 
 /// The most server/http.ts reads of a request body (push subscriptions are ~1 KB).
@@ -167,7 +82,7 @@ const MAX_BODY: usize = 64 * 1024;
 /// accept loop if a slow-header client ever matters.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
 
-/// server/http.ts `api()` in owned mode, its checks in its order; HEAD is the caller's (`head_of`).
+/// server/http.ts `api()`, its checks in its order; HEAD is the caller's (`head_of`).
 async fn owned(peer: SocketAddr, req: Request<Incoming>, path: &str, raw: &str) -> Response<Body> {
     // Node's requireHostHeader refuses an HTTP/1.1 request without Host before any handler
     if req.version() == Version::HTTP_11 && !req.headers().contains_key(HOST) {
@@ -267,34 +182,12 @@ fn url_search(h: &HeaderMap, raw: &str) -> Option<String> {
     )
 }
 
-/// As server/http.ts: a request with no proxy in front is keyed on its socket (lib/rate-limit.ts clientIp).
+/// As server/http.ts: a request without x-forwarded-for is keyed on its socket (lib/rate-limit.ts clientIp).
 fn forwarded_for(h: &mut HeaderMap, peer: SocketAddr) {
     if !h.contains_key("x-forwarded-for") {
         h.insert(
             "x-forwarded-for",
             HeaderValue::from_str(&peer.ip().to_string()).expect("ip is a header value"),
         );
-    }
-}
-
-async fn proxy(app: &Proxy, peer: SocketAddr, mut req: Request<Incoming>, raw: &str) -> Response<Body> {
-    let Ok(uri) = format!("{}{raw}", app.node_origin).parse::<Uri>() else {
-        return json(StatusCode::BAD_REQUEST, r#"{"error":"Bad request"}"#);
-    };
-    *req.uri_mut() = uri;
-    *req.version_mut() = Version::HTTP_11;
-    let h = req.headers_mut();
-    strip_hop(h);
-    forwarded_for(h, peer);
-    match app.node.request(req).await {
-        Ok(res) => {
-            let (mut parts, body) = res.into_parts();
-            strip_hop(&mut parts.headers);
-            Response::from_parts(parts, body.boxed())
-        }
-        Err(err) => {
-            logger::error("http", format_args!("api proxy: {err}"));
-            json(StatusCode::BAD_GATEWAY, r#"{"error":"Upstream request failed"}"#)
-        }
     }
 }

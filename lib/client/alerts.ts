@@ -5,7 +5,7 @@
  * StopView's board both stop in a hidden tab, an alert must not.
  * Platform ceiling: Chrome throttles a hidden tab's timers to about once a minute after 5 min, iOS
  * suspends JS in the background. So an alert also goes to the server as a web push subscription
- * (lib/push-alerts.ts), which fires it with the app closed; both fire under one tag, the later
+ * (backend/src/push_alerts.rs), which fires it with the app closed; both fire under one tag, the later
  * notification replaces the earlier one.
  */
 import { fetchJSON } from "@/lib/client/api";

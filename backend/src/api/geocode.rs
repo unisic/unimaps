@@ -1,13 +1,12 @@
 //! server/api/geocode/route.ts: streets, addresses and places within the city from Photon (KB_GEOCODER_URL), for a
-//! connection search from a point. Proxy mode answers the zbiorkom cities (Node the BB one), owned mode every city
-//! through the same memo and in-flight counter.
+//! connection search from a point, every city through the same memo and in-flight counter.
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 use std::time::Duration;
 
-use hyper::{Method, Response};
+use hyper::Response;
 use indexmap::IndexMap;
 use serde::Serialize;
 use serde_json::Value;
@@ -48,7 +47,7 @@ static MEMO: LazyLock<Mutex<IndexMap<String, (i64, Hits)>>> = LazyLock::new(Mute
 static IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
 
 /// One of the MAX_IN_FLIGHT Photon requests, given back on drop.
-pub struct Slot;
+struct Slot;
 
 impl Slot {
     fn take() -> Option<Self> {
@@ -144,44 +143,13 @@ fn search_text(query: &str) -> Option<String> {
     (3..=80).contains(&q.encode_utf16().count()).then_some(q)
 }
 
-/// A BB geocode that Node may send to Photon holds a slot until Node's answer arrives (Node has made its Photon
-/// request by then: the TS answer is one Response.json): the TS counter covered every city of one process, Node's
-/// now counts only BB. Err = the 429 the TS gives past MAX_IN_FLIGHT.
-/// ponytail: Node's memo is out of sight here, so while MAX_IN_FLIGHT geocodes are out a BB search Node would answer
-/// from it gets 429 too, and a refused one costs no per-IP tokens in Node; gone when stage 4 removes Node.
-pub fn node_slot(method: &Method, path: &str, query: &str) -> Result<Option<Slot>, Response<Body>> {
-    let photon = (method == Method::GET || method == Method::HEAD)
-        && path == "/api/geocode"
-        && GEOCODER_URL.is_some()
-        && matches!(parse_city(query), Ok(City::Bb))
-        && search_text(query).is_some();
-    if !photon {
-        return Ok(None);
-    }
-    Slot::take().map(Some).ok_or_else(too_many_requests)
-}
-
-/// GET /api/geocode?q=<address or place>&city=<zbiorkom slug>; None = a BB request (Node answers it).
-pub async fn get(req: &ApiRequest) -> Option<Response<Body>> {
+/// GET /api/geocode?q=<address or place>[&city=<slug>] of every city, BB included.
+pub async fn get_owned(req: &ApiRequest) -> Response<Body> {
     handle(req, &HttpZb).await
 }
 
-/// The route with Photon behind `photon` (HttpZb, or a stub in a test); None = a BB request.
-pub async fn handle<T: ZbTransport>(req: &ApiRequest, photon: &T) -> Option<Response<Body>> {
-    Some(match req.zb_city() {
-        Err(None) => return None,
-        Ok(slug) => search(req, photon, Ok(slug)).await,
-        Err(Some(res)) => search(req, photon, Err(res)).await,
-    })
-}
-
-/// Owned mode: GET /api/geocode?q=<address or place>[&city=<slug>] of every city, BB included.
-pub async fn get_owned(req: &ApiRequest) -> Response<Body> {
-    handle_owned(req, &HttpZb).await
-}
-
 /// `get_owned` with Photon behind `photon`.
-pub async fn handle_owned<T: ZbTransport>(req: &ApiRequest, photon: &T) -> Response<Body> {
+pub async fn handle<T: ZbTransport>(req: &ApiRequest, photon: &T) -> Response<Body> {
     let city = match parse_city(&req.query) {
         Ok(City::Bb) => Ok("bb"),
         Ok(City::Zb(slug)) => Ok(slug),

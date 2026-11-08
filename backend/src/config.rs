@@ -134,29 +134,9 @@ pub static PUBLIC_OSRM: LazyLock<bool> = LazyLock::new(|| {
         })
     })
 });
-/// Floor of OSRM_MIN_INTERVAL_MS on the public host while the Node sibling runs, for both processes (main.rs hands
-/// it to the child). ponytail: two processes share the public host's 1 req/s while KB_NODE_CMD starts Node; each
-/// keeps under half of it. Without Node (owned mode) the TS 1000 ms floor applies.
-pub const PUBLIC_OSRM_SHARED_MS: i64 = 2200;
-/// Minimum spacing between OSRM requests: on the public host at least PUBLIC_OSRM_SHARED_MS with a Node sibling
-/// (KB_NODE_CMD set), else 1000 ms as the TS.
-pub static OSRM_MIN_INTERVAL_MS: LazyLock<i64> = LazyLock::new(|| {
-    let node_sibling = std::env::var_os("KB_NODE_CMD").is_some_and(|v| !v.is_empty());
-    osrm_min_interval(
-        env_int("KB_OSRM_MIN_INTERVAL_MS", 1100, 250),
-        *PUBLIC_OSRM,
-        node_sibling,
-    )
-});
-
-fn osrm_min_interval(env_ms: i64, public: bool, node_sibling: bool) -> i64 {
-    let floor = match (public, node_sibling) {
-        (false, _) => 0,
-        (true, true) => PUBLIC_OSRM_SHARED_MS,
-        (true, false) => 1000,
-    };
-    env_ms.max(floor)
-}
+/// Minimum spacing between OSRM requests: at least 1000 ms on the public host.
+pub static OSRM_MIN_INTERVAL_MS: LazyLock<i64> =
+    LazyLock::new(|| env_int("KB_OSRM_MIN_INTERVAL_MS", 1100, 250).max(if *PUBLIC_OSRM { 1000 } else { 0 }));
 pub static OSRM_USER_AGENT: LazyLock<String> = LazyLock::new(|| env_str("KB_OSRM_USER_AGENT", &USER_AGENT));
 /// `KB_GEOCODER_URL` (a Photon API behind /api/geocode), None when `off` or blank.
 pub static GEOCODER_URL: LazyLock<Option<String>> = LazyLock::new(|| {
@@ -197,17 +177,3 @@ pub static ZB_API_URL: LazyLock<String> = LazyLock::new(|| {
 });
 pub static ZB_RESIDENT: LazyLock<i64> = LazyLock::new(|| env_int("KB_ZB_RESIDENT", 2, 1));
 pub static ZB_IDLE_MIN: LazyLock<i64> = LazyLock::new(|| env_int("KB_ZB_IDLE_MIN", 30, 1));
-
-#[cfg(test)]
-mod tests {
-    use super::osrm_min_interval;
-
-    #[test]
-    fn the_shared_osrm_floor_needs_a_node_sibling() {
-        assert_eq!(osrm_min_interval(1100, true, false), 1100);
-        assert_eq!(osrm_min_interval(250, true, false), 1000);
-        assert_eq!(osrm_min_interval(1100, true, true), 2200);
-        assert_eq!(osrm_min_interval(3000, true, true), 3000);
-        assert_eq!(osrm_min_interval(250, false, true), 250);
-    }
-}
