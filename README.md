@@ -1,193 +1,69 @@
 <div align="center">
 
-<img src="public/favicon.svg" width="160" height="160" alt="Unimaps" />
+<img src="public/favicon.svg" width="120" height="120" alt="Unimaps" />
 
 # Unimaps
 
-A live public transport map for Bielsko-Biała, Metropolia GZM and over 50 other Polish cities.
+Live public transport map for Bielsko-Biała, Metropolia GZM and 53 other Polish cities.
+
+**[map.unisic.app](https://map.unisic.app)**
 
 </div>
 
 <img width="1280" height="800" alt="Unimaps: live buses in Bielsko-Biała" src="docs/screenshot.png" />
 
-Operator portals show departures one stop at a time. Unimaps shows the whole
-fleet at once: every running vehicle with its delay, stop departure boards,
-trip timelines on road geometry and a journey planner. It also publishes a
-GTFS feed and a GTFS-Realtime feed.
-
-Unimaps runs as one Rust process (`backend/`, binary `unimaps`): it serves the
-map (a static Svelte 5 build), the JSON API and the feeds, and the pollers run
-in the same process. No separate scraper daemon and no database.
-
-## Features
-
-- Live positions every 4 to 5 s, with delays. KB delays are corrected from GPS
-  when upstream's stop index stalls behind the bus.
-- Departure boards and full timetables per stop. Nearby departures, departure
-  alerts, and favourite stops kept for offline use.
-- Trip timelines on road-following shapes, routed and stored on the server
-- Journey planner (range RAPTOR) from and to a stop, an address or your
-  location, leaving at or arriving by a time, with walking transfers between
-  stops up to 350 m apart
-- Line view: every stop pattern a line runs today, with each stop's departures
-- Light and dark theme, following the system setting by default
-- Fleet and brigade view at `/brygady`
-- Smooth motion (on by default, switchable) that dead-reckons buses along
-  their route between fixes, an installable PWA, and a `Ctrl+K` search for stops, lines and
-  vehicles
-
-## Cities
-
-| City | Operators | Sources |
-|---|---|---|
-| Bielsko-Biała | Komunikacja Beskidzka (KB), MZK Bielsko-Biała | KiedyPrzyjedzie (KB), OnTime (MZK), stops of both merged into one list |
-| Metropolia GZM | ZTM: buses, trams, trolleybuses | GTFS and positions, SDIP overlay every 5 s |
-| 53 other cities (`lib/shared/cities.json`: Warsaw, Kraków, Łódź, Wrocław, Poznań, Tricity, Szczecin, Lublin, …) | the local operator of each | GTFS and positions |
-
-On first visit the map asks for a city and remembers it. `?city=<slug>` opens a city (`gzm`, `warsaw`, `krakow`, …).
-The cities are isolated: a GZM or other-city failure never touches Bielsko-Biała data. The other cities are
-loaded on first request and only while watched: at most `KB_ZB_RESIDENT` timetables stay in memory, each
-dropped after `KB_ZB_IDLE_MIN` minutes without a request; their positions are polled only while a page asks.
-They have no fleet history, SDIP overlay or announcements.
+Every running vehicle with its delay, stop departure boards, trip timelines on road geometry and a journey
+planner. One Rust process (`backend/`, binary `unimaps`) serves the map (a static Svelte 5 build), the JSON API
+and a GTFS-Realtime feed, and runs the pollers. No database.
 
 ## Run
 
-Requires Node.js 24 or newer (frontend build and dev server) and Rust 1.88 or
-newer (the server).
+Needs Node.js 24+ (frontend build) and Rust 1.95+.
 
 ```bash
-git clone https://github.com/unisic/unimaps.git
-cd unimaps
 npm install
-npm run dev          # map on http://localhost:8080 (Vite), API + pollers on 127.0.0.1:8081
+npm run dev                      # map on :8080 (Vite), API on 127.0.0.1:8081
 ```
-
-`npm run dev` runs the server with `cargo run` and proxies `/api` to it from
-Vite. A server-side edit needs a restart.
 
 Production:
 
 ```bash
-npm run build        # static frontend in out/ (precompressed)
-npm start            # cargo run --release: map + API on port 8080 (PORT, HOST), serving ./out
+npm run build && npm start       # map + API on :8080
+docker compose up -d --build     # the same in a container: static binary + out/
 ```
 
-The release binary (`backend/target/release/unimaps`) needs no Node.js at run
-time; point `KB_STATIC_DIR` at the `out/` directory when it runs elsewhere.
+Checks: `npm run typecheck && npm run lint && npm test`, and in `backend/`:
+`cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test`.
 
-Docker:
-
-```bash
-docker compose up -d --build
-```
-
-The image holds the static `unimaps` binary and `out/`, nothing else. It
-listens on 8080 and serves the frontend and the API; `unimaps healthcheck` is
-the container healthcheck.
-
-The healthcheck marks the container `unhealthy` when the scan loop stalls or
-upstream goes stale (`/api/health` answers 503). `restart: unless-stopped`
-acts only on process exit, so point an uptime monitor at `/api/health`.
-
-Checks: `npm run typecheck`, `npm run lint`, `npm test`; in `backend/`:
-`cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`.
+Settings are optional `KB_*` environment variables, all listed in `.env.example`. Generated state (GTFS
+feeds, road shapes, fleet history) lives in `output/`.
 
 ## API
 
 | Endpoint | |
 |---|---|
-| `/api/vehicles` | Live vehicles with delay, heading, route shape and along-route distance |
-| `/api/gtfs-rt.pb` | GTFS-Realtime `VehiclePositions` (Bielsko-Biała) |
-| `/api/stops` | Merged stop list with direction arrows, `ETag` + 304 |
-| `/api/stop/:id/departures` | Live and scheduled departures |
-| `/api/stop/:id/timetable` | Full day timetable |
-| `/api/trip/:id`, `/api/trip_execution`, `/api/trips` | Trip timelines |
-| `/api/connections?from=&to=` | Journey planner; `from=` / `to=geo:LAT,LON` starts or ends at every stop within `walk` metres (200 to 1500, default 800); `time=HH:MM&arriveBy=true` makes `time` the latest arrival |
-| `/api/geocode?q=` | Street, address and place search within the city (Photon, OpenStreetMap) |
-| `/api/push` | Web push for departure alerts: `GET` the VAPID key, `POST {subscription, alert}`, `DELETE {subscription, key}` (`KB_PUSH=0` = 404) |
-| `/api/push/news` | Web push for new announcements: `POST` / `DELETE {subscription, city}` |
-| `/api/lines` | Line catalogue |
-| `/api/line?name=` | One line's stop patterns and per-stop departures for a day (`op=KB\|MZK`, `date=YYYY-MM-DD`) |
-| `/api/shapes?ids=` | Stored road geometry, immutable-cached |
-| `/api/fleet`, `/api/fleet/:side`, `/api/fleet/:side/history`, `/api/fleet/timeline` | Fleet and brigades; `history` = the vehicle's courses on past days (MZK 28, GZM 14) |
-| `/api/announcements` | Service announcements: KB + MZK, or the ZTM news page for `?city=gzm` |
-| `/api/health` | Status, scan counters, feed age, shape store |
-| `/api/status` | Whether each city's live data is flowing (the `/status` page) |
+| `/api/vehicles` | live vehicles with delays |
+| `/api/gtfs-rt.pb` | GTFS-Realtime VehiclePositions (Bielsko-Biała) |
+| `/api/stops` | stop list |
+| `/api/stop/:id/departures`, `/api/stop/:id/timetable` | departures, day timetable |
+| `/api/connections?from=&to=` | journey planner |
+| `/api/health` | status and scan counters |
 
-List endpoints take `?city=<slug>` (`gzm`, `warsaw`, …); without it they answer for Bielsko-Biała.
-Ids of those cities carry the slug as prefix (`gzm:<stop_id>`, `gzm:<trip_id>`,
-`gzm:<operator>_<fleet>`; `warsaw:<stop_id>`, `warsaw:<type>_<vehicle id>`). While a feed loads, its endpoints answer 503
-with `Retry-After: 10`.
-
-## Configuration
-
-All settings are optional `KB_*` environment variables, read once at start.
-`.env.example` documents every one. The ones you are most likely to touch:
-
-| Variable | Default | |
-|---|---|---|
-| `KB_OSRM_URL` | `https://router.project-osrm.org/route/v1/driving` | `off` disables server-side road routing |
-| `KB_OSRM_MIN_INTERVAL_MS` | `1100` | at least 1000 on the public OSRM host |
-| `KB_GEOCODER_URL` | `https://photon.komoot.io/api/` | `off` disables the address search |
-| `KB_USER_AGENT` | `unimaps/2.0 (+https://github.com/unisic/unimaps)` | sent to every upstream |
-| `KB_GPS_DELAY` | `1` | `0` keeps upstream's raw KB delay |
-| `KB_GZM` | `1` | `0` switches Metropolia GZM off |
-| `KB_GZM_SDIP` | `1` | `0` disables the SDIP position overlay |
-| `KB_GZM_NEWS_URL` | `https://rj.transportgzm.pl/v2/news/` | ZTM news page scraped as GZM announcements, `off` disables |
-| `KB_ZB` | `1` | `0` switches the other cities off (404) |
-| `KB_ZB_API_URL` | `https://api.zbiorkom.live/api6-open` | feed API root of the other cities (`<slug>/gtfs/default`, `<slug>/positions/<bbox>`) |
-| `KB_ZB_RESIDENT` | `2` | how many of those cities keep their timetable in memory at once (25-60 MB each, LRU) |
-| `KB_ZB_IDLE_MIN` | `30` | minutes without a request after which a city's timetable is dropped |
-
-Generated state lives in `output/` (Docker volume `kb-output`): the static
-GTFS feed, road shapes, learned stop directions and fleet history. Delete a
-file to rebuild it.
-
-## Static GTFS
-
-The server rebuilds the Bielsko-Biała GTFS feed every night. To build it by
-hand:
-
-```bash
-npm run build:gtfs -- --date 2026-11-02 --out output/gtfs
-```
-
-Flags: `--date YYYY-MM-DD` (default today), `--out DIR`, `--concurrency N`,
-`--no-zip`, `--single-day`. Output is written atomically, including
-`kb_gtfs.zip`. This is `unimaps build-gtfs`; it reads no `.env` file.
-
-## Vehicle photos and specs
-
-The fleet cards (GZM and MZK Bielsko-Biała) show each vehicle's photos and
-technical data from [phototrans.eu](https://phototrans.eu). phototrans refuses
-datacenter IPs, so the server never contacts it: the data lives in
-`lib/phototrans.json`, which is compiled into the server binary, and the browser
-loads each thumbnail from phototrans itself. To refresh it, run this from a home
-connection (one page per second, ~1700 pages, ~30 min) and commit the file:
-
-```bash
-npm run build:phototrans
-```
-
-Flags: `--photos N` (newest photos per vehicle, default 5), `--cache DIR`
-(pages of an interrupted run, resumed the same day).
+List endpoints take `?city=<slug>` (`gzm`, `warsaw`, …, see `lib/shared/cities.json`); without it they answer
+for Bielsko-Biała. Every route is in `backend/src/api/mod.rs`.
 
 ## Data
 
-Unimaps is an independent project, not affiliated with any operator. Data
-comes from:
+Independent project, not affiliated with any operator.
 
 - Komunikacja Beskidzka: [komunikacjabeskidzka.kiedyprzyjedzie.pl](https://komunikacjabeskidzka.kiedyprzyjedzie.pl)
 - MZK Bielsko-Biała: [rozklady.bielsko.pl](https://rozklady.bielsko.pl)
 - Metropolia GZM: ZTM / Metropolia GZM (CC BY), plus SDIP
-- Other cities: each operator's GTFS and vehicle positions (`output/gzm/<slug>/gtfs.zip`)
-- Map: © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors, tiles by [OpenFreeMap](https://openfreemap.org)
-- Road routing: [OSRM](https://project-osrm.org)
-- Vehicle photos and specs: [phototrans.eu](https://phototrans.eu), each photo credited to its author
+- Other cities: each operator's GTFS and vehicle positions, via zbiorkom
+- Map: © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors, tiles by [OpenFreeMap](https://openfreemap.org); routing: [OSRM](https://project-osrm.org)
+- Vehicle photos: [phototrans.eu](https://phototrans.eu), each credited to its author
 
-`/prywatnosc` (Polish) states what the app handles: the IP only in memory for
-rate limiting, coordinates only for a journey search, a push subscription only
-while one of its alerts is pending, everything else in the browser.
+What the app keeps about you: `/prywatnosc` (Polish).
 
 ## License
 
