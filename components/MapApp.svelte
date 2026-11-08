@@ -42,6 +42,7 @@
   import AnnouncementsSheet from "@/components/AnnouncementsSheet.svelte";
   import CitySheet from "@/components/CitySheet.svelte";
   import ConnectionsModal from "@/components/ConnectionsModal.svelte";
+  import RustNotice from "@/components/RustNotice.svelte";
   import Toast from "@/components/Toast.svelte";
   import LineFilterChip from "@/components/LineFilterChip.svelte";
   import LocateButton from "@/components/LocateButton.svelte";
@@ -1541,6 +1542,8 @@
   {#if toast}
     <Toast text={toast} onClose={closeToast} />
   {/if}
+
+  <RustNotice />
 
   <!-- the fleet card (charts and all) loads only when a vehicle card is first opened -->
   {#if cardSide}
