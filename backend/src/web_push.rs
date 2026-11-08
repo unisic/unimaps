@@ -14,9 +14,9 @@ use aes_gcm::aead::{AeadInPlace as _, KeyInit as _};
 use hkdf::Hkdf;
 use p256::ecdsa::signature::Signer as _;
 use p256::ecdsa::{Signature, SigningKey};
-use p256::elliptic_curve::sec1::ToEncodedPoint as _;
+use p256::elliptic_curve::Generate as _;
+use p256::elliptic_curve::sec1::ToSec1Point as _;
 use p256::{PublicKey, SecretKey};
-use rand_core::{OsRng, RngCore as _};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::Sha256;
@@ -116,17 +116,10 @@ pub fn encrypt_payload(
     let ua = ua_point(ua_public)?;
     let sk = match fixed {
         Some((d, _)) => SecretKey::from_slice(d).ok()?,
-        None => SecretKey::random(&mut OsRng),
+        None => SecretKey::generate(),
     };
-    let salt = fixed.map_or_else(
-        || {
-            let mut s = [0u8; 16];
-            OsRng.fill_bytes(&mut s);
-            s
-        },
-        |f| f.1,
-    );
-    let as_public = sk.public_key().to_encoded_point(false);
+    let salt = fixed.map_or_else(<[u8; 16]>::generate, |f| f.1);
+    let as_public = sk.public_key().to_sec1_point(false);
     let shared = p256::ecdh::diffie_hellman(sk.to_nonzero_scalar(), ua.as_affine());
     let key_info = [b"WebPush: info\0".as_slice(), ua_public, as_public.as_bytes()].concat();
     let mut ikm = [0u8; 32];
@@ -162,9 +155,11 @@ pub struct Vapid {
 pub fn vapid_keys(dir: &Path) -> io::Result<Vapid> {
     let file = dir.join("vapid.json");
     let sk = match fs::read_to_string(&file) {
-        Ok(s) => SecretKey::from_jwk_str(&s).map_err(|e| io::Error::other(format!("{}: {e}", file.display())))?,
+        Ok(s) => {
+            from_jwk(&s).ok_or_else(|| io::Error::other(format!("{}: not a P-256 private JWK", file.display())))?
+        }
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
-            let sk = SecretKey::random(&mut OsRng);
+            let sk = SecretKey::generate();
             fs::create_dir_all(dir)?;
             let tmp = dir.join("vapid.json.tmp");
             let mut f = OpenOptions::new()
@@ -173,18 +168,45 @@ pub fn vapid_keys(dir: &Path) -> io::Result<Vapid> {
                 .truncate(true)
                 .mode(0o600)
                 .open(&tmp)?;
-            f.write_all(sk.to_jwk_string().as_bytes())?;
+            f.write_all(to_jwk(&sk).as_bytes())?;
             f.sync_all()?;
             fs::rename(&tmp, &file)?;
             sk
         }
         Err(e) => return Err(e),
     };
-    let public = js::to_base64url(sk.public_key().to_encoded_point(false).as_bytes());
+    let public = js::to_base64url(sk.public_key().to_sec1_point(false).as_bytes());
     Ok(Vapid {
         key: SigningKey::from(&sk),
         public,
     })
+}
+
+/// RFC 7518 §6.2 EC private key, the shape Node's `KeyObject.export({ format: "jwk" })` writes. The public x, y
+/// must be d's own point, as p256 0.13's `from_jwk_str` checked.
+fn from_jwk(s: &str) -> Option<SecretKey> {
+    let v: Value = serde_json::from_str(s).ok()?;
+    let field = |k: &str| v.get(k)?.as_str();
+    if field("kty")? != "EC" || field("crv")? != "P-256" {
+        return None;
+    }
+    let part = |k: &str| Some(js::buffer_from_base64(field(k)?)).filter(|b| b.len() == 32);
+    let sk = SecretKey::from_slice(&part("d")?).ok()?;
+    let xy = [part("x")?, part("y")?].concat();
+    (sk.public_key().to_sec1_point(false).as_bytes()[1..] == xy[..]).then_some(sk)
+}
+
+fn to_jwk(sk: &SecretKey) -> String {
+    let p = sk.public_key().to_sec1_point(false);
+    let b = p.as_bytes();
+    json!({
+        "kty": "EC",
+        "x": js::to_base64url(&b[1..33]),
+        "y": js::to_base64url(&b[33..]),
+        "crv": "P-256",
+        "d": js::to_base64url(&sk.to_bytes()),
+    })
+    .to_string()
 }
 
 /// `vapidAuth`: RFC 8292 `Authorization` for the endpoint's origin, valid 12 h. None for an unparsable endpoint.

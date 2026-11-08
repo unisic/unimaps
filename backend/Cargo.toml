@@ -2,8 +2,8 @@
 name = "unimaps"
 version = "0.1.0"
 edition = "2024"
-# let chains in `if let ... && let`
-rust-version = "1.88"
+# AtomicUsize::try_update (let chains need 1.88)
+rust-version = "1.95"
 
 [dependencies]
 aes-gcm = "0.10.3"
@@ -22,8 +22,7 @@ icu_properties = { version = "2.4.0", default-features = false, features = ["com
 indexmap = { version = "2.14.2", features = ["serde"] }
 jiff = { version = "0.2.39", features = ["tzdb-bundle-always"] }
 libc = "0.2"
-p256 = { version = "0.13.2", default-features = false, features = ["ecdh", "ecdsa", "jwk", "std"] }
-rand_core = { version = "0.6.4", features = ["getrandom"] }
+p256 = { version = "0.14.0", default-features = false, features = ["ecdh", "ecdsa", "getrandom", "std"] }
 # brotli, gzip, deflate: Node's fetch asks for and decodes them (zbiorkom answers ~8.6x smaller)
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider", "brotli", "gzip", "deflate"] }
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12", "logging"] }

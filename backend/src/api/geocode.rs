@@ -52,7 +52,7 @@ struct Slot;
 impl Slot {
     fn take() -> Option<Self> {
         IN_FLIGHT
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
                 (n < MAX_IN_FLIGHT).then_some(n + 1)
             })
             .ok()

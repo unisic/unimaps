@@ -9,9 +9,9 @@ use aes_gcm::aead::{AeadInPlace as _, KeyInit as _};
 use hkdf::Hkdf;
 use p256::ecdsa::signature::Verifier as _;
 use p256::ecdsa::{Signature, VerifyingKey};
-use p256::elliptic_curve::sec1::ToEncodedPoint as _;
+use p256::elliptic_curve::Generate as _;
+use p256::elliptic_curve::sec1::ToSec1Point as _;
 use p256::{PublicKey, SecretKey};
-use rand_core::OsRng;
 use serde_json::Value;
 use sha2::Sha256;
 use unimaps::js::{buffer_from_base64 as b, to_base64url};
@@ -41,8 +41,8 @@ fn rfc8291_section5_byte_for_byte() {
 /// The browser's side of RFC 8291: what a fresh random key and salt produce must decrypt.
 #[test]
 fn random_sender_key_decrypts() {
-    let ua_sk = SecretKey::random(&mut OsRng);
-    let ua_pub = ua_sk.public_key().to_encoded_point(false);
+    let ua_sk = SecretKey::generate();
+    let ua_pub = ua_sk.public_key().to_sec1_point(false);
     let auth = [7u8; 16];
     let msg = br#"{"title":"Linia 27","body":"za 3 min"}"#;
     let c = encrypt_payload(ua_pub.as_bytes(), &auth, msg, None).unwrap();
