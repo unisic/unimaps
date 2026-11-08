@@ -11,7 +11,7 @@ const NAMES = [
   "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowsClockwise", "ArrowsDownUp", "ArrowsHorizontal", "ArrowsLeftRight",
   "Bell", "Briefcase", "Bug", "Bus", "CalendarBlank", "Cards", "CaretDown", "CaretLeft", "CaretRight", "CaretUp",
   "Check", "Clock", "Crosshair", "DotsThreeVertical", "DownloadSimple", "Drop", "Eye", "EyeSlash", "Flag",
-  "FunnelSimpleX", "GpsFix", "GpsSlash", "HandWaving", "House", "Info", "Leaf", "Lightning", "MagnifyingGlass",
+  "FunnelSimpleX", "GpsFix", "GpsSlash", "HandWaving", "Heart", "House", "Info", "Leaf", "Lightning", "MagnifyingGlass",
   "MapPin", "MapTrifold", "MegaphoneSimple", "Moon", "NavigationArrow", "Path", "PersonSimpleWalk", "RssSimple",
   "ShareNetwork", "ShieldCheck", "SlidersHorizontal", "Snowflake", "Star", "Subway", "Sun", "Ticket", "Tram",
   "WarningCircle", "Wheelchair", "X", "XCircle",

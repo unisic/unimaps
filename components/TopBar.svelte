@@ -43,6 +43,7 @@
     BugIcon,
     CardsIcon,
     DownloadSimpleIcon,
+    HeartIcon,
     MegaphoneSimpleIcon,
     MoonIcon,
     NavigationArrowIcon,
@@ -92,6 +93,7 @@
   }: TopBarProps = $props();
 
   const OP_DOT = { kb: "bg-kb", mzk: "bg-mzk", gzm: "bg-gzm" } as const;
+  const SUPPORT_URL = "https://buymeacoffee.com/unisic";
 
   const OPERATOR_OPTIONS: { id: "all" | "kb" | "mzk"; label: string; title?: string }[] = [
     { id: "all", label: "Wszyscy" },
@@ -337,6 +339,16 @@
           </span>
         </div>
       {/if}
+      <a
+        href={SUPPORT_URL}
+        target="_blank"
+        rel="noopener"
+        class="group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-text transition-colors hover:bg-tint/5"
+      >
+        <Icon icon={HeartIcon} weight="fill" class="text-[17px] text-kb" />
+        <span class="flex-1">Wesprzyj Unimaps</span>
+        {@render arrow()}
+      </a>
       <a
         href="https://github.com/unisic/unimaps/issues/new"
         target="_blank"
