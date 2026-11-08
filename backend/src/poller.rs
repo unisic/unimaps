@@ -65,7 +65,7 @@ pub fn row_departure_secs(row: &UpstreamRecord) -> Option<f64> {
 }
 
 /// JS `Number(v)` of a non-null JSON value.
-fn js_number_of(v: &Value) -> f64 {
+pub(crate) fn js_number_of(v: &Value) -> f64 {
     match v {
         Value::Number(n) => n.as_f64().unwrap_or(f64::NAN),
         Value::String(s) => js::number(s),
@@ -1479,6 +1479,31 @@ impl<S: KbSource> LivePoller<S> {
 }
 
 impl<S: KbSource + 'static> LivePoller<S> {
+    /// `addCandidates`: the positions of the exec ids not tracked yet, fetched in a background task (a departures
+    /// board saw them before the next scan). Outside a tokio runtime nothing is fetched.
+    pub fn add_candidates(self: &Arc<Self>, eids: &[String]) {
+        let needed: Vec<String> = {
+            let st = self.state();
+            eids.iter()
+                .filter(|eid| !eid.is_empty() && !st.positions.contains_key(eid.as_str()))
+                .cloned()
+                .collect()
+        };
+        if needed.is_empty() || tokio::runtime::Handle::try_current().is_err() {
+            return;
+        }
+        let me = Arc::clone(self);
+        let fetch = tokio::spawn(async move { me.fetch_positions(&needed).await });
+        tokio::spawn(async move {
+            if let Err(e) = fetch.await
+                && e.is_panic()
+            {
+                let msg = panic_msg(&*e.into_panic());
+                logger::error(TAG, format!("addCandidates background fetch failed: {msg}"));
+            }
+        });
+    }
+
     /// `start`: load the stops and spawn the supervised loop (no-op while running). Err = the stop fetch failed,
     /// or no stop list at all ("poller start failed: upstream returned an empty stop list").
     pub async fn start(self: &Arc<Self>) -> Result<(), String> {

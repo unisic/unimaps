@@ -14,7 +14,7 @@ use crate::config;
 use crate::fetch::string_err;
 use crate::gzm::{HttpZb, NowFn, ZbTransport};
 use crate::js;
-use crate::kb_api::js_json_parse;
+use crate::kb_api::{NOT_PROVIDED, js_json_parse};
 use crate::logger;
 
 /// A getRunningVehicles.json record (lineName, courseLoid, vehicleId, delaySec, latitude, longitude, angle,
@@ -108,12 +108,38 @@ impl State {
     }
 }
 
-/// What `MzkPoller` calls on its upstream client (the TS tests fake exactly these methods).
+/// What `MzkPoller`, the BB services and routes call on the OnTime client. The first four are what the poller needs
+/// (the TS tests fake exactly these); the rest default to `Err(NOT_PROVIDED)` so a fake overrides only what its test
+/// uses.
 pub trait MzkSource: Send + Sync {
     fn fetch_running_vehicles(&self) -> impl Future<Output = Result<Vec<MzkRunningVehicle>, String>> + Send;
     fn fetch_vehicles(&self) -> impl Future<Output = Result<Vec<Value>, String>> + Send;
     fn fetch_stops(&self) -> impl Future<Output = Result<Vec<MzkStopPoint>, String>> + Send;
     fn fetch_lines(&self) -> impl Future<Output = Result<Vec<MzkLine>, String>> + Send;
+
+    fn fetch_realtime(&self, _symbol: &str) -> impl Future<Output = Result<Arc<MzkRealtimeResponse>, String>> + Send {
+        async { Err(NOT_PROVIDED.to_owned()) }
+    }
+    fn fetch_messages(&self) -> impl Future<Output = Result<Vec<MzkMessage>, String>> + Send {
+        async { Err(NOT_PROVIDED.to_owned()) }
+    }
+    fn fetch_real_course(&self, _course_id: f64) -> impl Future<Output = Result<Value, String>> + Send {
+        async { Err(NOT_PROVIDED.to_owned()) }
+    }
+    fn fetch_atomic_schedule(
+        &self,
+        _symbol: &str,
+        _date: Option<&str>,
+        _cache: bool,
+    ) -> impl Future<Output = Result<Arc<MzkAtomicScheduleResponse>, String>> + Send {
+        async { Err(NOT_PROVIDED.to_owned()) }
+    }
+    fn fetch_calendar(&self) -> impl Future<Output = Result<Vec<MzkCalendarDay>, String>> + Send {
+        async { Err(NOT_PROVIDED.to_owned()) }
+    }
+    fn fetch_theoretical_course(&self, _variant_id: f64) -> impl Future<Output = Result<Value, String>> + Send {
+        async { Err(NOT_PROVIDED.to_owned()) }
+    }
 }
 
 /// The OnTime client: realtime and day schedules cached with in-flight sharing, everything else straight through.
@@ -123,6 +149,20 @@ pub struct MzkApi<T: ZbTransport = HttpZb> {
     transport: Arc<T>,
     now: NowFn,
     state: Arc<Mutex<State>>,
+}
+
+/// A handle on the same client: the caches and the transport are shared (the singleton's poller and routes use one
+/// MzkApi, as the TS does).
+impl<T: ZbTransport> Clone for MzkApi<T> {
+    fn clone(&self) -> Self {
+        Self {
+            base_url: self.base_url.clone(),
+            timeout: self.timeout,
+            transport: Arc::clone(&self.transport),
+            now: Arc::clone(&self.now),
+            state: Arc::clone(&self.state),
+        }
+    }
 }
 
 fn lock(state: &Mutex<State>) -> MutexGuard<'_, State> {
@@ -342,6 +382,35 @@ impl<T: ZbTransport + Send + Sync + 'static> MzkSource for MzkApi<T> {
 
     fn fetch_lines(&self) -> impl Future<Output = Result<Vec<MzkLine>, String>> + Send {
         MzkApi::fetch_lines(self)
+    }
+
+    fn fetch_realtime(&self, symbol: &str) -> impl Future<Output = Result<Arc<MzkRealtimeResponse>, String>> + Send {
+        MzkApi::fetch_realtime(self, symbol)
+    }
+
+    fn fetch_messages(&self) -> impl Future<Output = Result<Vec<MzkMessage>, String>> + Send {
+        MzkApi::fetch_messages(self)
+    }
+
+    fn fetch_real_course(&self, course_id: f64) -> impl Future<Output = Result<Value, String>> + Send {
+        MzkApi::fetch_real_course(self, course_id)
+    }
+
+    fn fetch_atomic_schedule(
+        &self,
+        symbol: &str,
+        date: Option<&str>,
+        cache: bool,
+    ) -> impl Future<Output = Result<Arc<MzkAtomicScheduleResponse>, String>> + Send {
+        MzkApi::fetch_atomic_schedule(self, symbol, date, cache)
+    }
+
+    fn fetch_calendar(&self) -> impl Future<Output = Result<Vec<MzkCalendarDay>, String>> + Send {
+        MzkApi::fetch_calendar(self)
+    }
+
+    fn fetch_theoretical_course(&self, variant_id: f64) -> impl Future<Output = Result<Value, String>> + Send {
+        MzkApi::fetch_theoretical_course(self, variant_id)
     }
 }
 

@@ -33,6 +33,23 @@ fn in_output(name: &str) -> String {
 pub static BASE_URL: LazyLock<String> =
     LazyLock::new(|| env_str("KB_BASE_URL", "https://komunikacjabeskidzka.kiedyprzyjedzie.pl"));
 pub static AGENCY_TIMEZONE: LazyLock<String> = LazyLock::new(|| env_str("KB_AGENCY_TIMEZONE", "Europe/Warsaw"));
+pub static AGENCY_NAME: LazyLock<String> = LazyLock::new(|| env_str("KB_AGENCY_NAME", "Komunikacja Beskidzka S.A."));
+pub static AGENCY_ID: LazyLock<String> = LazyLock::new(|| env_str("KB_AGENCY_ID", "KB"));
+pub static AGENCY_URL: LazyLock<String> =
+    LazyLock::new(|| env_str("KB_AGENCY_URL", "https://komunikacjabeskidzka.kiedyprzyjedzie.pl"));
+pub static AGENCY_LANG: LazyLock<String> = LazyLock::new(|| env_str("KB_AGENCY_LANG", "pl"));
+
+/// `routeTypeFor`: an upstream line type as a GTFS route_type.
+pub fn route_type_for(line_type: Option<&str>) -> u8 {
+    match line_type.unwrap_or("").to_lowercase().as_str() {
+        "tram" => 0,
+        "rail" | "train" => 2,
+        "metro" | "subway" => 1,
+        "ferry" => 4,
+        "trolleybus" | "trolley" => 11,
+        _ => 3,
+    }
+}
 pub static DEFAULT_STOPS_REVISION: LazyLock<String> = LazyLock::new(|| env_str("KB_STOPS_REVISION", "6829"));
 /// HTTP timeout in seconds (aiohttp "total" equivalent).
 pub static HTTP_TIMEOUT: LazyLock<i64> = LazyLock::new(|| env_int("KB_HTTP_TIMEOUT", 20, 1));
@@ -56,8 +73,15 @@ pub static LIVE_STALE_VEHICLE_SEC: LazyLock<i64> = LazyLock::new(|| env_int("KB_
 pub static LIVE_STALE_MOVE_EPS_M: LazyLock<i64> = LazyLock::new(|| env_int("KB_STALE_MOVE_EPS_M", 15, 0));
 /// GPS correction of the KB live delay (lib/kb-progress.ts); KB_GPS_DELAY=0 keeps upstream's value.
 pub static GPS_DELAY: LazyLock<bool> = LazyLock::new(|| env_str("KB_GPS_DELAY", "1") != "0");
+/// No good upstream poll for this long = degraded health (above the 600 s overnight all-cached window).
+pub static HEALTH_STALE_SEC: LazyLock<i64> = LazyLock::new(|| env_int("KB_HEALTH_STALE_SEC", 1200, 1));
 /// How often the poller re-fetches the stop list; a failed reload keeps the old list and retries in 30 min.
 pub static STOPS_RELOAD_SEC: LazyLock<i64> = LazyLock::new(|| env_int("KB_STOPS_RELOAD_SEC", 86_400, 1));
+/// In-process daily GTFS feed rebuild; "0" disables it.
+pub static GTFS_AUTOBUILD: LazyLock<bool> = LazyLock::new(|| env_str("KB_GTFS_AUTOBUILD", "1") != "0");
+/// Agency-local hour after which the daily rebuild may run.
+pub static GTFS_BUILD_HOUR: LazyLock<i64> = LazyLock::new(|| env_int("KB_GTFS_BUILD_HOUR", 3, 0));
+pub static GTFS_BUILD_CONCURRENCY: LazyLock<i64> = LazyLock::new(|| env_int("KB_GTFS_BUILD_CONCURRENCY", 10, 1));
 pub static GZM_ENABLED: LazyLock<bool> = LazyLock::new(|| env_int("KB_GZM", 1, 0) != 0);
 pub static ZB_ENABLED: LazyLock<bool> = LazyLock::new(|| env_int("KB_ZB", 1, 0) != 0);
 
@@ -73,8 +97,15 @@ pub static MZK_TIMETABLE_FILE: LazyLock<String> =
 /// MZK stop bearings learned from running courses (lib/mzk-stop-dirs.ts).
 pub static MZK_STOP_DIRS_FILE: LazyLock<String> =
     LazyLock::new(|| env_str("KB_MZK_STOP_DIRS_FILE", &in_output("mzk-stop-dirs.v1.json")));
+/// Road shapes older than this are re-routed gradually (one per 2 min).
+pub static SHAPES_MAX_AGE_DAYS: LazyLock<i64> = LazyLock::new(|| env_int("KB_SHAPES_MAX_AGE_DAYS", 14, 1));
+/// Persisted shape store (outside output/gtfs, which the builder swaps atomically).
+pub static SHAPES_FILE: LazyLock<String> =
+    LazyLock::new(|| env_str("KB_SHAPES_FILE", &in_output("shapes/route-shapes.v1.json")));
 
-/// Web push: the VAPID pair and pending alerts; the subject is the contact push services see (mailto: or https:).
+/// Web push: `KB_PUSH=0` turns it off (/api/push and /api/push/news answer 404, boot arms no push tick).
+/// The VAPID pair and pending alerts live in PUSH_DIR; the subject is the contact push services see (mailto: or https:).
+pub static PUSH_ENABLED: LazyLock<bool> = LazyLock::new(|| env_int("KB_PUSH", 1, 0) != 0);
 pub static PUSH_DIR: LazyLock<String> = LazyLock::new(|| env_str("KB_PUSH_DIR", &in_output("push")));
 pub static PUSH_SUBJECT: LazyLock<String> =
     LazyLock::new(|| env_str("KB_PUSH_SUBJECT", "https://github.com/unisic/unimaps"));

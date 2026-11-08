@@ -113,10 +113,10 @@ pub fn exec_id_path_segment(trip_execution_id: &str) -> String {
 // ponytail: an overflowing literal (V8: Infinity) is null here, so it re-serves as JSON.stringify's null but
 // reads as null, not Infinity; an integral double >= 2^64 and a fraction in [1e-6, 1e-5) keep serde_json's form
 pub fn js_json_parse(text: &str) -> Result<Value, String> {
-    let mut v: Value = serde_json::from_str(text)
+    let mut v: Value = crate::js::json_parse(text)
         .or_else(|e| {
             overflow_to_null(text)
-                .and_then(|t| serde_json::from_str(&t).ok())
+                .and_then(|t| crate::js::json_parse(&t).ok())
                 .ok_or(e)
         })
         .map_err(|e| format!("SyntaxError: {e}"))?;
@@ -311,7 +311,12 @@ fn scrape_revision(html: &str) -> Option<String> {
     })
 }
 
-/// What `LivePoller` calls on its upstream client (the TS tests fake exactly these methods).
+/// The error of a source method a fake leaves out (the TS tests cast partial objects).
+pub const NOT_PROVIDED: &str = "not provided by this source";
+
+/// What `LivePoller`, the BB services and routes call on a KB upstream client. The first four are what the poller
+/// needs (the TS tests fake exactly these); the rest default to `Err(NOT_PROVIDED)` so a fake overrides only what
+/// its test uses. `fetchMany` is not here: it never touches the client, use [`join_all`].
 pub trait KbSource: Send + Sync {
     fn fetch_revision(&self) -> impl Future<Output = String> + Send;
     fn fetch_stops(&self, revision: Option<&str>) -> impl Future<Output = Result<Vec<Stop>, String>> + Send;
@@ -321,6 +326,39 @@ pub trait KbSource: Send + Sync {
         trip_execution_id: &str,
         index: i64,
     ) -> impl Future<Output = Result<Value, String>> + Send;
+
+    fn fetch_timetable(
+        &self,
+        _stop_url_id: &str,
+        _date: &str,
+    ) -> impl Future<Output = Result<Arc<Value>, String>> + Send {
+        async { Err(NOT_PROVIDED.to_owned()) }
+    }
+    fn fetch_trip(&self, _trip_id: &str, _index: i64) -> impl Future<Output = Result<Option<Trip>, String>> + Send {
+        async { Err(NOT_PROVIDED.to_owned()) }
+    }
+    fn fetch_trip_raw(&self, _trip_id: &str, _index: i64) -> impl Future<Output = Result<Arc<Value>, String>> + Send {
+        async { Err(NOT_PROVIDED.to_owned()) }
+    }
+    fn has_cached_trip(&self, _trip_id: &str, _index: i64) -> bool {
+        false
+    }
+    /// Default: every id failed.
+    fn fetch_trips_batch(&self, trip_ids: &[String], _index: i64) -> impl Future<Output = TripsBatch> + Send {
+        let failed = trip_ids.len();
+        async move {
+            TripsBatch {
+                trips: IndexMap::new(),
+                failed,
+            }
+        }
+    }
+    fn fetch_departures(&self, _stop_url_id: &str) -> impl Future<Output = Result<Value, String>> + Send {
+        async { Err(NOT_PROVIDED.to_owned()) }
+    }
+    fn fetch_announcements(&self, _hash: Option<&str>) -> impl Future<Output = Result<Value, String>> + Send {
+        async { Err(NOT_PROVIDED.to_owned()) }
+    }
 }
 
 /// `fetchTripsBatch`'s answer: `trips` keyed in `Object.keys` order; `failed` = ids whose fetch threw (a 404 or an
@@ -642,6 +680,38 @@ impl<T: ZbTransport + Send + Sync> KbSource for KbApi<T> {
         index: i64,
     ) -> impl Future<Output = Result<Value, String>> + Send {
         KbApi::fetch_trip_execution(self, trip_execution_id, index)
+    }
+
+    fn fetch_timetable(
+        &self,
+        stop_url_id: &str,
+        date: &str,
+    ) -> impl Future<Output = Result<Arc<Value>, String>> + Send {
+        KbApi::fetch_timetable(self, stop_url_id, date)
+    }
+
+    fn fetch_trip(&self, trip_id: &str, index: i64) -> impl Future<Output = Result<Option<Trip>, String>> + Send {
+        KbApi::fetch_trip(self, trip_id, index)
+    }
+
+    fn fetch_trip_raw(&self, trip_id: &str, index: i64) -> impl Future<Output = Result<Arc<Value>, String>> + Send {
+        KbApi::fetch_trip_raw(self, trip_id, index)
+    }
+
+    fn has_cached_trip(&self, trip_id: &str, index: i64) -> bool {
+        KbApi::has_cached_trip(self, trip_id, index)
+    }
+
+    fn fetch_trips_batch(&self, trip_ids: &[String], index: i64) -> impl Future<Output = TripsBatch> + Send {
+        KbApi::fetch_trips_batch(self, trip_ids, index)
+    }
+
+    fn fetch_departures(&self, stop_url_id: &str) -> impl Future<Output = Result<Value, String>> + Send {
+        KbApi::fetch_departures(self, stop_url_id)
+    }
+
+    fn fetch_announcements(&self, hash: Option<&str>) -> impl Future<Output = Result<Value, String>> + Send {
+        KbApi::fetch_announcements(self, hash)
     }
 }
 

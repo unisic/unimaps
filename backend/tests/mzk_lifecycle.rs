@@ -1,6 +1,6 @@
-//! Port of test/mzk-lifecycle-integration.test.ts: MzkPoller + fleet tracker on REAL OnTime records (22:54:42
+//! Port of test/mzk-lifecycle-integration.test.ts: MzkPoller + trip builder + fleet tracker on REAL OnTime records (22:54:42
 //! snapshot of getRunningVehicles.json, test/fixtures/mzk-running-vehicles.json): a bus waiting at the first stop
-//! must not publish OnTime's placeholder delay anywhere. The buildMzkTimes cases wait for lib/mzk-trip.ts.
+//! must not publish OnTime's placeholder delay anywhere.
 
 use std::sync::{Arc, LazyLock};
 
@@ -9,6 +9,7 @@ use unimaps::fleet_tracker::{FleetSummaryFilter, FleetTracker, FleetTrackerOptio
 use unimaps::js;
 use unimaps::mzk_api::{MzkLine, MzkRunningVehicle, MzkSource, MzkStopPoint};
 use unimaps::mzk_poller::{MzkPoller, mzk_fleet_input};
+use unimaps::mzk_trip::build_mzk_times;
 use unimaps::route_info::vehicle_extras;
 use unimaps::shared::fleet::VehicleStatus;
 use unimaps::vehicle::{VehiclePos, vehicle_to_json};
@@ -112,6 +113,69 @@ async fn publishes_delay_null_plus_not_started_for_buses_waiting_at_the_first_st
     assert_eq!(vehicle_to_json(&p).get("delay"), Some(&Value::Null));
     assert_eq!(vehicle_extras(&p, None, 0.0).get("not_started"), Some(&json!(true)));
     assert_eq!(vehicle_extras(&get("running"), None, 0.0).get("not_started"), None);
+}
+
+// describe("buildMzkTimes")
+
+/// The TS default `opts.nowMs ?? Date.now()`
+fn now_ms() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0.0, |d| d.as_millis() as f64)
+}
+
+fn has_estimate(t: &Value) -> bool {
+    t.get("estimate").is_some()
+}
+
+#[test]
+fn no_per_stop_estimate_for_a_course_that_has_not_begun_estimates_for_a_running_one() {
+    let waiting = build_mzk_times(&v("not_started_late"), true, true, now_ms());
+    assert!(waiting.iter().all(|t| !has_estimate(t)));
+    assert_eq!(waiting[0]["departure_time"].as_str().unwrap().encode_utf16().count(), 5);
+    let running = build_mzk_times(&v("running"), true, false, now_ms());
+    assert!(running.iter().all(has_estimate));
+}
+
+#[test]
+fn static_callers_cached_for_minutes_never_carry_live_estimates() {
+    assert!(
+        build_mzk_times(&v("running"), false, false, now_ms())
+            .iter()
+            .all(|t| !has_estimate(t))
+    );
+}
+
+#[test]
+fn running_course_stops_ahead_are_forward_monotone_screenshot_b_dip() {
+    let mut v = v("not_started_late");
+    v["orderInCourse"] = json!(0);
+    // stops 0..4 estimated +13 min, stop 5 only +7 min (impossible: it precedes stop 4)
+    let sps: Vec<Value> = v["stopPoints"].as_array().unwrap()[..7]
+        .iter()
+        .enumerate()
+        .map(|(i, sp)| {
+            let mut sp = sp.clone();
+            let min = if i == 5 { 7.0 } else { 13.0 };
+            sp["plannedDeparture"] = json!(f(&sp, "scheduledDeparture") + min * 60_000.0);
+            sp
+        })
+        .collect();
+    v["stopPoints"] = Value::Array(sps.clone());
+    let times = build_mzk_times(&v, true, false, now_ms());
+    let diffs: Vec<f64> = times
+        .iter()
+        .map(|t| t["estimate"]["time_diff"].as_f64().unwrap())
+        .collect();
+    assert!(diffs[5] >= diffs[4] + (f(&sps[4], "scheduledDeparture") - f(&sps[5], "scheduledDeparture")) / 1000.0);
+    let planned: Vec<f64> = sps
+        .iter()
+        .enumerate()
+        .map(|(i, sp)| f(sp, "scheduledDeparture") + diffs[i] * 1000.0)
+        .collect();
+    for i in 1..planned.len() {
+        assert!(planned[i] >= planned[i - 1], "stop {i}");
+    }
 }
 
 // describe("FleetTracker (brygady)")

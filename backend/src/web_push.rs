@@ -1,11 +1,13 @@
 //! Web Push, port of `lib/web-push.ts`: VAPID (RFC 8292, an ES256 JWT) and the aes128gcm payload encryption
 //! (RFC 8291, one record). The VAPID pair is made once and kept on disk: a new pair orphans every subscription made
-//! against the old one. Sending comes with the HTTP client.
+//! against the old one. `send_push` POSTs one message; services take it as a [`SendFn`] so tests fake the push service.
 
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write as _};
 use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::Path;
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 use aes_gcm::Aes128Gcm;
 use aes_gcm::aead::{AeadInPlace as _, KeyInit as _};
@@ -15,11 +17,15 @@ use p256::ecdsa::{Signature, SigningKey};
 use p256::elliptic_curve::sec1::ToEncodedPoint as _;
 use p256::{PublicKey, SecretKey};
 use rand_core::{OsRng, RngCore as _};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::Sha256;
 use url::Url;
 
+use crate::fetch::{fetch_error, no_redirect_client};
+use crate::fleet_tracker::blocking_io;
 use crate::js;
+use crate::shape_store::BoxFut;
 
 /// push services only: the server POSTs to the endpoint, so anything else would be an SSRF hole
 const PUSH_HOSTS: [&str; 4] = [
@@ -37,6 +43,36 @@ fn ua_point(b: &[u8]) -> Option<PublicKey> {
         }
         _ => PublicKey::from_sec1_bytes(b).ok(),
     }
+}
+
+/// `PushSub`: what a browser's `PushSubscription.toJSON()` carries that a send needs.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PushSub {
+    pub endpoint: String,
+    pub keys: PushKeys,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PushKeys {
+    pub p256dh: String,
+    pub auth: String,
+}
+
+/// `isPushSub` as a parse: the subscription's endpoint and keys, nothing else it carries.
+pub fn parse_push_sub(v: &Value) -> Option<PushSub> {
+    if !is_push_sub(v) {
+        return None;
+    }
+    // ponytail: a non-string p256dh that String() turns into a valid key is refused here; the TS stores it and
+    // every send to it then fails
+    let s = |k: &str| v.get("keys")?.get(k)?.as_str().map(str::to_owned);
+    Some(PushSub {
+        endpoint: v.get("endpoint")?.as_str()?.to_owned(),
+        keys: PushKeys {
+            p256dh: s("p256dh")?,
+            auth: s("auth")?,
+        },
+    })
 }
 
 /// `isPushSub`: `{endpoint, keys: {p256dh, auth}}` with an https endpoint on a push service, a 16-byte auth secret
@@ -167,4 +203,56 @@ pub fn vapid_auth(endpoint: &str, k: &Vapid, now_sec: f64) -> Option<String> {
         js::to_base64url(&sig.to_bytes()),
         k.public
     ))
+}
+
+/// `vapidKeys()` with the TS module cache: the process pair from PUSH_DIR, read or made once; an error is not cached.
+pub fn vapid() -> io::Result<Arc<Vapid>> {
+    static VAPID: Mutex<Option<Arc<Vapid>>> = Mutex::new(None);
+    // the lock spans the file IO: two first callers must not each make a pair
+    let mut slot = VAPID.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(v) = &*slot {
+        return Ok(v.clone());
+    }
+    let v = Arc::new(vapid_keys(Path::new(&*crate::config::PUSH_DIR))?);
+    *slot = Some(v.clone());
+    Ok(v)
+}
+
+/// The send a push service takes: (subscription, payload, TTL s) -> the push service's status, Err = `String(err)`.
+pub type SendFn = Arc<dyn Fn(PushSub, Value, f64) -> BoxFut<Result<u16, String>> + Send + Sync>;
+
+/// [`send_push`] as a [`SendFn`].
+pub fn live_send() -> SendFn {
+    Arc::new(|sub, payload, ttl| Box::pin(async move { send_push(&sub, &payload, ttl).await }))
+}
+
+/// `sendPush`: one message; the push service's status (201 queued, 404/410 = the subscription is gone). A redirect
+/// fails as fetch's `redirect: "error"` does (it could lead off the allowlisted hosts); the body is never read.
+pub async fn send_push(sub: &PushSub, payload: &Value, ttl_sec: f64) -> Result<u16, String> {
+    let body = encrypt_payload(
+        &js::buffer_from_base64(&sub.keys.p256dh),
+        &js::buffer_from_base64(&sub.keys.auth),
+        payload.to_string().as_bytes(),
+        None,
+    )
+    .ok_or("Error: Public key is not valid for specified curve")?;
+    let k = blocking_io(vapid).map_err(|e| format!("Error: {e}"))?;
+    let now_sec = jiff::Timestamp::now().as_millisecond() as f64 / 1000.0;
+    let auth = vapid_auth(&sub.endpoint, &k, now_sec).ok_or("TypeError: Invalid URL")?;
+    let res = no_redirect_client()
+        .post(&sub.endpoint)
+        .header("TTL", js::number_to_string(js::round(ttl_sec).max(0.0)))
+        .header("Urgency", "high")
+        .header("Content-Encoding", "aes128gcm")
+        .header("Content-Type", "application/octet-stream")
+        .header("Authorization", auth)
+        .body(body)
+        .timeout(Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|e| fetch_error(&e, "TypeError: fetch failed"))?;
+    match res.status().as_u16() {
+        301 | 302 | 303 | 307 | 308 => Err("TypeError: fetch failed".into()),
+        status => Ok(status),
+    }
 }

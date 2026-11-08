@@ -217,7 +217,7 @@ pub async fn handle<T: ZbTransport>(req: &ApiRequest, photon: &T) -> Option<Resp
         Ok(r) => return Some(upstream_error("geocode", format_args!("HTTP {}", r.status))),
         Err(err) => return Some(upstream_error("geocode", err)),
     };
-    let body: Value = match serde_json::from_str(&res.body) {
+    let body: Value = match crate::js::json_parse(&res.body) {
         Ok(v) => v,
         Err(err) => return Some(upstream_error("geocode", err)),
     };

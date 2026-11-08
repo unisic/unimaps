@@ -1,15 +1,19 @@
 //! The Unimaps backend, moving here from the Node one (`lib/`, `server/`) module by module; each module names the
 //! TypeScript file it ports.
 
+pub mod announcements;
 pub mod api;
 pub mod api_helpers;
+pub mod city_status;
 pub mod config;
 pub mod departures_board_cache;
 pub mod fetch;
 pub mod fleet_history;
 pub mod fleet_tracker;
 pub mod geo;
+pub mod gtfs_builder;
 pub mod gtfs_csv;
+pub mod gtfs_refresh;
 pub mod gtfs_rt;
 pub mod gtfs_trips;
 pub mod gzm;
@@ -32,9 +36,13 @@ pub mod mzk_shape;
 pub mod mzk_state;
 pub mod mzk_stop_dirs;
 pub mod mzk_timetable;
+pub mod mzk_trip;
 pub mod osrm;
 pub mod phototrans;
 pub mod poller;
+pub mod poller_singleton;
+pub mod push_alerts;
+pub mod push_news;
 pub mod rate_limit;
 pub mod route_info;
 pub mod router;
@@ -42,6 +50,7 @@ pub mod shape_patterns;
 pub mod shape_store;
 pub mod shared;
 pub mod static_files;
+pub mod stop_board;
 pub mod stop_directions;
 pub mod stop_merge;
 pub mod time;

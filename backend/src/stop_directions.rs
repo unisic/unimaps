@@ -12,7 +12,8 @@ use indexmap::IndexMap;
 use crate::config;
 use crate::geo::bearing;
 use crate::gtfs_csv::{FeedCache, col, field, read_text, table};
-use crate::js::{self, is_space};
+use crate::js;
+use crate::merged_stops::is_station_name;
 
 /// Smallest absolute angle between two compass bearings, degrees [0, 180].
 fn angle_diff(a: f64, b: f64) -> f64 {
@@ -78,30 +79,6 @@ fn cluster_road_directions(bearings: &[f64]) -> Vec<f64> {
         .find(|c| angle_diff(primary, c.mean()) >= 100.0 && c.n >= 2 && c.n as f64 >= first.n as f64 * 0.15);
     out.extend(opposite.map(Cluster::mean));
     out
-}
-
-/// `/(?:^|[\s(])(?:D\.A\.?|DWORZEC\s+AUTOBUSOWY)(?:$|[\s)])/i`: a bus station by name. Only ASCII matches the
-/// pattern's letters case-insensitively in a non-unicode JS regex, so the ASCII comparison is the same.
-fn is_station_name(name: &str) -> bool {
-    let starts = |s: &str, p: &str| s.get(..p.len()).is_some_and(|h| h.eq_ignore_ascii_case(p));
-    let ends = |s: &str| s.chars().next().is_none_or(|c| is_space(c) || c == ')');
-    let mut prev: Option<char> = None;
-    for (i, c) in name.char_indices() {
-        if prev.is_none_or(|p| is_space(p) || p == '(') {
-            let s = &name[i..];
-            if starts(s, "D.A") && (ends(&s[3..]) || s[3..].starts_with('.') && ends(&s[4..])) {
-                return true;
-            }
-            if starts(s, "DWORZEC") {
-                let rest = s[7..].trim_start_matches(is_space);
-                if rest.len() < s.len() - 7 && starts(rest, "AUTOBUSOWY") && ends(&rest[10..]) {
-                    return true;
-                }
-            }
-        }
-        prev = Some(c);
-    }
-    false
 }
 
 /// `readStopDirections`: stop_id -> one or two bearings (whole degrees) of the feed in `dir`; empty while its

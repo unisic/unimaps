@@ -1,5 +1,6 @@
 //! JavaScript semantics the ported code depends on, where Rust's own differ.
 
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::sync::LazyLock;
 
@@ -397,9 +398,61 @@ pub fn encode_uri_component(s: &str) -> String {
     out
 }
 
+/// `JSON.parse`: it takes a lone UTF-16 surrogate escape (`JSON.stringify` writes one for a string holding it),
+/// where serde_json refuses the whole document. A Rust string cannot hold a lone surrogate, so each such escape
+/// parses as U+FFFD.
+pub fn json_parse(text: &str) -> serde_json::Result<serde_json::Value> {
+    serde_json::from_str(&lone_surrogates_to_fffd(text))
+}
+
+fn lone_surrogates_to_fffd(s: &str) -> Cow<'_, str> {
+    let unit = |i: usize| {
+        s.get(i..i + 6)
+            .and_then(|e| e.strip_prefix("\\u"))
+            .and_then(|h| u16::from_str_radix(h, 16).ok())
+    };
+    let b = s.as_bytes();
+    let (mut out, mut last, mut i) = (String::new(), 0, 0);
+    while i < b.len() {
+        if b.get(i) != Some(&b'\\') {
+            i += 1;
+            continue;
+        }
+        match unit(i) {
+            Some(0xD800..=0xDBFF) if matches!(unit(i + 6), Some(0xDC00..=0xDFFF)) => i += 12,
+            Some(0xD800..=0xDFFF) => {
+                out.push_str(s.get(last..i).unwrap_or(""));
+                out.push_str("\\ufffd");
+                i += 6;
+                last = i;
+            }
+            // any other escape, `\\` included, is two bytes
+            _ => i += 2,
+        }
+    }
+    if out.is_empty() {
+        return Cow::Borrowed(s);
+    }
+    out.push_str(s.get(last..).unwrap_or(""));
+    Cow::Owned(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn json_parse_takes_lone_surrogates_as_node_does() {
+        let v = json_parse(r#"["\ud800","a\\ud800\udc00\ud83d\ude00\ud800\u0041","\udbff\udbff\udfff"]"#).unwrap();
+        assert_eq!(
+            v,
+            serde_json::json!(["\u{fffd}", "a\\ud800\u{fffd}\u{1f600}\u{fffd}A", "\u{fffd}\u{10ffff}"])
+        );
+        assert!(matches!(
+            lone_surrogates_to_fffd(r#"{"k":"\ud83d\ude00\\ud800"}"#),
+            Cow::Borrowed(_)
+        ));
+    }
 
     #[test]
     fn base64_matches_node_buffer() {

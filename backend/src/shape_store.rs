@@ -1431,7 +1431,7 @@ fn lock_owner(lock: &Path) -> Option<LockOwner> {
     };
     let cur = std::fs::read(lock)
         .ok()
-        .and_then(|b| serde_json::from_str::<Value>(&String::from_utf8_lossy(&b)).ok());
+        .and_then(|b| crate::js::json_parse(&String::from_utf8_lossy(&b)).ok());
     Some(LockOwner {
         pid: cur.as_ref().and_then(|v| v.get("pid")).and_then(Value::as_f64),
         host: cur
@@ -1624,7 +1624,7 @@ impl<O: OsrmTransport + Send + Sync + 'static> ShapeStore<O> {
                     return;
                 }
             };
-            let parsed = serde_json::from_str::<Value>(&String::from_utf8_lossy(&bytes))
+            let parsed = crate::js::json_parse(&String::from_utf8_lossy(&bytes))
                 .ok()
                 .filter(|v| v.get("format").and_then(Value::as_str) == Some(FORMAT));
             let Some(parsed) = parsed else {

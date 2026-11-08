@@ -366,7 +366,7 @@ pub fn entry_refs(entries: &DayEntries) -> impl Iterator<Item = (&str, &[Vehicle
 /// TS `${err}` (`<class>: <message>`).
 // ponytail: a syntax error keeps serde_json's message after "SyntaxError: ", not V8's wording.
 pub fn parse_day(text: &str, normalize: Normalize) -> Result<DayEntries, String> {
-    let parsed = serde_json::from_str::<Value>(text).map_err(|e| format!("SyntaxError: {e}"))?;
+    let parsed = crate::js::json_parse(text).map_err(|e| format!("SyntaxError: {e}"))?;
     let mut data: IndexMap<String, Value> = match parsed {
         Value::Object(m) => m.into_iter().collect(),
         Value::Array(a) => a.into_iter().enumerate().map(|(i, v)| (i.to_string(), v)).collect(),

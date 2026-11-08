@@ -268,7 +268,7 @@ fn entries(v: Option<&Value>) -> Vec<(String, &Value)> {
 pub fn load_mzk_stop_dirs(file: &Path) -> MzkStopDirs {
     std::fs::read(file)
         .ok()
-        .and_then(|b| serde_json::from_str::<Value>(&String::from_utf8_lossy(&b)).ok())
+        .and_then(|b| crate::js::json_parse(&String::from_utf8_lossy(&b)).ok())
         .map(|v| MzkStopDirs::restore(&v))
         .unwrap_or_default()
 }

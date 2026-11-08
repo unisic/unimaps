@@ -129,7 +129,7 @@ pub static MATCHER: LazyLock<Arc<Matcher<HttpOsrm>>> = LazyLock::new(|| {
 
 fn load(file: &Path) -> IndexMap<String, String> {
     let read = std::fs::read_to_string(file).map_err(|e| (e.kind() == ErrorKind::NotFound, e.to_string()));
-    let parsed = read.and_then(|s| serde_json::from_str::<Value>(&s).map_err(|e| (false, e.to_string())));
+    let parsed = read.and_then(|s| crate::js::json_parse(&s).map_err(|e| (false, e.to_string())));
     match parsed {
         Ok(j) => match (j.get("format"), j.get("shapes").and_then(Value::as_object)) {
             (Some(f), Some(shapes)) if f == FORMAT => shapes

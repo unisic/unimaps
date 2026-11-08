@@ -127,7 +127,7 @@ impl<T: ZbTransport> GzmLive<T> {
         }
         self.state().bytes += res.body.encode_utf16().count() as u64;
         // ponytail: serde's message, not V8's ("Unexpected token '<', ..."): the class alone matches
-        let body: Value = serde_json::from_str(&res.body).map_err(|e| format!("SyntaxError: {e}"))?;
+        let body: Value = crate::js::json_parse(&res.body).map_err(|e| format!("SyntaxError: {e}"))?;
         let feed = (self.get_feed)();
         let area = match (&self.url, &feed) {
             (Some(_), _) => AREA,
@@ -213,7 +213,7 @@ impl<T: ZbTransport> GzmLive<T> {
         let text = sdip_list_text(&self.transport, url, cookie).await?;
         self.state().sdip_bytes += text.encode_utf16().count() as u64;
         // JSON.parse("null") is null too: the TS reads it as "no JSON"
-        Ok(serde_json::from_str::<Value>(&text).ok().filter(|v| !v.is_null()))
+        Ok(crate::js::json_parse(&text).ok().filter(|v| !v.is_null()))
     }
 
     /// Dates SDIP positions and moves every tracked vehicle whose SDIP position changed.

@@ -16,11 +16,12 @@ use tokio::task::JoinHandle;
 
 use crate::config;
 use crate::fetch::string_err;
-use crate::fleet_tracker::{FleetRunningInput, FleetStopPoint, FleetTracker, blocking_io};
+use crate::fleet_tracker::{FleetRunningInput, FleetStopPoint, FleetTracker, blocking_io, get_fleet_tracker};
 use crate::geo::{bearing, meters_between};
 use crate::gzm::NowFn;
 use crate::js;
 use crate::logger;
+use crate::merged_stops::is_station_name;
 use crate::mzk_api::{MzkSource, MzkStopPoint};
 use crate::mzk_fleet::fleet_details;
 use crate::mzk_shape::{mzk_remap_dist, mzk_stop_indices};
@@ -42,44 +43,6 @@ pub const MZK_STALE_SEC: f64 = 60.0;
 pub fn mzk_angle_to_compass_bearing(angle: f64) -> f64 {
     let b = (90.0 - angle) % 360.0;
     if b < 0.0 { b + 360.0 } else { b }
-}
-
-/// `STATION_NAME_RE.test(name)` of `lib/merged-stops.ts`:
-/// `/(?:^|[\s(])(?:D\.A\.?|DWORZEC\s+AUTOBUSOWY)(?:$|[\s)])/i` (non-unicode `/i`: only ASCII letters fold).
-pub fn is_station_name(name: &str) -> bool {
-    let c: Vec<char> = name.chars().collect();
-    let end_ok = |i: usize| c.get(i).is_none_or(|&ch| js::is_space(ch) || ch == ')');
-    let word_end = |i: usize, w: &str| -> Option<usize> {
-        let mut k = i;
-        for wc in w.chars() {
-            if !c.get(k).is_some_and(|ch| ch.eq_ignore_ascii_case(&wc)) {
-                return None;
-            }
-            k += 1;
-        }
-        Some(k)
-    };
-    (0..c.len()).any(|i| {
-        let start_ok = i
-            .checked_sub(1)
-            .and_then(|p| c.get(p))
-            .is_none_or(|&ch| js::is_space(ch) || ch == '(');
-        if !start_ok {
-            return false;
-        }
-        if let Some(k) = word_end(i, "D.A")
-            && (end_ok(k) || (c.get(k) == Some(&'.') && end_ok(k + 1)))
-        {
-            return true;
-        }
-        word_end(i, "DWORZEC").is_some_and(|k| {
-            let mut j = k;
-            while c.get(j).is_some_and(|&ch| js::is_space(ch)) {
-                j += 1;
-            }
-            j > k && word_end(j, "AUTOBUSOWY").is_some_and(end_ok)
-        })
-    })
 }
 
 /// What the fleet tracker reads of a raw OnTime running record (the TS passes the record itself).
@@ -230,11 +193,13 @@ pub struct MzkPoller<S: MzkSource> {
     now: NowFn,
     stop_dirs_file: Option<PathBuf>,
     fleet: Option<FleetTracker>,
+    /// feed `get_fleet_tracker()`, resolved at the first poll (the TS calls it there), when `fleet` is None
+    global_fleet: bool,
     state: Mutex<MzkPollerState>,
 }
 
 /// A spawned step's outcome as the TS rejection text: its own error, or the panic message.
-async fn joined(task: JoinHandle<Result<(), String>>) -> Result<(), String> {
+pub(crate) async fn joined(task: JoinHandle<Result<(), String>>) -> Result<(), String> {
     match task.await {
         Ok(r) => r.map_err(string_err),
         Err(e) if e.is_panic() => Err(panic_msg(&*e.into_panic())),
@@ -256,6 +221,7 @@ impl<S: MzkSource + 'static> MzkPoller<S> {
             now,
             stop_dirs_file: Some(PathBuf::from(config::MZK_STOP_DIRS_FILE.as_str())),
             fleet: None,
+            global_fleet: false,
             state: Mutex::new(state),
         }
     }
@@ -285,6 +251,13 @@ impl<S: MzkSource + 'static> MzkPoller<S> {
     /// The tracker fed after every poll (the TS always feeds `getFleetTracker()`); None = no tracker.
     pub fn with_fleet(mut self, fleet: Option<FleetTracker>) -> Self {
         self.fleet = fleet;
+        self
+    }
+
+    /// Feed the process-wide `get_fleet_tracker()`, looked up at the first poll so construction stays inert (the
+    /// tracker loads its history files when created).
+    pub fn with_global_fleet(mut self) -> Self {
+        self.global_fleet = true;
         self
     }
 
@@ -709,7 +682,11 @@ impl<S: MzkSource + 'static> MzkPoller<S> {
         let coords = Arc::clone(&st.stop_coords);
         drop(st);
 
-        if let Some(fleet) = &self.fleet {
+        if let Some(fleet) = self
+            .fleet
+            .as_ref()
+            .or_else(|| self.global_fleet.then(get_fleet_tracker))
+        {
             let inputs: Vec<FleetRunningInput> = running.iter().map(|v| mzk_fleet_input(v)).collect();
             let fed = catch_unwind(AssertUnwindSafe(|| {
                 fleet.update_from_running_vehicles(&inputs, Some(&static_vehs), Some(&coords));
@@ -958,34 +935,4 @@ fn note_estimate_dip(logged: &mut HashMap<String, i64>, v: &Value, now: i64) {
             Value::Array(diffs)
         ),
     );
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn station_names() {
-        for yes in [
-            "Czechowice-Dz. D.A.",
-            "D.A",
-            "x (D.A.)",
-            "Dworzec  Autobusowy",
-            "d.a. 2",
-            "x\u{A0}D.A",
-        ] {
-            assert!(is_station_name(yes), "{yes}");
-        }
-        for no in [
-            "D.A.B",
-            "XD.A.",
-            "D.A..",
-            "Dworzec",
-            "DworzecAutobusowy",
-            "D.AŁ",
-            "(D.A.x",
-        ] {
-            assert!(!is_station_name(no), "{no}");
-        }
-    }
 }

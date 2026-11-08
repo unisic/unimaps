@@ -730,7 +730,7 @@ impl TrackerState {
                 return;
             }
         };
-        let map = match serde_json::from_str::<Value>(&text) {
+        let map = match crate::js::json_parse(&text) {
             Ok(Value::Object(m)) => m,
             Ok(_) => {
                 logger::warn("fleet-tracker", "Failed restoring history from disk: not an object");

@@ -2,7 +2,7 @@
 //! board). N viewers of one stop cost one upstream call per `ttl`, and a burst of simultaneous requests shares one
 //! load. A failed load is never cached (every joiner sees it, the next caller retries), `cacheable` can refuse a
 //! value (a partial board), and at most `max` values are kept, the oldest inserted evicted first. The TS `ageMs`
-//! and `clear()` have no reader and are not ported. Hold a cheap-to-clone `T` (an `Arc`): every hit clones it.
+//! has no reader and is not ported. Hold a cheap-to-clone `T` (an `Arc`): every hit clones it.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -51,6 +51,11 @@ impl<T, E> MicroCache<T, E> {
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// Drops the cached values; a load in flight still settles for its joiners and is then cached.
+    pub fn clear(&self) {
+        self.lock().done.clear();
     }
 }
 

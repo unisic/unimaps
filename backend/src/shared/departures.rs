@@ -351,7 +351,7 @@ pub fn gzm_row_key(trip_id: &str, stop_sequence: i64) -> String {
     format!("gzm:{trip_id}#{stop_sequence}")
 }
 
-static WARSAW: LazyLock<TimeZone> = LazyLock::new(|| TimeZone::get("Europe/Warsaw").expect("bundled tzdb"));
+pub(crate) static WARSAW: LazyLock<TimeZone> = LazyLock::new(|| TimeZone::get("Europe/Warsaw").expect("bundled tzdb"));
 
 /// "HH:MM" of an epoch instant on the Warsaw wall clock (24 h). `new Date(s * 1000)` truncates to the millisecond.
 pub fn hhmm(epoch_sec: f64) -> String {

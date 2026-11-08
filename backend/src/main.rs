@@ -20,7 +20,7 @@ use tokio::net::TcpListener;
 use tokio::process::{Child, Command};
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::Semaphore;
-use unimaps::{api, config, gzm, gzm_fleet, http, logger, static_files};
+use unimaps::{api, config, gtfs_builder, gzm, gzm_fleet, http, logger, static_files};
 
 /// ponytail: one cap for every open connection (idle keep-alive ones included, ~8 KB of buffers each).
 const MAX_CONNECTIONS: usize = 1024;
@@ -235,10 +235,140 @@ async fn serve(base_env: Vec<(OsString, OsString)>) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// The options of scripts/build-gtfs.ts, parsed like node:util `parseArgs` in strict mode (its codes and
+/// messages; any error exits 1 as the uncaught TypeError does).
+struct GtfsArgs {
+    date: Option<String>,
+    out: Option<String>,
+    concurrency: Option<String>,
+    no_zip: bool,
+    single_day: bool,
+}
+
+fn parse_gtfs_args(args: &[String]) -> Result<GtfsArgs, String> {
+    let invalid = |m: String| format!("TypeError [ERR_PARSE_ARGS_INVALID_OPTION_VALUE]: {m}");
+    let unknown = |o: &str| format!("TypeError [ERR_PARSE_ARGS_UNKNOWN_OPTION]: Unknown option '{o}'");
+    let positional = |a: &str| {
+        format!(
+            "TypeError [ERR_PARSE_ARGS_UNEXPECTED_POSITIONAL]: Unexpected argument '{a}'. This command does not take \
+             positional arguments"
+        )
+    };
+    let mut out = GtfsArgs {
+        date: None,
+        out: None,
+        concurrency: None,
+        no_zip: false,
+        single_day: false,
+    };
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        if arg == "--" {
+            return match it.next() {
+                Some(p) => Err(positional(p)),
+                None => Ok(out),
+            };
+        }
+        let Some(body) = arg.strip_prefix("--") else {
+            let mut c = arg.chars();
+            return Err(match (c.next(), c.next()) {
+                (Some('-'), Some(o)) => unknown(&format!("-{o}")),
+                _ => positional(arg),
+            });
+        };
+        let (name, inline) = match body.find('=') {
+            Some(k) if k > 0 => (&body[..k], Some(&body[k + 1..])),
+            _ => (body, None),
+        };
+        let slot = match name {
+            "date" => &mut out.date,
+            "out" => &mut out.out,
+            "concurrency" => &mut out.concurrency,
+            "zip" | "no-zip" | "single-day" => {
+                if inline.is_some() {
+                    return Err(invalid(format!("Option '--{name}' does not take an argument")));
+                }
+                match name {
+                    "no-zip" => out.no_zip = true,
+                    "single-day" => out.single_day = true,
+                    _ => {}
+                }
+                continue;
+            }
+            _ => return Err(unknown(&format!("--{name}"))),
+        };
+        let value = match inline {
+            Some(v) => v,
+            None => {
+                let Some(v) = it.next() else {
+                    return Err(invalid(format!("Option '--{name} <value>' argument missing")));
+                };
+                if v.starts_with('-') && v.chars().nth(1).is_some() {
+                    return Err(invalid(format!(
+                        "Option '--{name}' argument is ambiguous.\nDid you forget to specify the option argument \
+                         for '--{name}'?\nTo specify an option argument starting with a dash use '--{name}=-XYZ'."
+                    )));
+                }
+                v
+            }
+        };
+        *slot = Some(value.to_owned());
+    }
+    Ok(out)
+}
+
+/// scripts/build-gtfs.ts: `unimaps build-gtfs [--date YYYY-MM-DD] [--out DIR] [--concurrency N] [--no-zip]
+/// [--single-day]`; 0 when the feed was published, 1 on any error.
+fn build_gtfs_cli(args: &[String]) -> ExitCode {
+    let a = match parse_gtfs_args(args) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let n = a
+        .concurrency
+        .map_or(*config::DEFAULT_CONCURRENCY as f64, |c| unimaps::js::number(&c));
+    let concurrency = if n.is_finite() && n > 0.0 {
+        n.trunc()
+    } else {
+        *config::DEFAULT_CONCURRENCY as f64
+    };
+    let fatal = |e: String| {
+        logger::error("gtfs", format_args!("fatal: {e}"));
+        ExitCode::FAILURE
+    };
+    // pLimit(0) throws: `--concurrency 0.5` fails as in the TS
+    if concurrency < 1.0 {
+        return fatal("TypeError: Expected `concurrency` to be a number from 1 and up".into());
+    }
+    let opts = gtfs_builder::BuildGtfsOptions {
+        date: a.date.unwrap_or_else(|| unimaps::time::today_local().to_string()),
+        out_dir: PathBuf::from(a.out.unwrap_or_else(|| config::GTFS_DIR.clone())),
+        zip: !a.no_zip,
+        full_schedule: !a.single_day,
+    };
+    let rt = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
+        Ok(rt) => rt,
+        Err(e) => return fatal(e.to_string()),
+    };
+    let api = unimaps::kb_api::KbApi::new(gzm::HttpZb).with_concurrency(concurrency as usize);
+    match rt.block_on(gtfs_builder::build_gtfs(&api, &opts)) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => fatal(format!("Error: {e}")),
+    }
+}
+
 fn main() -> ExitCode {
     let base_env: Vec<_> = std::env::vars_os().collect();
+    let args: Vec<String> = std::env::args_os().map(|a| a.to_string_lossy().into_owned()).collect();
+    // `tsx scripts/build-gtfs.ts` reads no .env file, the server entries do
+    if args.get(1).map(String::as_str) == Some("build-gtfs") {
+        return build_gtfs_cli(args.get(2..).unwrap_or_default());
+    }
     load_env_files();
-    match std::env::args().nth(1).as_deref() {
+    match args.get(1).map(String::as_str) {
         Some("healthcheck") => healthcheck(),
         None | Some("serve") => tokio::runtime::Builder::new_multi_thread()
             // tokio's default is 512; compose's pids_limit (256) counts threads, Node's included
@@ -248,7 +378,7 @@ fn main() -> ExitCode {
             .expect("tokio runtime")
             .block_on(serve(base_env)),
         Some(other) => {
-            eprintln!("unknown command {other:?}; usage: unimaps [serve | healthcheck]");
+            eprintln!("unknown command {other:?}; usage: unimaps [serve | healthcheck | build-gtfs]");
             ExitCode::from(2)
         }
     }
@@ -256,7 +386,38 @@ fn main() -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::self_origin;
+    use super::{parse_gtfs_args, self_origin};
+
+    fn parse(args: &[&str]) -> Result<(Option<String>, bool, bool), String> {
+        let v: Vec<String> = args.iter().map(|a| (*a).to_owned()).collect();
+        parse_gtfs_args(&v).map(|a| (a.date, a.no_zip, a.single_day))
+    }
+
+    #[test]
+    fn gtfs_args_follow_node_parse_args_strict() {
+        let err = |a: &[&str]| parse(a).err().unwrap_or_default();
+        assert_eq!(
+            err(&["--foo=bar"]),
+            "TypeError [ERR_PARSE_ARGS_UNKNOWN_OPTION]: Unknown option '--foo'"
+        );
+        assert_eq!(
+            err(&["--=x"]),
+            "TypeError [ERR_PARSE_ARGS_UNKNOWN_OPTION]: Unknown option '--=x'"
+        );
+        assert_eq!(
+            err(&["-zx"]),
+            "TypeError [ERR_PARSE_ARGS_UNKNOWN_OPTION]: Unknown option '-z'"
+        );
+        assert!(err(&["-"]).starts_with("TypeError [ERR_PARSE_ARGS_UNEXPECTED_POSITIONAL]: Unexpected argument '-'."));
+        assert!(err(&["--", "x"]).contains("Unexpected argument 'x'."));
+        assert!(err(&["--date", "--"]).contains("Option '--date' argument is ambiguous.\nDid you forget"));
+        assert_eq!(parse(&["--"]), Ok((None, false, false)));
+        assert_eq!(parse(&["--date", "-"]), Ok((Some("-".into()), false, false)));
+        assert_eq!(
+            parse(&["--date=a", "--date", "b", "--no-zip", "--single-day", "--zip"]),
+            Ok((Some("b".into()), true, true))
+        );
+    }
 
     #[test]
     fn self_origin_is_ipv4_loopback_for_any_wildcard_bind() {

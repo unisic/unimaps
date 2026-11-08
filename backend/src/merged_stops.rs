@@ -312,6 +312,8 @@ mod tests {
             "Dworzec  Autobusowy",
             "DWORZEC\u{A0}AUTOBUSOWY 2",
             "(dworzec autobusowy)",
+            "d.a. 2",
+            "x\u{A0}D.A",
         ] {
             assert!(is_station_name(yes), "{yes}");
         }
@@ -323,6 +325,8 @@ mod tests {
             "Dworzec Autobusowyx",
             "D.A..",
             "DWORZEC AUTOBU\u{17F}OWY",
+            "D.AŁ",
+            "(D.A.x",
         ] {
             assert!(!is_station_name(no), "{no}");
         }
