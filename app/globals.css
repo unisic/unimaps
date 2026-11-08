@@ -60,13 +60,12 @@
   --animate-pulse-dot: pulse-dot 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
   --animate-shimmer: shimmer 1.4s linear infinite;
   --animate-rise: rise 0.32s var(--ease-spring);
-  --animate-drop: drop 0.28s var(--ease-spring);
+  --animate-drop: drop 0.2s var(--ease-spring);
   --animate-fade: fade 0.2s ease-out;
   --animate-pop: pop 0.3s var(--ease-spring);
-  /* command palette: a constantly-used surface gets near-zero motion —
-     quick ease-out fade-in, no spring, no exit animation */
-  --animate-palette: palette-in 0.12s ease-out;
-  --animate-palette-up: palette-up 0.15s ease-out;
+  /* search results: a constantly-used surface gets near-zero motion:
+     quick ease-out fade-in, no movement, no exit animation */
+  --animate-palette: fade 0.12s ease-out;
 
   /* opacity only: compositor-friendly, no colour halo */
   @keyframes pulse-dot {
@@ -92,14 +91,6 @@
   @keyframes pop {
     from { opacity: 0; transform: scale(0.85); }
     to { opacity: 1; transform: scale(1); }
-  }
-  @keyframes palette-in {
-    from { opacity: 0; transform: translateX(-50%) scale(0.98); }
-    to { opacity: 1; transform: translateX(-50%) scale(1); }
-  }
-  @keyframes palette-up {
-    from { opacity: 0; transform: translateY(10px); }
-    to { opacity: 1; transform: translateY(0); }
   }
 }
 
@@ -252,9 +243,13 @@ body {
 .veh-mode .veh-poles { fill: none; stroke: currentColor; stroke-width: 16; stroke-linecap: round; }
 
 .veh-line { display: block; }
-.leaflet-marker-icon.veh-marker:hover .veh-pill,
+/* hover growth only under a real mouse: on touch a tap leaves :hover stuck,
+   and the tapped marker would stay grown while its sheet is open */
 .leaflet-marker-icon.veh-marker:focus-visible .veh-pill {
   transform: translate(-50%, -50%) scale(1.08);
+}
+@media (hover: hover) and (pointer: fine) {
+  .leaflet-marker-icon.veh-marker:hover .veh-pill { transform: translate(-50%, -50%) scale(1.08); }
 }
 
 /* user GPS location marker: blue dot, one soft expanding halo */
@@ -297,9 +292,11 @@ body {
 .stop-mk.is-mzk { color: var(--color-mzk); }
 .stop-mk.is-gzm { color: var(--color-gzm); }
 .stop-mk.is-both { color: #3f4a57; }
-.leaflet-marker-icon.stop-mk-icon:hover .stop-mk,
 .leaflet-marker-icon.stop-mk-icon:focus-visible .stop-mk {
   transform: scale(1.15);
+}
+@media (hover: hover) and (pointer: fine) {
+  .leaflet-marker-icon.stop-mk-icon:hover .stop-mk { transform: scale(1.15); }
 }
 /* leaflet.css sets marker z-index inline per marker; only !important lifts a hovered one */
 .leaflet-marker-icon.stop-mk-icon:hover { z-index: 100 !important; }
@@ -541,8 +538,8 @@ body {
   background: var(--color-primary);
 }
 
-.journey-node-pin:hover {
-  transform: translate(-50%, -50%) scale(1.15);
+@media (hover: hover) and (pointer: fine) {
+  .journey-node-pin:hover { transform: translate(-50%, -50%) scale(1.15); }
 }
 
 /* transfer point pill matching the zbiorkom veh-pill aesthetic */
@@ -565,8 +562,8 @@ body {
   box-sizing: border-box;
 }
 
-.journey-trans-pill:hover {
-  transform: translate(-50%, -50%) scale(1.08);
+@media (hover: hover) and (pointer: fine) {
+  .journey-trans-pill:hover { transform: translate(-50%, -50%) scale(1.08); }
 }
 
 .journey-trans-icon {

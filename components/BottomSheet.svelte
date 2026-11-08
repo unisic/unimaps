@@ -81,7 +81,6 @@
   function settle(to: Snap, transition = "height 0.35s var(--ease-spring)") {
     snap = to;
     if (sheet) {
-      sheet.style.removeProperty("--sheet-height");
       sheet.style.transition = transition;
       sheet.style.height = SNAP_HEIGHTS[to];
     }
@@ -89,8 +88,10 @@
 
   function beginDrag(id: number, y: number, t: number, target: HTMLElement | null) {
     const curH = sheet?.offsetHeight ?? HALF * vh();
+    /* height is written straight onto the sheet, never through an inherited custom property:
+       changing one restyles every descendant (the whole departures list) on each move */
     if (sheet) {
-      sheet.style.setProperty("--sheet-height", `${curH}px`);
+      sheet.style.height = `${curH}px`;
       sheet.style.transition = "none";
     }
     start = { id, y, t, startH: curH, target };
@@ -112,7 +113,7 @@
     const minH = PEEK * v;
     if (h > maxH) h = maxH + rubberband(h - maxH, v, 0.4);
     else if (h < minH) h = minH - rubberband(minH - h, v, 0.4);
-    sheet?.style.setProperty("--sheet-height", `${h}px`);
+    if (sheet) sheet.style.height = `${h}px`;
   }
 
   function endDrag(y: number, t: number, allowTap: boolean) {
@@ -145,11 +146,10 @@
 
     // Optional explicit swipe-to-dismiss (only if enabled & swiping fast past peek)
     if (dismissOnDrag && projectedH < PEEK * v - 80 && releaseVel > 900) {
-      if (sheet) {
-        sheet.style.removeProperty("--sheet-height");
-        sheet.style.transition = "transform 0.28s ease-in";
-        sheet.style.transform = "translate3d(0, 100%, 0)";
-      }
+      /* the entrance reversed, through the same bindings: a direct style write would be
+         overwritten by style:transition in this very flush. The curve's steep start
+         carries the fling's speed on; an ease-in would stall it right at release. */
+      mounted = false;
       setTimeout(onClose, 280);
       return;
     }
@@ -258,12 +258,11 @@
     class="surface absolute inset-x-0 bottom-0 z-[1001] flex flex-col overflow-hidden rounded-t-[24px] outline-none {isDragging
       ? 'select-none'
       : ''}"
-    style:height={isDragging ? "var(--sheet-height)" : SNAP_HEIGHTS[snap]}
+    style:height={SNAP_HEIGHTS[snap]}
     style:max-height="calc(min(80dvh, 100dvh - env(safe-area-inset-top, 0px) - 3.5rem))"
     style:min-height={SNAP_HEIGHTS.peek}
     style:transform={mounted ? "none" : "translate3d(0, 100%, 0)"}
     style:transition={isDragging ? "none" : "transform 0.35s var(--ease-spring), height 0.35s var(--ease-spring)"}
-    style:will-change={isDragging ? "height" : undefined}
     style:box-shadow="var(--shadow-sheet)"
   >
     <div

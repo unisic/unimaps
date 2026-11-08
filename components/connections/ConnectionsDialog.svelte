@@ -743,7 +743,7 @@
   }}
 >
   <div
-    class="surface kb-scroll relative flex max-h-[92dvh] w-full flex-col overflow-y-auto rounded-t-3xl md:max-h-[88vh] md:max-w-xl md:overflow-hidden md:rounded-[20px] animate-drop"
+    class="surface kb-scroll relative flex max-h-[92dvh] w-full flex-col overflow-y-auto rounded-t-3xl md:max-h-[88vh] md:max-w-xl md:overflow-hidden md:rounded-[20px] animate-rise"
   >
     <!-- Header; on a phone the whole sheet scrolls (the controls alone outgrow it) and the header stays -->
     <header

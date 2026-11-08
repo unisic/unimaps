@@ -745,7 +745,7 @@
 {#if showDropdown}
   <div
     bind:this={dropdown}
-    class="surface absolute left-0 top-full mt-2 flex max-h-[min(65vh,460px)] w-full flex-col overflow-y-auto overscroll-contain rounded-[20px] p-1.5 animate-drop z-[1003]"
+    class="surface absolute left-0 top-full mt-2 flex max-h-[min(65vh,460px)] w-full flex-col overflow-y-auto overscroll-contain rounded-[20px] p-1.5 animate-palette z-[1003]"
   >
     {#if flatLen === 0}
       <div class="px-4 py-8 text-center text-[13px] text-text-faint">
