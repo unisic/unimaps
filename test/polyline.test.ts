@@ -11,6 +11,8 @@ import {
   pruneSpurs,
   simplifyPolyline,
   slicePolyline,
+  smoothRoute,
+  snapStopsOnto,
   tangentBearing,
   type LatLng,
 } from "../lib/shared/polyline";
@@ -139,6 +141,53 @@ describe("projectStopsAlong", () => {
     assert.ok(Math.abs(s[0]! - 100) < 1);
     assert.ok(Math.abs(s[1]! - 500) < 1);
     assert.ok(Math.abs(s[2]! - 900) < 1);
+  });
+});
+
+describe("snapStopsOnto", () => {
+  it("puts a kerb stop on the line, keeps a stop the line misses", () => {
+    const [kerb, far] = snapStopsOnto([P(0, 0), P(500, 0)], [P(100, 12), P(300, 200)]);
+    assert.ok(metersBetween(...kerb, ...P(100, 0)) < 0.5, `kerb stop at ${kerb}`);
+    assert.deepEqual(far, P(300, 200));
+  });
+});
+
+describe("smoothRoute", () => {
+  /** largest turn (deg) between consecutive segments */
+  const maxBend = (l: LatLng[]) => {
+    let worst = 0;
+    for (let i = 1; i < l.length - 1; i++) {
+      const [a, b, c] = [l[i - 1], l[i], l[i + 1]];
+      const h1 = Math.atan2((b[1] - a[1]) * KX, (b[0] - a[0]) * 111_320);
+      const h2 = Math.atan2((c[1] - b[1]) * KX, (c[0] - b[0]) * 111_320);
+      worst = Math.max(worst, Math.abs(((((h2 - h1) * 180) / Math.PI + 540) % 360) - 180));
+    }
+    return worst;
+  };
+
+  it("rounds a street corner within devM of it, endpoints kept", () => {
+    const pts = [P(0, 0), P(200, 0), P(200, 200)];
+    const out = smoothRoute(pts);
+    assert.deepEqual([out[0], out[out.length - 1]], [pts[0], pts[2]]);
+    // 6 chords of a parabola: it bends most at its middle, ~19° there
+    assert.ok(maxBend(out) <= 20, `bend ${maxBend(out)}`);
+    const off = Math.min(...out.map((p) => metersBetween(...p, ...P(200, 0))));
+    assert.ok(off > 2 && off <= 4.01, `corner cut ${off} m`);
+  });
+
+  it("cuts a junction overshoot, keeps the turnaround at a stop", () => {
+    // east 300 m, 15 m past the junction, back 15 m, then north
+    const pts = [P(0, 0), P(300, 0), P(315, 0.5), P(301, 1), P(300, 300)];
+    assert.ok(smoothRoute(pts).every((p) => metersBetween(...p, ...P(315, 0.5)) > 10));
+    assert.ok(smoothRoute(pts, [P(316, 0)]).some((p) => metersBetween(...p, ...P(315, 0.5)) < 5));
+  });
+
+  it("splices a trace circling a roundabout's island, keeps a loop with a stop on it", () => {
+    // east across the island to its far side, back round its south side, out north from its east side (line 92)
+    const pts = [P(0, 0), P(100, 0), P(118, 0), P(116, -8), P(108, -8), P(104, 4), P(104, 100)];
+    const far = (l: LatLng[]) => Math.min(...l.map((p) => metersBetween(...p, ...P(112, -8))));
+    assert.ok(far(smoothRoute(pts)) > 6, `loop kept, ${far(smoothRoute(pts))} m off its far side`);
+    assert.ok(far(smoothRoute(pts, [P(112, -9)])) < 2);
   });
 });
 

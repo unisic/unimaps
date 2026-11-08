@@ -255,7 +255,7 @@
       class="surface kb-scroll mt-2 max-h-[calc(100dvh-env(safe-area-inset-top,0px)-5rem)] overflow-y-auto rounded-[20px] p-2 text-[13.5px] animate-drop"
     >
       {@render menuLabel("Miasto")}
-      <div class="px-1">
+      <div class="flex flex-col gap-1 px-1">
         <CityCard id="bb" current={bb} onClick={() => switchCity("bb")} />
         <CityCard id="gzm" current={city === "gzm"} onClick={() => switchCity("gzm")} />
         <!-- every other city lives in the sheet; the current one is shown here in its place -->

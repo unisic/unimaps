@@ -11,6 +11,7 @@
     BellIcon,
     CardsIcon,
     CaretLeftIcon,
+    ClockIcon,
     CrosshairIcon,
     DotsThreeVerticalIcon,
     DropIcon,
@@ -61,6 +62,7 @@
     tripTimeMatchesStop,
     withoutRequestTail,
   } from "@/lib/client/format";
+  import { serverNowSec } from "@/lib/client/api";
   import { CITY, cityOfId } from "@/lib/client/city";
   import { findActiveStop, type ActiveStopResult } from "@/lib/client/geo";
   import type {
@@ -187,6 +189,31 @@
      and per-stop times are a placeholder (now - scheduled start): show the schedule,
      "czeka na odjazd" and never a delay (backend/src/mzk_state.rs) */
   const notStarted = $derived(isLiveWithLoc && currentVeh?.not_started === true);
+
+  /* time since the app got the shown position (in the ⋮ menu), ticking each second while the menu is open. A new
+     `fix_at` (MZK: every ping, even a bus standing still; KB: only a changed position, upstream has no ping time)
+     restarts it at 0; the first fix of an opened trip (the sheet is keyed by trip.gen) counts from `fix_at` itself,
+     when it was taken. A timetable-placed metro train (`scheduled`) has no fix */
+  let fixSeen = $state.raw<{ fix: number; at: number } | null>(null);
+  $effect(() => {
+    const f = currentVeh?.fix_at;
+    if (typeof f !== "number" || !Number.isFinite(f)) return;
+    untrack(() => {
+      if (fixSeen?.fix !== f) fixSeen = { fix: f, at: fixSeen ? serverNowSec() : f };
+    });
+  });
+  let nowEpoch = $state(0);
+  $effect(() => {
+    if (!isLiveWithLoc || !menuAt) return;
+    const tick = () => (nowEpoch = serverNowSec());
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  });
+  const fixAge = $derived.by(() => {
+    if (!isLiveWithLoc || currentVeh?.scheduled || !fixSeen) return null;
+    return Math.max(0, Math.round(nowEpoch - fixSeen.at));
+  });
 
   /* prefer the live poll's current stop over the snapshot; geo_seq (GPS, sent only while upstream's index is
      stale) beats current_stop_sequence: a stale hint puts a bus on the OUTBOUND leg of a loop */
@@ -588,6 +615,14 @@
               />
             </a>
           {/if}
+          {#if fixAge != null}
+            <p class="flex items-center gap-3 px-3 py-2.5 text-text">
+              <Icon icon={ClockIcon} class="text-[17px] text-text-mute" />
+              <span class="min-w-0 flex-1 tabular-nums">
+                Pozycja sprzed {fixAge < 60 ? `${fixAge} s` : `${Math.floor(fixAge / 60)} min`}
+              </span>
+            </p>
+          {/if}
           {#if loopStops.length > 0}
             <p
               class="flex items-center gap-3 px-3 py-2.5 text-text"
@@ -603,9 +638,9 @@
             <div class="mt-1 flex flex-wrap gap-1.5 border-t border-hairline px-3 pb-1.5 pt-3 text-[11.5px]">
               {#if feats.electric}{@render feature(LightningIcon, "fill", "Elektryczny")}{/if}
               {#if feats.hydrogen}{@render feature(DropIcon, "fill", "Wodorowy")}{/if}
-              {#if feats.hybrid}{@render feature(LeafIcon, "fill", "Hybryda")}{/if}
-              {#if feats.airCondition}{@render feature(SnowflakeIcon, "bold", "Klima", "Klimatyzacja")}{/if}
-              {#if feats.lowFloor}{@render feature(WheelchairIcon, "bold", "Niska podłoga")}{/if}
+              {#if feats.hybrid}{@render feature(LeafIcon, "fill", "Hybrydowy")}{/if}
+              {#if feats.airCondition}{@render feature(SnowflakeIcon, "bold", "Klimatyzowany")}{/if}
+              {#if feats.lowFloor}{@render feature(WheelchairIcon, "bold", "Niskopodłogowy")}{/if}
               {#if feats.longVehicle}
                 {@render feature(ArrowsHorizontalIcon, "bold", "Przegubowy", "Pojazd przegubowy, 18 m")}
               {/if}
@@ -647,7 +682,7 @@
           : "Brak przystanków tego kursu."}
       </p>
     {:else}
-      <ol class="px-4 pt-1" style:padding-bottom={SAFE_PAD}>
+      <ol class="flex flex-col gap-1 px-4 pt-1" style:padding-bottom={SAFE_PAD}>
         {#each rawTimes as t, idx (`${t.index}-${idx}`)}
           {@const r = rowOf(t, idx)}
           <li>
@@ -656,7 +691,7 @@
                 type="button"
                 disabled={!r.coord}
                 onclick={() => r.coord && onFocusStop(r.coord)}
-                class="flex min-w-0 flex-1 items-stretch gap-3 rounded-xl text-left transition-colors {r.coord
+                class="flex min-w-0 flex-1 items-stretch gap-3 rounded-xl text-left transition-colors focus-visible:-outline-offset-2 {r.coord
                   ? 'hover:bg-tint/5 active:bg-tint/8'
                   : ''}"
               >
@@ -676,10 +711,11 @@
                   </span>
                 </span>
 
-                <!-- rail: the travelled part muted, the rest in the line colour; the live bus rides on it -->
+                <!-- rail: the travelled part muted, the rest in the line colour; the live bus rides on it. Each half
+                     reaches 2 px into the gap-1 between rows, so the rail runs on unbroken -->
                 <span class="relative w-6 shrink-0 self-stretch" aria-hidden="true">
                   {#if !r.first}
-                    <span class="absolute left-1/2 top-0 h-1/2 w-1.5 -translate-x-1/2" style:background={lineColor}>
+                    <span class="absolute -top-0.5 left-1/2 h-[calc(50%+2px)] w-1.5 -translate-x-1/2" style:background={lineColor}>
                       <span
                         class="absolute inset-x-0 top-0 transition-[height] duration-700 ease-out-soft"
                         style:height="{railFill(railPos - idx + 0.5)}%"
@@ -688,7 +724,7 @@
                     </span>
                   {/if}
                   {#if !r.last}
-                    <span class="absolute bottom-0 left-1/2 h-1/2 w-1.5 -translate-x-1/2" style:background={lineColor}>
+                    <span class="absolute -bottom-0.5 left-1/2 h-[calc(50%+2px)] w-1.5 -translate-x-1/2" style:background={lineColor}>
                       <span
                         class="absolute inset-x-0 top-0 transition-[height] duration-700 ease-out-soft"
                         style:height="{railFill(railPos - idx)}%"

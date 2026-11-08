@@ -227,9 +227,11 @@ body {
 .veh-arrow svg { display: block; width: 100%; height: 100%; fill: currentColor; }
 
 /* operator logo (KB brand.svg / MZK mzk-logo.svg / GZM gzm-logo.svg), rendered pure white on the
-   pill colour: brightness(0) blackens it keeping alpha, invert(1) flips to white */
+   pill colour: brightness(0) blackens it keeping alpha, invert(1) flips to white. max-width: Leaflet lifts
+   preflight's img max-width: 100% only inside its own panes; in TripLayer's tripVehicle pane it made the logo's
+   min-content 0, the pill sized without it and the line number spilled out */
 .veh-bus {
-  display: block; height: 13px; width: auto; flex: none;
+  display: block; height: 13px; width: auto; max-width: none; flex: none;
   filter: brightness(0) invert(1);
   pointer-events: none;
 }
@@ -386,6 +388,28 @@ body {
    one on the light basemap. A CSS stroke beats the stroke attribute Leaflet's SVG renderer writes. */
 .leaflet-overlay-pane .route-casing { stroke: var(--color-bg); }
 .leaflet-overlay-pane .route-walk { stroke: var(--color-text); }
+.leaflet-overlay-pane .route-stop { fill: var(--color-bg); }
+
+/* stop names under an opened trip's stops: text in the route's colour (--route-c, set on the label pane) on a halo in
+   the map's contrast colour; the dark theme lifts the colour toward white, a dark line colour would sink into the halo */
+.leaflet-tooltip.route-stop-label {
+  background: none;
+  border: 0;
+  box-shadow: none;
+  padding: 0;
+  color: color-mix(in oklab, var(--route-c, var(--color-text)) 50%, white);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.2;
+  text-shadow: 0 0 2px var(--color-bg), 0 0 2px var(--color-bg), 0 0 3px var(--color-bg);
+}
+:root[data-theme="light"] .leaflet-tooltip.route-stop-label { color: var(--route-c, var(--color-text)); }
+.leaflet-tooltip.route-stop-label::before { content: none; }
+/* a name fades in when drawn and when the decluttering shows or hides it: on the text, Leaflet writes the label's own
+   opacity inline. The keyframe has no `to`, so a name drawn already covered stays at 0 instead of flashing */
+.leaflet-tooltip.route-stop-label > span { display: inline-block; transition: opacity 0.2s ease-out; animation: route-label-in 0.3s ease-out; }
+.leaflet-tooltip.route-stop-label.is-covered > span { opacity: 0; }
+@keyframes route-label-in { from { opacity: 0; transform: translateY(-4px); } }
 
 .leaflet-container {
   background: var(--color-bg);

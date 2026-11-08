@@ -5,7 +5,7 @@
   import L from "leaflet";
   import { fetchJSON, fetchRoute, getTrip, tripWarming, type GeoHit } from "@/lib/client/api";
   import { fetchNewerShape, loadShapeLatest } from "@/lib/client/shapes";
-  import { projectStopsAlong, slicePolyline } from "@/lib/shared/polyline";
+  import { projectStopsAlong, slicePolyline, smoothRoute } from "@/lib/shared/polyline";
   import { peekVehicleAnimator } from "@/lib/client/vehicleAnimator";
   import { holdWakeLock } from "@/lib/client/wakeLock";
   import { adjustStopRoutePoint, injectDetourPoints } from "@/lib/client/detours";
@@ -791,13 +791,13 @@
           const sh = await loadShapeLatest(lr.leg.shape_id);
           const [s0, s1] = sh ? projectStopsAlong(sh.pl, [pts[0], pts[pts.length - 1]]) : [null, null];
           if (sh && s0 != null && s1 != null && s1 > s0) {
-            return { ...lr, routed: slicePolyline(sh.pl, s0, s1) };
+            return { ...lr, routed: smoothRoute(slicePolyline(sh.pl, s0, s1), pts) };
           }
         }
         const road = await fetchRoute(pts);
         return {
           ...lr,
-          routed: road && road.length >= 2 ? road : pts,
+          routed: road && road.length >= 2 ? smoothRoute(road, pts) : pts,
         };
       }),
     );
@@ -1086,7 +1086,10 @@
   }
 
   function handleShowLive(execId: string, tripId: string | number | null) {
-    vehMeta = null;
+    // a bus already on the map: fly out, across and in to it instead of fitting the whole route
+    const v = vehicles.find((x) => x.id === execId && Number.isFinite(x.lat) && Number.isFinite(x.lon)) ?? null;
+    vehMeta = v;
+    if (v) zoomToVehicle(v, true);
     void openTripLive(execId, tripId, selectedStop);
   }
 
@@ -1101,15 +1104,17 @@
     nearbyOpen = false;
     openLine = null;
     vehMeta = v;
-    const m = map;
-    if (m && Number.isFinite(v.lat) && Number.isFinite(v.lon)) {
-      // zoom in on where the marker is drawn (dead-reckoned), not the raw fix behind it, landing
-      // it above the trip sheet (opens at half); TripLayer skips its route fit for this trip
-      const d = peekVehicleAnimator(m)?.displayed(v.id);
-      const at = focusPoint(m, desktop, SNAP_COVER.half);
-      glideTo(m, d ? [d.lat, d.lon] : [v.lat, v.lon], Math.max(m.getZoom(), 16), at);
-    }
+    if (Number.isFinite(v.lat) && Number.isFinite(v.lon)) zoomToVehicle(v, false);
     void openTripLive(v.id, null, null);
+  }
+
+  /* zoom in on where the marker is drawn (dead-reckoned), not the raw fix behind it, landing it above
+     the trip sheet (opens at half); TripLayer skips its route fit while vehMeta is the trip's vehicle */
+  function zoomToVehicle(v: Vehicle, fly: boolean) {
+    const m = map;
+    if (!m) return;
+    const d = peekVehicleAnimator(m)?.displayed(v.id);
+    glideTo(m, d ? [d.lat, d.lon] : [v.lat, v.lon], Math.max(m.getZoom(), 16), focusPoint(m, desktop, SNAP_COVER.half), fly);
   }
 
   /* trip sheet's locate button: fly to where the bus is drawn (dead-reckoned) when it is on the fleet layer */
@@ -1448,14 +1453,15 @@
         <VectorBaseLayer {map} style={tiles.style} filter={tiles.filter} onStatus={handleBasemapStatus} />
       {/key}
     {/if}
+    <!-- an open trip shows only its own stops (TripLayer's circles open them) -->
     <StopsLayer
       {map}
       stops={filteredStops}
-      visible={stopsVisible}
+      visible={stopsVisible && trip == null}
       onSelect={handleSelectStop}
       minZoom={cityCfg.stopMinZoom}
     />
-    <TripLayer {map} {trip} {desktop} {vehMeta} liveVehicle={liveTripVeh} />
+    <TripLayer {map} {trip} {desktop} {vehMeta} liveVehicle={liveTripVeh} onSelectStop={handleSelectStop} />
     <JourneyLayer {map} {journey} {desktop} />
     <LineLayer
       {map}

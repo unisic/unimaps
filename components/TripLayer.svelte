@@ -2,12 +2,13 @@
   import L from "leaflet";
   import { onDestroy, untrack } from "svelte";
 
-  import { el, KeyedLayers } from "@/components/leafletLayers";
-  import { displayStopName, formatPlatform, isBusStation, isMzk, operatorColor, transitMode } from "@/lib/client/format";
+  import { el, KeyedLayers, ROUTE_CASING, routeLine, routeStop } from "@/components/leafletLayers";
+  import { displayStopName, formatPlatform, isBusStation, isMzk, operatorColor, transitMode, withoutRequestTail } from "@/lib/client/format";
   import { makeVehicleIcon } from "@/lib/client/leafletIcons";
   import { prefersReducedMotion } from "@/lib/client/motion";
+  import { smoothRoute, snapStopsOnto } from "@/lib/shared/polyline";
   import { smoothMotion } from "@/lib/client/smoothMotion";
-  import type { LatLng, TripView, Vehicle } from "@/lib/client/types";
+  import type { LatLng, Stop, TripView, Vehicle } from "@/lib/client/types";
   import { acquireVehicleAnimator, releaseVehicleAnimator, type VehicleAnimator } from "@/lib/client/vehicleAnimator";
 
   /** Animator view id of the tracked bus (fleet views are keyed by vehicle id). */
@@ -19,6 +20,7 @@
     desktop,
     vehMeta,
     liveVehicle,
+    onSelectStop,
   }: {
     map: L.Map;
     trip: TripView | null;
@@ -30,6 +32,8 @@
     /** fresh position/heading from the live poll (matched by exec id); drives the
      *  marker so the tracked bus keeps moving while its route is open */
     liveVehicle: Vehicle | null;
+    /** a tapped stop circle: the stop markers are hidden while a trip is open, so these open the stop */
+    onSelectStop: (s: Stop) => void;
   } = $props();
 
   /* last non-null live fix: if the vehicle drops off the poll mid-view
@@ -78,6 +82,18 @@
   const staticLon = $derived(trip?.vehicle?.lon ?? (trip?.isLive && vehMeta ? vehMeta.lon : null));
   const staticHeading = $derived(vehMeta?.bearing ?? null);
 
+  /* stop names sit above the route and the markers (600), the tracked bus above the names, both below the
+     tooltips (650) */
+  const LABEL_PANE = "tripStopLabels";
+  const BUS_PANE = "tripVehicle";
+  for (const [name, z] of [
+    [LABEL_PANE, "620"],
+    [BUS_PANE, "630"],
+  ] as const) {
+    // svelte-ignore state_referenced_locally
+    if (!map.getPane(name)) map.createPane(name).style.zIndex = z;
+  }
+
   let animator: VehicleAnimator | null = null;
   let tracked: { marker: L.Marker; key: string } | null = null;
 
@@ -118,7 +134,7 @@
     if (!cur) {
       const marker = L.marker(pos, {
         icon: makeVehicleIcon(iconLine, lineColor, heading, op, mode, sched),
-        zIndexOffset: 200,
+        pane: BUS_PANE,
         keyboard: false,
       }).addTo(map);
       cur = { marker, key: iconKey };
@@ -138,12 +154,18 @@
   });
 
   /* follow the drawn route, unless it IS the fleet shape the track already uses or the course has not begun */
-  const routed = $derived(trip?.routed ?? null);
+  const tripRoute = $derived(trip?.routed ?? null);
   const tripShapeId = $derived(trip?.shapeId ?? null);
   const liveShape = $derived(lastLive?.shape ?? null);
   const liveNotStarted = $derived(lastLive?.not_started === true);
   const tripStops = $derived(trip?.stops);
   const rawTimes = $derived(trip?.rawTimes);
+  /* the circles sit ON the drawn line, as zbiorkom.live draws them: a pole stands at the kerb, 5-30 m off the road's
+     centre line the route follows */
+  const stopPts = $derived((tripStops ?? []).map(({ s }): LatLng => [s.lat, s.lon]));
+  /* no sharp edges (smoothRoute); once per route: a live refresh keeps the route's identity and only moves the stops */
+  const routed = $derived(tripRoute && tripRoute.length >= 2 ? smoothRoute(tripRoute, untrack(() => stopPts)) : tripRoute);
+  const stopAt = $derived(routed && routed.length >= 2 ? snapStopsOnto(routed, stopPts) : stopPts);
   $effect(() => {
     const anim = animator;
     const id = trackId;
@@ -168,7 +190,8 @@
     if (fitGen === null) return;
     untrack(() => {
       if (!trip) return;
-      // opened by tapping the bus: MapApp already zoomed in on it, the whole route would zoom back out
+      // opened by tapping the bus, or from a stop while the bus is on the map: MapApp already zoomed in on it,
+      // the whole route would zoom back out
       if (vehMeta && vehMeta.id === trip.execId) return;
       const pts: LatLng[] =
         trip.routed && trip.routed.length >= 2
@@ -195,43 +218,92 @@
   const layers = new KeyedLayers(map);
   onDestroy(() => layers.clear());
 
+
+  /** below this zoom only the selected stop and the termini are named: a whole route's names would bury the basemap */
+  const ALL_NAMES_ZOOM = 13;
+  /** names in placement priority: 0 the selected stop, 1 the termini, 2 the rest in route order */
+  let labels: { rank: number; label: L.Tooltip }[] = [];
+  /** Greedy decluttering: a name that would overlap one already shown is hidden. Pixel distances change only with the
+   *  zoom, so it runs per drawn trip and on zoomend; all reads before all writes, one forced layout per pass. */
+  const declutter = () => {
+    const few = map.getZoom() < ALL_NAMES_ZOOM;
+    const rects = labels.map(({ rank, label }) => (few && rank > 1 ? null : (label.getElement()?.getBoundingClientRect() ?? null)));
+    const shown: DOMRect[] = [];
+    const covered = rects.map((r) => {
+      if (!r) return true;
+      const hit = shown.some((o) => r.left < o.right + 2 && o.left < r.right + 2 && r.top < o.bottom && o.top < r.bottom);
+      if (!hit) shown.push(r);
+      return hit;
+    });
+    labels.forEach(({ label }, i) => label.getElement()?.classList.toggle("is-covered", covered[i]));
+  };
+  $effect(() => {
+    map.on("zoomend", declutter);
+    return () => {
+      map.off("zoomend", declutter);
+    };
+  });
+
   /* the route and its stops; a re-run updates the drawn layers in place (no rebuild, z-order kept) */
   $effect(() => {
     const color = lineColor;
+    // the names take the route's colour (.route-stop-label)
+    map.getPane(LABEL_PANE)?.style.setProperty("--route-c", color);
     const pts = routed;
     if (pts && pts.length >= 2) {
-      // casing under the coloured line, in the map's contrast colour (.route-casing)
-      layers.put(
+      const casing = layers.put(
         "casing",
-        () => L.polyline(pts, { color: "#0d1013", className: "route-casing", weight: 9, opacity: 0.85, lineCap: "round", lineJoin: "round" }),
+        () => L.polyline(pts, ROUTE_CASING),
         (l) => l.setLatLngs(pts),
       );
-      const line: L.PathOptions = { color, weight: 4.5, opacity: 0.95, lineCap: "round", lineJoin: "round" };
-      layers.put(
+      const line = routeLine(color);
+      const route = layers.put(
         "route",
         () => L.polyline(pts, line),
         (l) => l.setLatLngs(pts).setStyle(line),
       );
+      // the route usually arrives after the stops: a new layer lands on top and would bury their circles
+      route.bringToBack();
+      casing.bringToBack();
     }
-    for (const { t, s, selected } of tripStops ?? []) {
-      const center: LatLng = [s.lat, s.lon];
-      const radius = selected ? 7 : 4.5;
-      const style: L.PathOptions = {
-        color: selected ? "#ffd54a" : color,
-        weight: selected ? 3 : 2,
-        fillOpacity: 1,
-        fillColor: "#ffffff",
-      };
+    const stops = tripStops ?? [];
+    const ranked: { rank: number; label: L.Tooltip }[] = [];
+    stops.forEach(({ t, s, selected }, i) => {
+      const center = stopAt[i];
+      const style: L.CircleMarkerOptions = selected ? { ...routeStop("#ffd54a"), radius: 8 } : routeStop(color);
       const tip = () => {
         const platform = formatPlatform(t.platform, isBusStation(t.stop_name, s));
         return el("span", "", `${displayStopName(t.stop_name)} · ${t.departure_time}${platform ? ` (${platform})` : ""}`);
       };
+      const key = `${gen}-${t.index}-${s.id}`;
       layers.put(
-        `${gen}-${t.index}-${s.id}`,
-        () => L.circleMarker(center, { ...style, radius }).bindTooltip(tip, { direction: "top", sticky: true, className: "kb-tooltip" }),
-        (m) => m.setLatLng(center).setRadius(radius).setStyle(style).getTooltip()?.setContent(tip),
+        key,
+        () =>
+          L.circleMarker(center, style)
+            .bindTooltip(tip, { direction: "top", sticky: true, className: "kb-tooltip" })
+            .on("click", () => onSelectStop(s)),
+        (m) => m.setLatLng(center).setStyle(style).getTooltip()?.setContent(tip),
       );
-    }
+      const label = layers.put(
+        `${key}-name`,
+        () =>
+          L.tooltip(center, {
+            content: el("span", "", withoutRequestTail(displayStopName(t.stop_name))),
+            direction: "bottom",
+            // + leaflet's 6 px margin: the name starts 12 px below the stop, clear of its circle (9.5 px when selected)
+            offset: [0, 6],
+            opacity: 1,
+            // a non-permanent tooltip closes on any map click (preclick) and KeyedLayers would never re-add it
+            permanent: true,
+            pane: LABEL_PANE,
+            className: "route-stop-label",
+          }),
+        (l) => l.setLatLng(center),
+      );
+      ranked.push({ rank: selected ? 0 : i === 0 || i === stops.length - 1 ? 1 : 2, label });
+    });
     layers.sweep();
+    labels = ranked.sort((a, b) => a.rank - b.rank);
+    declutter();
   });
 </script>

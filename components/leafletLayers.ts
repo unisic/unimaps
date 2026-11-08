@@ -15,11 +15,16 @@ export class KeyedLayers {
   }
 
   /** A key always maps to the layer type its `create` returns. */
-  put<T extends L.Layer>(key: string, create: () => T, update: (layer: T) => void): void {
+  put<T extends L.Layer>(key: string, create: () => T, update: (layer: T) => void): T {
     this.seen.add(key);
     const cur = this.live.get(key) as T | undefined;
-    if (cur) update(cur);
-    else this.live.set(key, create().addTo(this.map));
+    if (cur) {
+      update(cur);
+      return cur;
+    }
+    const made = create().addTo(this.map);
+    this.live.set(key, made);
+    return made;
   }
 
   sweep(): void {
@@ -37,6 +42,12 @@ export class KeyedLayers {
     this.seen.clear();
   }
 }
+
+/** A drawn route: the line over a casing in the map's contrast colour (.route-casing), 2 px of it on each side. */
+export const ROUTE_CASING: L.PolylineOptions = { color: "#0d1013", className: "route-casing", weight: 10, opacity: 0.85, lineCap: "round", lineJoin: "round" };
+export const routeLine = (color: string): L.PolylineOptions => ({ color, weight: 6, opacity: 1, lineCap: "round", lineJoin: "round" });
+/** A stop on a drawn route: a ring in the line colour around a fill in the map's contrast colour (.route-stop), wider than the casing. */
+export const routeStop = (color: string): L.CircleMarkerOptions => ({ color, weight: 3, radius: 5.5, opacity: 1, fillColor: "#0d1013", fillOpacity: 1, className: "route-stop" });
 
 /** Tooltip DOM: strings become text nodes (upstream names are never parsed as HTML, as a Leaflet string would be). */
 export function el(tag: string, className: string, ...kids: (Node | string)[]): HTMLElement {

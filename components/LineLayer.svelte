@@ -2,10 +2,11 @@
   import L from "leaflet";
   import { onDestroy, untrack } from "svelte";
 
-  import { el, KeyedLayers } from "@/components/leafletLayers";
+  import { el, KeyedLayers, ROUTE_CASING, routeLine, routeStop } from "@/components/leafletLayers";
   import { displayStopName, operatorColor } from "@/lib/client/format";
   import { prefersReducedMotion } from "@/lib/client/motion";
   import { loadShapeLatest } from "@/lib/client/shapes";
+  import { smoothRoute, snapStopsOnto } from "@/lib/shared/polyline";
   import type { LatLng, LineInfo, LineVariant, Stop } from "@/lib/client/types";
 
   /** The open line view's pattern on the map: the stored road shape (straight stop-to-stop until it exists), stops tappable. */
@@ -43,7 +44,10 @@
   const stops = $derived(
     (variant?.stops ?? []).flatMap((s) => (s.lat != null && s.lon != null ? [{ ...s, lat: s.lat, lon: s.lon }] : [])),
   );
-  const pts = $derived<LatLng[]>(road && road.id === shapeId ? road.pts : stops.map((s) => [s.lat, s.lon]));
+  const stopPts = $derived(stops.map((s): LatLng => [s.lat, s.lon]));
+  const pts = $derived<LatLng[]>(road && road.id === shapeId ? smoothRoute(road.pts, untrack(() => stopPts)) : stopPts);
+  // the circles sit ON the road shape (TripLayer's stopAt)
+  const stopAt = $derived(pts === stopPts ? stopPts : snapStopsOnto(pts, stopPts));
 
   // frame the pattern once per variant, clear of the sheet (mobile) / the panel (desktop)
   $effect(() => {
@@ -74,23 +78,23 @@
       const color = operatorColor(line?.operator, line?.name);
       layers.put(
         "casing",
-        () => L.polyline(path, { color: "#0d1013", className: "route-casing", weight: 9, opacity: 0.85, lineCap: "round", lineJoin: "round" }),
+        () => L.polyline(path, ROUTE_CASING),
         (l) => l.setLatLngs(path),
       );
-      const route: L.PolylineOptions = { color, weight: 4.5, opacity: 0.95, lineCap: "round", lineJoin: "round" };
+      const route = routeLine(color);
       layers.put(
         "route",
         () => L.polyline(path, route),
         (l) => l.setLatLngs(path).setStyle(route),
       );
-      const style: L.PathOptions = { color, weight: 2, fillOpacity: 1, fillColor: "#ffffff" };
+      const style = routeStop(color);
       stops.forEach((s, i) => {
-        const center: LatLng = [s.lat, s.lon];
+        const center = stopAt[i];
         const tip = () => el("span", "", displayStopName(s.name));
         layers.put(
           `${s.id}-${i}`,
           () =>
-            L.circleMarker(center, { ...style, radius: 4.5 })
+            L.circleMarker(center, style)
               .bindTooltip(tip, { direction: "top", sticky: true, className: "kb-tooltip" })
               .on("click", () => {
                 const st = resolveStop(s.id);

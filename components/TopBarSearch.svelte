@@ -688,11 +688,11 @@
 
 {#snippet fuelTag(fuel: FleetVehicleSummary["fuelType"])}
   {#if fuel === "hydrogen"}
-    {@render tag("Wodór", DropIcon)}
+    {@render tag("Wodorowy", DropIcon)}
   {:else if fuel === "electric"}
     {@render tag("Elektryczny", LightningIcon)}
   {:else if fuel === "hybrid"}
-    {@render tag("Hybryda", LeafIcon)}
+    {@render tag("Hybrydowy", LeafIcon)}
   {:else}
     {@render tag("Diesel", null)}
   {/if}
@@ -834,7 +834,7 @@
                               ? ` · ${it.v.model}`
                               : ""}
                           </span>
-                          {#if it.v.features?.hydrogen}{@render tag("Wodór", DropIcon)}{/if}
+                          {#if it.v.features?.hydrogen}{@render tag("Wodorowy", DropIcon)}{/if}
                           {#if it.v.features?.electric}{@render tag("Elektryczny", LightningIcon)}{/if}
                         </span>
                       </span>

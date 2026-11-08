@@ -28,6 +28,14 @@ export async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> 
  */
 export const vehiclesClock = new WeakMap<object, { recvPerf: number; serverMs: number | null }>();
 
+/** server clock minus this device's clock, ms, from the last vehicles answer (0 before one) */
+let serverSkewMs = 0;
+
+/** epoch seconds on the server's clock: ages of server timestamps (`fix_at`) stay right on a device whose clock is off */
+export function serverNowSec(): number {
+  return (Date.now() + serverSkewMs) / 1000;
+}
+
 /** performance.now() of the server's next vehicles body (its X-Next-Update on this clock), 0 = it sent none */
 let vehiclesNextPerf = 0;
 
@@ -44,6 +52,7 @@ export async function vehiclesFetcher(url: string): Promise<VehiclesResponse> {
   const st = Number(r.headers.get("x-server-time"));
   const nx = Number(r.headers.get("x-next-update"));
   vehiclesNextPerf = st > 0 && nx > st ? recvPerf + (nx - st) : 0;
+  if (st > 0) serverSkewMs = st - Date.now();
   const body = (await r.json()) as VehiclesResponse;
   if (body && Array.isArray(body.vehicles)) {
     vehiclesClock.set(body.vehicles, { recvPerf, serverMs: Number.isFinite(st) && st > 0 ? st : null });

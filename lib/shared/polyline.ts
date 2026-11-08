@@ -288,6 +288,22 @@ export function projectStopsAlong(
   return out;
 }
 
+/** An ordered stop list moved onto the line (projectStopsAlong's placement), so a drawn route runs through its stop
+ *  circles; a stop the line passes further than maxOffM away keeps its own point. */
+export function snapStopsOnto(
+  line: ReadonlyArray<readonly [number, number]>,
+  stops: ReadonlyArray<LatLng>,
+  maxOffM = 80,
+): LatLng[] {
+  const pl = preparePolyline(line);
+  if (!pl) return stops.slice();
+  return projectStopsAlong(pl, stops, maxOffM).map((s, i): LatLng => {
+    if (s === null) return stops[i];
+    const p = pointAt(pl, s);
+    return [p.lat, p.lon];
+  });
+}
+
 function projectSegment(pl: Polyline, i: number, lat: number, lon: number): { s: number; d: number } {
   const aLat = pl.lat[i];
   const aLon = pl.lon[i];
@@ -429,4 +445,127 @@ function distToPath(pts: ReadonlyArray<LatLng>, from: number, to: number, q: Lat
     best = Math.min(best, Math.hypot(px - t * dx, py - t * dy));
   }
   return best;
+}
+
+/** a vertex turning back by this much (deg) on a short leg is a spike: the shape overshot a junction */
+const SPIKE_TURN = 150;
+const SPIKE_LEG_M = 40;
+/** a bend below this (deg) stays a vertex: rounding it is invisible under a 6 px line */
+const MIN_BEND = 8;
+/** one curve segment per this many degrees of bend */
+const BEND_STEP = 15;
+
+/** a shape crossing itself within this much path is a trace across a roundabout's island: a bus can't loop that tight */
+const LOOP_M = 60;
+
+/** Where segment ab crosses cd (strictly inside both), else null. */
+function crossing(a: LatLng, b: LatLng, c: LatLng, d: LatLng): LatLng | null {
+  const kx = Math.cos(a[0] * RAD);
+  const rx = (b[1] - a[1]) * kx;
+  const ry = b[0] - a[0];
+  const sx = (d[1] - c[1]) * kx;
+  const sy = d[0] - c[0];
+  const qx = (c[1] - a[1]) * kx;
+  const qy = c[0] - a[0];
+  const den = rx * sy - ry * sx;
+  if (den === 0) return null;
+  const t = (qx * sy - qy * sx) / den;
+  const u = (qx * ry - qy * rx) / den;
+  return t > 0 && t < 1 && u > 0 && u < 1 ? [a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])] : null;
+}
+
+/**
+ * Splice out every loop shorter than LOOP_M at the point where the shape crosses itself, unless the splice would turn
+ * back like a spike or a `protect` stop stands on the loop (nearer to it than to the legs that stay).
+ */
+function cutLoops(pts: ReadonlyArray<LatLng>, protect: ReadonlyArray<readonly [number, number]>): LatLng[] {
+  const out = pts.slice();
+  for (let i = 0; i + 3 < out.length; i++) {
+    let len = 0;
+    for (let j = i + 2; j + 1 < out.length; j++) {
+      len += segMeters(out[j - 1][0], out[j - 1][1], out[j][0], out[j][1]);
+      if (len > LOOP_M) break;
+      const x = crossing(out[i], out[i + 1], out[j], out[j + 1]);
+      if (!x || (bendAt(out[i], x, out[j + 1]) ?? 180) >= SPIKE_TURN) continue;
+      const onLoop = (q: readonly [number, number]) => {
+        const p: LatLng = [q[0], q[1]];
+        const d = distToPath(out, i + 1, j, p);
+        return d < 25 && d < Math.min(distToPath(out, i, i + 1, p), distToPath(out, j, j + 1, p));
+      };
+      if (protect.some(onLoop)) continue;
+      out.splice(i + 1, j - i, x);
+      break;
+    }
+  }
+  return out;
+}
+
+/** Turn (deg, 0 = straight on, 180 = U-turn) at b; null for a zero-length leg. */
+function bendAt(a: LatLng, b: LatLng, c: LatLng): number | null {
+  const kx = Math.cos(b[0] * RAD);
+  const x1 = (b[1] - a[1]) * kx;
+  const y1 = b[0] - a[0];
+  const x2 = (c[1] - b[1]) * kx;
+  const y2 = c[0] - b[0];
+  if ((x1 === 0 && y1 === 0) || (x2 === 0 && y2 === 0)) return null;
+  return Math.abs(Math.atan2(x1 * y2 - y1 * x2, x1 * x2 + y1 * y2)) / RAD;
+}
+
+/**
+ * A drawn route without sharp edges. Loops shorter than LOOP_M (cutLoops), out-and-back stubs (pruneSpurs) and
+ * one-vertex spikes (a sparse zbiorkom shape overshooting a junction) are cut out unless a `protect` stop stands on
+ * them, then every bend becomes a quadratic curve between its legs' midpoints, short enough to stray at most devM from
+ * the corner: a 20° bend of a sparse shape turns into a smooth arc, a street corner keeps ~11 m of each leg. O(n) after
+ * pruneSpurs.
+ */
+export function smoothRoute(
+  pts: ReadonlyArray<LatLng>,
+  protect: ReadonlyArray<readonly [number, number]> = [],
+  devM = 4,
+): LatLng[] {
+  const near = (p: LatLng) => protect.some((q) => segMeters(q[0], q[1], p[0], p[1]) < 25);
+  let line: LatLng[] = [];
+  for (const p of pruneSpurs(pts, protect)) {
+    const last = line[line.length - 1];
+    if (last && segMeters(last[0], last[1], p[0], p[1]) < 0.5) continue;
+    line.push(p);
+    while (line.length >= 3) {
+      const [a, b, c] = line.slice(-3);
+      const bend = bendAt(a, b, c);
+      const leg = Math.min(segMeters(a[0], a[1], b[0], b[1]), segMeters(b[0], b[1], c[0], c[1]));
+      if (bend === null || bend < SPIKE_TURN || leg > SPIKE_LEG_M || near(b)) break;
+      line.splice(-2, 1);
+    }
+  }
+  // after the spikes: a sparse shape zigzagging through its points crosses itself without circling anything
+  line = cutLoops(line, protect);
+  if (line.length < 3) return line;
+  const out: LatLng[] = [line[0]];
+  // two curves meet at their shared leg's midpoint
+  const push = (p: LatLng) => {
+    const q = out[out.length - 1];
+    if (segMeters(q[0], q[1], p[0], p[1]) >= 0.1) out.push(p);
+  };
+  for (let i = 1; i < line.length - 1; i++) {
+    const [a, b, c] = [line[i - 1], line[i], line[i + 1]];
+    const bend = bendAt(a, b, c) ?? 0;
+    if (bend < MIN_BEND) {
+      push(b);
+      continue;
+    }
+    const ab = segMeters(a[0], a[1], b[0], b[1]);
+    const bc = segMeters(b[0], b[1], c[0], c[1]);
+    // the curve's midpoint lies t/2 * sin(bend/2) from the corner
+    const t = Math.min(ab / 2, bc / 2, (2 * devM) / Math.sin((bend / 2) * RAD));
+    const p0: LatLng = [b[0] + ((a[0] - b[0]) * t) / ab, b[1] + ((a[1] - b[1]) * t) / ab];
+    const p2: LatLng = [b[0] + ((c[0] - b[0]) * t) / bc, b[1] + ((c[1] - b[1]) * t) / bc];
+    const k = Math.ceil(bend / BEND_STEP);
+    for (let j = 0; j <= k; j++) {
+      const s = j / k;
+      const [w0, w1, w2] = [(1 - s) * (1 - s), 2 * (1 - s) * s, s * s];
+      push([w0 * p0[0] + w1 * b[0] + w2 * p2[0], w0 * p0[1] + w1 * b[1] + w2 * p2[1]]);
+    }
+  }
+  push(line[line.length - 1]);
+  return out;
 }

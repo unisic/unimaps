@@ -116,11 +116,21 @@
       if (gl.isStyleLoaded()) settle("ready");
     };
 
+    type Filter = Parameters<typeof gl.setFilter>[1];
     const onStyleLoad = () => {
       for (const l of gl.getStyle().layers) {
         // text-field is a symbol layer's layout property
         const f = l.type === "symbol" ? l.layout?.["text-field"] : undefined;
         if (JSON.stringify(f ?? null).includes('"name_en"')) gl.setLayoutProperty(l.id, "text-field", polishLabel(f) as typeof f);
+        /* the basemap's own bus / tram stop names sit under (and collide with) our stop markers; train stations stay.
+           Subclasses as OpenFreeMap's tiles carry them (decoded 2026-11-08: bus/bus_stop, bus/bus_station,
+           railway/tram_stop; "Jasna" draws them through poi_transit and poi_r1, "Ciemna" has no poi layer) */
+        if (l.type === "symbol" && l["source-layer"] === "poi") {
+          const notStop: Filter = ["!", ["match", ["get", "subclass"], ["bus_stop", "bus_station", "tram_stop"], true, false]];
+          /* OpenFreeMap's filters are expressions; a legacy one cannot be combined with one, setFilter's validation
+             then rejects the pair (an error event) and the layer keeps its own filter */
+          gl.setFilter(l.id, l.filter ? (["all", l.filter, notStop] as Filter) : notStop);
+        }
       }
     };
     gl.once("style.load", onStyleLoad);

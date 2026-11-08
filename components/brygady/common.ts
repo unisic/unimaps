@@ -162,10 +162,10 @@ export const LENGTH_LABEL_PLURAL: Record<FleetLengthCategory, string> = {
 
 export function featureList(f: VehicleFeatures): string[] {
   const out: string[] = [];
-  if (f.lowFloor) out.push("Niska podłoga");
-  if (f.airCondition) out.push("Klimatyzacja");
+  if (f.lowFloor) out.push("Niskopodłogowy");
+  if (f.airCondition) out.push("Klimatyzowany");
   if (f.ticketMachine) out.push("Biletomat");
-  if (f.ecoVehicle) out.push("Pojazd ekologiczny");
+  if (f.ecoVehicle) out.push("Ekologiczny");
   return out;
 }
 

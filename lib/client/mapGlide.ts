@@ -1,5 +1,5 @@
 import L from "leaflet";
-import { easeSpring, glideSeconds, prefersReducedMotion } from "@/lib/client/motion";
+import { easeFly, easeSpring, flyAt, flyDip, glideSeconds, prefersReducedMotion } from "@/lib/client/motion";
 
 /** Leaflet's own frame plumbing, the one flyTo drives (stable across 1.x). A move parks its
  *  frame id in `_flyToFrame`, so `_stop()`, which every drag, pinch, wheel zoom and
@@ -160,13 +160,39 @@ function zoomFrames(m: FrameMap, ll: L.LatLng, p0: L.Point, at: L.Point, zoom: n
   m._flyToFrame = requestAnimationFrame(frame);
 }
 
+/** Out, across and back in to `end` at `zoom` (flyAt), 0.9-1.8 s by depth on easeFly. The pan runs in
+ *  `z0` pixels, so it crosses mostly while zoomed out. Caller fired _moveStart. */
+function flyFrames(m: FrameMap, end: L.LatLng, zoom: number) {
+  const z0 = m.getZoom();
+  const from = m.project(m.getCenter(), z0);
+  const to = m.project(end, z0);
+  const size = m.getSize();
+  const dip = Math.max(m.getMinZoom(), flyDip(z0, zoom, from.distanceTo(to), Math.min(size.x, size.y)));
+  const ms = Math.min(1.8, 0.9 + 0.2 * (Math.max(z0, zoom) - dip)) * 1000;
+  running.set(m, { cut: () => m.fire("zoomend") });
+  const t0 = performance.now();
+  const frame = (now: number) => {
+    const t = Math.min(1, (now - t0) / ms);
+    if (t < 1) {
+      const [p, z] = flyAt(easeFly(t), z0, zoom, dip);
+      m._flyToFrame = requestAnimationFrame(frame);
+      m._move(m.unproject(from.add(to.subtract(from).multiplyBy(p)), z0), z);
+      return;
+    }
+    running.delete(m);
+    m._move(end, zoom);
+    m._moveEnd(true);
+  };
+  m._flyToFrame = requestAnimationFrame(frame);
+}
+
 /**
  * Bring `target` to container point `at` at `zoom`: the target slides along a straight screen
  * line while the zoom eases in step, on the sheet's spring curve, 0.3-0.6 s by distance. No
- * zoom-out arc (flyTo's hop) unless the target is over FLY_SCREENS away. Same zoom: the map pane
- * slides (Leaflet's own pan path, the GL basemap just moves).
+ * zoom-out arc (flyTo's hop) unless the target is over FLY_SCREENS away; `fly` always backs out
+ * (flyFrames). Same zoom: the map pane slides (Leaflet's own pan path, the GL basemap just moves).
  */
-export function glideTo(map: L.Map, target: L.LatLngExpression, zoom: number, at: L.Point): void {
+export function glideTo(map: L.Map, target: L.LatLngExpression, zoom: number, at: L.Point, fly = false): void {
   installSmoothZoom(map);
   const m = map as FrameMap;
   m._stop();
@@ -178,6 +204,11 @@ export function glideTo(map: L.Map, target: L.LatLngExpression, zoom: number, at
   const screens = p0.distanceTo(at) / Math.min(size.x, size.y);
   if (prefersReducedMotion()) {
     m.setView(end, zoom, { animate: false });
+    return;
+  }
+  if (fly) {
+    m._moveStart(true, false);
+    flyFrames(m, end, zoom);
     return;
   }
   if (screens > FLY_SCREENS) {

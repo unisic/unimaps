@@ -596,7 +596,7 @@
 
 <!-- The bus is low-floor (MZK fleet data; KB and GZM boards carry no vehicle features). -->
 {#snippet lowFloorMark()}
-  <span class="flex shrink-0 text-[13px]" role="img" aria-label="Niska podłoga"><Icon icon={WheelchairIcon} /></span>
+  <span class="flex shrink-0 text-[13px]" role="img" aria-label="Niskopodłogowy"><Icon icon={WheelchairIcon} /></span>
 {/snippet}
 
 <!-- An upstream source failed: the list is incomplete, not empty (a failed MZK fetch used to look like "no MZK buses"). -->
@@ -856,9 +856,10 @@
                     {@const al = alertByKey.get(ak)}
                     <li>
                       <div class="flex items-center">
+                        <!-- a row matched to its bus by trip carries no exec id: that bus is the exec, so the trip opens live, on it -->
                         <button
                           type="button"
-                          onclick={() => onShowLive(row.trip_execution_id || "", row.trip_id ?? null)}
+                          onclick={() => onShowLive(row.trip_execution_id || veh?.id || "", row.trip_id ?? null)}
                           class="tap flex min-w-0 flex-1 items-center gap-3 rounded-xl px-2 py-2.5 text-left hover:bg-tint/5 active:bg-tint/8"
                         >
                           <LineBadge {line} operator={row.operator} />
