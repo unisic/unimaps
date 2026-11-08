@@ -259,7 +259,7 @@
         {@render liveClock(localUpdatedAt(fleet.data))}
       {/if}
       <a
-        href="https://buymeacoffee.com/unisic"
+        href="https://ko-fi.com/unisic"
         target="_blank"
         rel="noopener noreferrer"
         aria-label="Wesprzyj nas"

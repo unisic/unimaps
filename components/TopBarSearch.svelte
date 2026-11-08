@@ -391,10 +391,10 @@
       {
         id: "donate",
         label: "Wesprzyj nas",
-        keywords: "wesprzyj wsparcie wspomoz dotacja darowizna donate kawa buy me a coffee",
+        keywords: "wesprzyj wsparcie wspomoz dotacja darowizna donate kawa ko-fi kofi",
         icon: HeartIcon,
         run: () => {
-          window.open("https://buymeacoffee.com/unisic", "_blank", "noopener,noreferrer");
+          window.open("https://ko-fi.com/unisic", "_blank", "noopener,noreferrer");
         },
       },
     ];

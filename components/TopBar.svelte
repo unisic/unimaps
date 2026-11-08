@@ -339,7 +339,7 @@
         </div>
       {/if}
       <a
-        href="https://buymeacoffee.com/unisic"
+        href="https://ko-fi.com/unisic"
         target="_blank"
         rel="noopener noreferrer"
         class="group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-text transition-colors hover:bg-tint/5"
