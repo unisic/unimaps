@@ -3,7 +3,7 @@
  * vehicle's production year and its newest photos. Run it from a home connection (phototrans'
  * Cloudflare answers a datacenter IP with 403), then commit the file. One request per second; the
  * pages of a run are kept under --cache so a rerun the same day resumes, and removed after a
- * successful run (~1700 pages, ~170 MB while it runs, ~30 min).
+ * successful run (~2500 pages, ~250 MB while it runs, ~45 min).
  *
  * Usage:
  *   npm run build:phototrans
@@ -17,11 +17,14 @@ import { parseArgs } from "node:util";
 import { parseGroupPage, parseOperatorPage, parseVehiclePage, PT_BASE, ptKey, type PtGroup, type PtVehicle } from "../lib/phototrans";
 
 /**
- * Fleet key prefix -> phototrans operator id. Without a phototrans operator so far: GZM companies
- * 2 (ZTM), 107 (Kłosok), 116 (Lazar), 117 (PKS Grodzisk), 131 (PKS Południe), 134 (PKS Gostynin); METEOR
- * (118) has phototrans operator 39, but with no current fleet listed (2026-11-03).
+ * Fleet key prefix -> phototrans operator id. A GZM fleet number is unique across GZM, each company
+ * numbering inside its own block (50xx-54xx Kłosok, 55xx-59xx Lazar, 60xx-64xx IREX/Meteor, 8xxx the
+ * PKS companies), so `range` keeps an operator's GZM block only: phototrans files a vehicle under its
+ * owner, which runs city buses elsewhere too (Kłosok in Żory) and lends vehicles to a sister company
+ * (PKS Gostynin runs PKS Grodzisk and PKS Tarnobrzeg buses). Without a phototrans operator so far:
+ * GZM company 2 (ZTM). METEOR's own phototrans operator 39 lists no current fleet (2026-11-08).
  */
-const OPERATORS: { city: "bb" | "gzm"; prefix: string; op: number }[] = [
+const OPERATORS: { city: "bb" | "gzm"; prefix: string; op: number; range?: [number, number] }[] = [
   { city: "bb", prefix: "", op: 35 }, // MZK Bielsko-Biała
   { city: "gzm", prefix: "104_", op: 72 }, // PKM Świerklaniec
   { city: "gzm", prefix: "108_", op: 69 }, // PKM Katowice
@@ -34,6 +37,14 @@ const OPERATORS: { city: "bb" | "gzm"; prefix: string; op: number }[] = [
   { city: "gzm", prefix: "125_", op: 123 }, // Tramwaje Śląskie
   { city: "gzm", prefix: "283_", op: 50 }, // PKM Tychy
   { city: "gzm", prefix: "284_", op: 274 }, // TLT
+  { city: "gzm", prefix: "107_", op: 635, range: [5000, 5499] }, // Kłosok
+  { city: "gzm", prefix: "116_", op: 382, range: [5500, 5999] }, // Lazar
+  { city: "gzm", prefix: "131_", op: 382, range: [5500, 5999] }, // PKS Południe (Lazar's)
+  { city: "gzm", prefix: "118_", op: 318, range: [6000, 6499] }, // METEOR: IREX Świętochłowice
+  { city: "gzm", prefix: "118_", op: 382, range: [5500, 5999] }, // METEOR running Lazar buses
+  { city: "gzm", prefix: "117_", op: 12, range: [8000, 8999] }, // PKS Grodzisk Mazowiecki
+  { city: "gzm", prefix: "134_", op: 12, range: [8000, 8999] }, // PKS Gostynin: PKS Grodzisk buses
+  { city: "gzm", prefix: "134_", op: 408, range: [8000, 8999] }, // PKS Gostynin: PKS Tarnobrzeg buses
 ];
 
 const UA = "unimaps-fleet-index/1.0 (+https://map.unisic.app)";
@@ -86,7 +97,15 @@ async function main(): Promise<void> {
   const vehicles: Record<string, PtVehicle> = {};
   /** photo count phototrans lists for a key: a number twice in one fleet keeps the better documented vehicle */
   const listed = new Map<string, number>();
+  const groupAt = new Map<string, number>();
+  /**
+   * numbers dropped this year or last: GZM keeps publishing an old number after phototrans has the new one
+   * (PKM Katowice 0410 -> 1420, 2026). Applied after the crawl, only where no vehicle in service holds the key.
+   */
+  const aliases: [string, PtVehicle][] = [];
+  const recent = new Date().getUTCFullYear() - 1;
   for (const o of OPERATORS) {
+    const ours = (n: string) => /^\d{1,6}$/.test(n) && (!o.range || (Number(n) >= o.range[0] && Number(n) <= o.range[1]));
     const opGroups = parseOperatorPage(await get(`24,${o.op},0.html`));
     // a fleet that parses empty is a layout change, not an operator without vehicles
     if (opGroups.length === 0) throw new Error(`operator ${o.op}: no current fleet parsed`);
@@ -97,27 +116,35 @@ async function main(): Promise<void> {
       if (og.active !== null && gp.inService !== og.active) {
         console.warn(`[phototrans] group ${o.op}/${og.id} ${og.model}: ${gp.inService} in service parsed, ${og.active} listed`);
       }
-      const g =
-        groups.push({
-          op: o.op,
-          model: og.model,
-          producer: og.producer,
-          body: og.body,
-          engine: og.engine,
-          gearbox: og.gearbox,
-          doors: gp.doors,
-          since: og.since,
-          kind: og.kind,
-          modules: gp.modules,
-        }) - 1;
       for (const veh of gp.vehicles) {
         // our fleet numbers are digits only
-        if (!/^\d{1,6}$/.test(veh.number)) continue;
+        if (!ours(veh.number)) continue;
         const key = ptKey(o.city, o.prefix + veh.number);
         if ((listed.get(key) ?? -1) >= veh.photos) continue;
         listed.set(key, veh.photos);
         const page = parseVehiclePage(await get(`15,${veh.id},${o.op}.html`), maxPhotos);
+        // a group is written once, on its first kept vehicle: an operator mapped twice or ranged adds no empty groups
+        let g = groupAt.get(`${o.op}/${og.id}`);
+        if (g === undefined) {
+          g =
+            groups.push({
+              op: o.op,
+              model: og.model,
+              producer: og.producer,
+              body: og.body,
+              engine: og.engine,
+              gearbox: og.gearbox,
+              doors: gp.doors,
+              since: og.since,
+              kind: og.kind,
+              modules: gp.modules,
+            }) - 1;
+          groupAt.set(`${o.op}/${og.id}`, g);
+        }
         vehicles[key] = { g, v: veh.id, b: page.built, p: page.photos };
+        for (const f of page.former) {
+          if (f.op === o.op && f.until >= recent && ours(f.number)) aliases.push([ptKey(o.city, o.prefix + f.number), vehicles[key]]);
+        }
         count++;
       }
     }
@@ -125,6 +152,8 @@ async function main(): Promise<void> {
     if (count === 0) throw new Error(`operator ${o.op}: no vehicle in service parsed`);
     console.log(`[phototrans] operator ${o.op} (${o.city}:${o.prefix}): ${opGroups.length} groups, ${count} vehicles`);
   }
+
+  for (const [k, v] of aliases) vehicles[k] ??= v;
 
   // one entry per line: a rerun diffs vehicle by vehicle
   const keys = Object.keys(vehicles).sort((a, b) => a.localeCompare(b, "en", { numeric: true }));

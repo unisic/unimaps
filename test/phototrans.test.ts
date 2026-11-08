@@ -20,6 +20,8 @@ const GROUP = `<tr><td class="gensmall">Design of doors</td><td class="gensmall"
 
 const VEHICLE = `<tr><td class="row2" colspan="2"><span class="genmed">Built</span></td><td class="row2"><span class="genmed">2014</span></td></tr>
 <div class=rowtable><div class=rowimage><a href="14,1406715,0,Solaris_Urbino_12_202.html"><img src="/images/photos/thumbnail/591/1406715.jpg?0" border=1  /></a></div><div class=rowopis><span class=genmed><b>28 october 2026</b> - <span class=genmed>Droga</span><br />Author: <a href="16,1798,0.html">Tomek94</a></span></div></div>
+<tr><td class=row2><span class=genmed><span class="history-date">2023</span></span></td><td class=row2><span class=genmed><span class="history-date">—</span></span></td><td class=row2><span class=genmed><b>SK 125XY</b></span></td></tr>
+<tr><td class=row2><span class=genmed><span class="history-date">2023</span></span></td><td class=row2><span class=genmed><span class="history-date">2026</span></span></td><td class=row2><span class=genmed><b>0410 / <a href="autobusy.php?s=24&nr=69&ticket=2"></a>PKM Katowice</b></span></td></tr><tr><td class=row2><span class=genmed><span class="history-date">2026</span></span></td><td class=row2><span class=genmed><span class="history-date">—</span></span></td><td class=row2><span class=genmed><b>1420 / <a href="autobusy.php?s=24&nr=69&ticket=2"></a>PKM Katowice</b></span></td></tr>
 <div class=rowtable><div class=rowimage><a href="14,1406714,0,x.html"><img src="/images/photos/thumbnail/590/1406714.jpg?0" border=1  /></a></div><div class=rowopis><span class=genmed><b>3 may 2025</b><br />Author: <a href="16,7,0.html">J&#243;zef</a></span></div></div>`;
 
 test("operator page: current passenger fleet only", () => {
@@ -50,13 +52,14 @@ test("group page: numbered vehicles in service, a withdrawn one (row_spisan) ski
   });
 });
 
-test("vehicle page: built year and newest photos, capped", () => {
+test("vehicle page: built year, newest photos capped, former numbers without the current one or a plate", () => {
   assert.deepEqual(parseVehiclePage(VEHICLE, 5), {
     built: 2014,
     photos: [
       ["591/1406715", "Tomek94", "2026-10-28"],
       ["590/1406714", "Józef", "2025-05-03"],
     ],
+    former: [{ number: "0410", op: 69, until: 2026 }],
   });
   assert.equal(parseVehiclePage(VEHICLE, 1).photos.length, 1);
 });

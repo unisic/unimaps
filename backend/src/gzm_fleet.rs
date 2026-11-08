@@ -19,7 +19,7 @@ use crate::js;
 use crate::logger;
 use crate::phototrans::pt_vehicle;
 use crate::shared::fleet::{
-    FleetFeatures, FleetFuelType, FleetOperator, FleetStats, FleetSummaryItem, FleetVehicleDetail,
+    FleetFeatures, FleetFuelType, FleetLengthCategory, FleetOperator, FleetStats, FleetSummaryItem, FleetVehicleDetail,
 };
 
 /// Operating companies by the code before "_" in the vehicle key: the `organization` of the same keys in SDIP
@@ -134,6 +134,34 @@ pub fn gzm_fleet_input(src: &GzmFleetSource) -> FleetRunningInput {
     }
 }
 
+/// Length class from the GZM fleet number, for a vehicle phototrans gives no length for. Each company numbers inside
+/// its own block, small buses first, then solo buses, then articulated and 15 m ones: x100-599 solo / x600-999 in a
+/// 1000 block (0xxx Gliwice), 100-399 / 400-499 in a 500 block (50xx-54xx Kłosok). The first 100 mix mini and midi.
+/// ponytail: PKM Katowice (108) left out, its 13xx-14xx are Urbino 18; a 15 m bus in the top range reads MEGA.
+pub fn gzm_length_by_number(side: &str) -> Option<FleetLengthCategory> {
+    let (code, num) = side.split_once('_')?;
+    let n: u32 = num.parse().ok()?;
+    let (start, size, solo_end) = match code {
+        "120" => (0, 1000, 600),
+        "119" => (2000, 1000, 600),
+        "104" => (3000, 1000, 600),
+        "283" => (4000, 900, 600), // 49xx is TLT
+        "107" => (5000, 500, 400),
+        "116" | "131" => (5500, 500, 400),
+        "118" => (6000, 500, 400),
+        "114" => (6500, 500, 400),
+        "122" => (7000, 500, 400),
+        "110" => (7500, 500, 400),
+        "117" | "134" => (8000, 1000, 600),
+        _ => return None,
+    };
+    match n.checked_sub(start).filter(|&o| o < size)? {
+        0..100 => None,
+        o if o < solo_end => Some(FleetLengthCategory::Maxi),
+        _ => Some(FleetLengthCategory::Mega),
+    }
+}
+
 /// GZM publishes the model only: producer, year, length and propulsion come from phototrans when it lists the vehicle.
 fn gzm_info(side: &str, label: Option<&str>, model: Option<&str>) -> FleetVehicleInfo {
     let pt = pt_vehicle("gzm", side);
@@ -163,7 +191,7 @@ fn gzm_info(side: &str, label: Option<&str>, model: Option<&str>) -> FleetVehicl
             .to_owned(),
         producer: pt.as_ref().map(|p| p.group.producer.clone()).unwrap_or_default(),
         year: year.map(|y| y.to_string()),
-        length_category: pt.as_ref().and_then(|p| p.len),
+        length_category: pt.as_ref().and_then(|p| p.len).or_else(|| gzm_length_by_number(side)),
         fuel_type: fuel,
         features,
     }

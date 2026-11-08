@@ -14,10 +14,11 @@ use serde_json::{Value, json};
 use unimaps::fleet_tracker::{FleetSummaryFilter, FleetTracker, FleetTrackerOptions};
 use unimaps::gzm::{GzmFleetSource, GzmFleetStop, GzmLiveVehicle, GzmNextTrip};
 use unimaps::gzm_fleet::{
-    feed_fleet, fleet_list_body, gzm_company, gzm_fleet_input, gzm_fleet_options, idle_detail_of, is_gzm_side,
+    feed_fleet, fleet_list_body, gzm_company, gzm_fleet_input, gzm_fleet_options, gzm_length_by_number, idle_detail_of,
+    is_gzm_side,
 };
 use unimaps::js::JsNum;
-use unimaps::shared::fleet::{CourseStatus, FleetOperator, LastKnownLocation, VehicleStatus};
+use unimaps::shared::fleet::{CourseStatus, FleetLengthCategory, FleetOperator, LastKnownLocation, VehicleStatus};
 
 /// 2026-10-04 12:00:00 Europe/Warsaw = service-day second 43 200
 const NOON: i32 = 43_200;
@@ -400,6 +401,32 @@ fn gives_a_vehicle_on_the_map_but_never_on_a_course_an_idle_card_without_storing
         })
     );
     assert_eq!(t.get_vehicle_detail("104_9008"), None);
+}
+
+#[test]
+fn reads_the_length_class_from_the_fleet_number_block() {
+    use FleetLengthCategory::{Maxi, Mega};
+    // real vehicles, 2026-11-08: model as GZM publishes it
+    let cases = [
+        ("283_4271", Some(Maxi)), // MAN NL273 Lion`s City CNG
+        ("120_313", Some(Maxi)),  // 0313, PKM Gliwice
+        ("120_670", Some(Mega)),  // 0670, Solaris Urbino 18
+        ("107_5405", Some(Mega)), // BMC Procity 18LF
+        ("116_5605", Some(Maxi)), // Isuzu Citiport 12
+        ("116_5903", Some(Mega)), // Mercedes-Benz Conecto G
+        ("118_6115", Some(Maxi)), // BMC Procity 12LF
+        ("118_6401", Some(Mega)), // Mercedes-Benz Conecto G
+        ("134_8216", Some(Maxi)), // Iveco Streetway 12M
+        ("118_6051", None),       // BMC Neocity 8,5LF: the first 100 mix mini and midi
+        ("108_1346", None),       // Solaris Urbino 18: PKM Katowice does not follow the blocks
+        ("119_7", None),          // an old number outside Sosnowiec's 2xxx
+        ("284_4903", None),       // TLT 49xx
+        ("125_801", None),        // a tram
+        ("120_x", None),
+    ];
+    for (side, want) in cases {
+        assert_eq!(gzm_length_by_number(side), want, "{side}");
+    }
 }
 
 #[test]

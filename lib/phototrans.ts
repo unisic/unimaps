@@ -138,9 +138,20 @@ export function parseGroupPage(html: string): PtGroupPage {
   return { doors: details.get("Design of doors") ?? "", modules: modules > 0 ? modules : null, vehicles, inService };
 }
 
-/** Vehicle page `15,<id>,<op>.html`: production year and the newest `max` photos. */
-export function parseVehiclePage(html: string, max: number): { built: number | null; photos: string[][] } {
+export interface PtVehiclePage {
+  built: number | null;
+  photos: string[][];
+  /** numbers the vehicle no longer carries: as printed, the operator, the year it dropped it */
+  former: { number: string; op: number; until: number }[];
+}
+
+/** Vehicle page `15,<id>,<op>.html`: production year, the newest `max` photos and the numbers it carried before. */
+export function parseVehiclePage(html: string, max: number): PtVehiclePage {
   const built = /<span class="genmed">Built<\/span><\/td><td class="row2"><span class="genmed">(\d{4})/.exec(html);
+  // "Vehicle Numbers" rows: year of get, year of remove ("—" while current), "<number> / <operator link>"
+  const former = [
+    ...html.matchAll(/history-date">(\d{4})<\/span><\/span><\/td><td class=row2><span class=genmed><b>([^<]+?) \/ <a href="autobusy\.php\?s=24&(?:amp;)?nr=(\d+)/g),
+  ].map((m) => ({ number: text(m[2]), op: Number(m[3]), until: Number(m[1]) }));
   const photos: string[][] = [];
   for (const block of html.split("class=rowtable>").slice(1)) {
     if (photos.length >= max) break;
@@ -151,7 +162,7 @@ export function parseVehiclePage(html: string, max: number): { built: number | n
     const month = d ? MONTHS.indexOf(d[2]) + 1 : 0;
     photos.push([img[1], text(author[1]), d && month ? `${d[3]}-${String(month).padStart(2, "0")}-${d[1].padStart(2, "0")}` : ""]);
   }
-  return { built: built ? Number(built[1]) : null, photos };
+  return { built: built ? Number(built[1]) : null, photos, former };
 }
 
 /**
