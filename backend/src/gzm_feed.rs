@@ -1557,10 +1557,30 @@ async fn refresh(slug: &str, epoch: u64) {
         return;
     };
     if !has_feed && zip.exists() {
+        let day = mtime(&zip).map_or_else(String::new, |t| checked_day_at(t.as_millisecond()));
+        let kept = RefreshState {
+            has_feed: true,
+            checked_day: day.clone(),
+            retry_at: 0,
+        };
+        // a kept zip from an earlier day: ask for a newer one first, so the city parses one feed instead of the stale
+        // one and then the new (Warsaw: 2 x 10 s of CPU). A 304 or a failure falls back to the kept zip below.
+        let checked = gzm_refresh_due(&kept, Timestamp::now().as_millisecond());
+        if checked {
+            let r = download_and_install(slug, epoch, &zip, true).await;
+            let done = match r {
+                Ok(true) => with_state(slug, epoch, |s| s.feed.is_some()) != Some(false),
+                Ok(false) => true,
+                Err(_) => false,
+            };
+            record_check(slug, epoch, r);
+            if done {
+                return;
+            }
+        }
         match parse_off_loop(zip.clone(), slug).await {
             Ok(feed) => {
-                let day = mtime(&zip).map_or_else(String::new, |t| checked_day_at(t.as_millisecond()));
-                if !set_feed(slug, epoch, feed, Some(day)) {
+                if !set_feed(slug, epoch, feed, (!checked).then_some(day)) {
                     return;
                 }
             }
@@ -1583,6 +1603,11 @@ async fn refresh(slug: &str, epoch: u64) {
         return;
     }
     let r = download_and_install(slug, epoch, &zip, has_feed).await;
+    record_check(slug, epoch, r);
+}
+
+/// A check's outcome: Ok = checked today, Err = logged and retried in 30 min.
+fn record_check(slug: &str, epoch: u64, r: Result<bool, String>) {
     let now = Timestamp::now().as_millisecond();
     with_state(slug, epoch, |s| match r {
         Ok(_) => {

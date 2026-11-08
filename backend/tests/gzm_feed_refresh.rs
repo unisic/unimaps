@@ -10,23 +10,26 @@ use std::time::Duration;
 use jiff::Timestamp;
 use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use unimaps::gzm_feed::{checked_day_at, get_gzm_feed, gzm_feed_health, start_gzm_feed, stop_gzm_feed};
+use unimaps::gzm_feed::{
+    RefreshState, checked_day_at, get_gzm_feed, gzm_feed_health, gzm_refresh_due, start_gzm_feed, stop_gzm_feed,
+};
 
-fn zip() -> Vec<u8> {
+const T1: &str = "route_id,service_id,trip_id,trip_headsign\n1n,s1,t1,Dworzec";
+const T2: &str = "route_id,service_id,trip_id,trip_headsign\n1n,s1,t1,Dworzec\n1n,s1,t2,Dworzec";
+
+fn zip(trips: &str) -> Vec<u8> {
+    let calls = ["t1", "t2"].iter().filter(|t| trips.contains(&format!(",{t},"))).fold(
+        "trip_id,arrival_time,departure_time,stop_id,stop_sequence".to_owned(),
+        |acc, t| format!("{acc}\n{t},08:00:00,08:00:00,a,1\n{t},08:10:00,08:10:00,c,2"),
+    );
     let files = [
         ("routes.txt", "route_id,route_short_name,route_type\n1n,1N,3"),
         (
             "stops.txt",
             "stop_id,stop_name,stop_lat,stop_lon\na,Rynek,50.2590,19.0220\nc,Dworzec,50.2770,19.1300",
         ),
-        (
-            "trips.txt",
-            "route_id,service_id,trip_id,trip_headsign\n1n,s1,t1,Dworzec",
-        ),
-        (
-            "stop_times.txt",
-            "trip_id,arrival_time,departure_time,stop_id,stop_sequence\nt1,08:00:00,08:00:00,a,1\nt1,08:10:00,08:10:00,c,2",
-        ),
+        ("trips.txt", trips),
+        ("stop_times.txt", &calls),
         (
             "calendar.txt",
             "service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\ns1,1,1,1,1,1,1,1,20261026,20261231",
@@ -41,8 +44,9 @@ fn zip() -> Vec<u8> {
     w.finish().unwrap().into_inner()
 }
 
-/// `/gtfs`: the zip, then 304 to a conditional request; anything else: 500. Counts the zip requests.
-async fn serve(body: Vec<u8>, hits: Arc<AtomicUsize>) -> String {
+/// `/gtfs`: the zip, then 304 to a conditional request; `/stale/…`: `newer` after 300 ms, conditional or not;
+/// anything else: 500. Counts the zip requests.
+async fn serve(body: Vec<u8>, newer: Vec<u8>, hits: Arc<AtomicUsize>) -> String {
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", l.local_addr().unwrap());
     tokio::spawn(async move {
@@ -58,7 +62,12 @@ async fn serve(body: Vec<u8>, hits: Arc<AtomicUsize>) -> String {
             }
             let head = String::from_utf8_lossy(&head).to_lowercase();
             let mut out = Vec::new();
-            if !head.starts_with("get /gtfs ") {
+            if head.starts_with("get /stale/") {
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                hits.fetch_add(1, SeqCst);
+                out.extend_from_slice(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", newer.len()).as_bytes());
+                out.extend_from_slice(&newer);
+            } else if !head.starts_with("get /gtfs ") {
                 out.extend_from_slice(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n");
             } else if head.contains("if-modified-since:") {
                 out.extend_from_slice(b"HTTP/1.1 304 Not Modified\r\nContent-Length: 0\r\n\r\n");
@@ -87,9 +96,10 @@ async fn wait_for(what: &str, ok: impl Fn() -> bool) {
 #[tokio::test(flavor = "multi_thread")]
 async fn downloads_once_restarts_from_the_kept_zip_and_reports_a_failing_city() {
     let dir = std::env::temp_dir().join(format!("unimaps-gzm-refresh-{}", std::process::id()));
-    let body = zip();
+    let body = zip(T1);
+    let newer = zip(T2);
     let hits = Arc::new(AtomicUsize::new(0));
-    let base = serve(body.clone(), hits.clone()).await;
+    let base = serve(body.clone(), newer, hits.clone()).await;
     // SAFETY: the only test of this binary, before anything reads the environment
     unsafe {
         std::env::set_var("KB_GZM_DIR", &dir);
@@ -133,6 +143,33 @@ async fn downloads_once_restarts_from_the_kept_zip_and_reports_a_failing_city() 
     assert_eq!(h["version"], Value::Null);
     assert!(get_gzm_feed("broken").is_none());
     stop_gzm_feed("broken");
+
+    // a kept zip from two days ago and a newer feed upstream: the city's first feed is already the new one
+    let old = dir.join("stale/gtfs.zip");
+    std::fs::create_dir_all(old.parent().unwrap()).unwrap();
+    std::fs::write(&old, &body).unwrap();
+    let two_days_ago = std::time::SystemTime::now() - Duration::from_secs(2 * 86_400);
+    std::fs::File::options()
+        .write(true)
+        .open(&old)
+        .unwrap()
+        .set_modified(two_days_ago)
+        .unwrap();
+    let kept = RefreshState {
+        has_feed: true,
+        checked_day: checked_day_at(Timestamp::try_from(two_days_ago).unwrap().as_millisecond()),
+        retry_at: 0,
+    };
+    // before 04:00 Warsaw a check is not due: the kept zip shows and nothing is downloaded
+    let due = gzm_refresh_due(&kept, Timestamp::now().as_millisecond());
+    let hits_before = hits.load(SeqCst);
+    start_gzm_feed("stale");
+    wait_for("the stale city's feed", || get_gzm_feed("stale").is_some()).await;
+    let h = gzm_feed_health("stale");
+    assert_eq!(h["trips"], if due { 2 } else { 1 }, "first feed published");
+    assert_eq!(h["downloads"], u64::from(due));
+    assert_eq!(hits.load(SeqCst) - hits_before, usize::from(due));
+    stop_gzm_feed("stale");
     stop_gzm_feed("gzm");
     let _ = std::fs::remove_dir_all(dir);
 }
