@@ -67,7 +67,7 @@ mod zbiorkom_residency {
     }
 }
 
-// describe("prebuiltJson"): not ported, the Rust backend has no gzip of a prebuilt body yet.
+// describe("prebuiltJson"): tests/api_helpers.rs prebuilt_json_builds_and_gzips_a_body_once_for_concurrent_first_requests.
 
 mod connections_memo {
     use super::*;

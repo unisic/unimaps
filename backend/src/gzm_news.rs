@@ -37,21 +37,6 @@ const MAX_HTML: usize = 2_000_000;
 const MAX_BYTES: usize = 3 * MAX_HTML + 3;
 const PANEL: &str = "<div class=\"panel panel-default\">";
 
-/// `s.slice(0, max)` in UTF-16 units, cut before a pair the TS would split.
-fn utf16_prefix(s: &str, max: usize) -> &str {
-    if s.len() <= max {
-        return s;
-    }
-    let mut units = 0;
-    for (i, c) in s.char_indices() {
-        units += c.len_utf16();
-        if units > max {
-            return s.get(..i).unwrap_or(s);
-        }
-    }
-    s
-}
-
 /// `/<[^>]+>/g` replaced by a space.
 fn strip_tags(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -219,7 +204,7 @@ fn lead(panel: &str) -> Option<&str> {
 pub fn parse_gzm_news(html: &str, base: &str) -> Result<Vec<GzmNewsItem>, String> {
     let mut out = Vec::new();
     // a chunk runs to the next panel opener: the first link, stamp and lead in it are this panel's
-    for panel in utf16_prefix(html, MAX_HTML).split(PANEL).skip(1) {
+    for panel in js::utf16_prefix(html, MAX_HTML).split(PANEL).skip(1) {
         let Some((id, raw_title)) = link(panel) else {
             continue;
         };

@@ -1,13 +1,23 @@
 //! lib/api-helpers.ts: validation of values that get forwarded into upstream URLs, `?city=`, and error responses
-//! that never leak internals. `readJsonBody`, `prebuiltJson` and `jsonWithEtag` come with the first route using them.
+//! that never leak internals, and the two cached JSON answers (`prebuilt_json`, `json_with_etag`). `readJsonBody`
+//! comes with the first route using it.
 
+use std::collections::HashMap;
 use std::fmt::Display;
+use std::io::Write;
+use std::sync::{Arc, LazyLock, Mutex, MutexGuard, OnceLock, PoisonError};
 
-use hyper::header::{HeaderValue, RETRY_AFTER};
+use bytes::Bytes;
+use flate2::Compression;
+use flate2::write::GzEncoder;
+use hyper::header::{CACHE_CONTROL, CONTENT_ENCODING, CONTENT_TYPE, ETAG, HeaderMap, HeaderValue, RETRY_AFTER, VARY};
 use hyper::{Response, StatusCode};
+use serde::Serialize;
+use sha1::{Digest, Sha1};
 
 use crate::config::{GZM_ENABLED, ZB_ENABLED};
-use crate::http::{Body, json};
+use crate::fleet_tracker::blocking_io;
+use crate::http::{Body, full, header_str, json};
 use crate::js;
 use crate::logger;
 use crate::shared::cities::{zb_city_of, zb_slug};
@@ -164,4 +174,103 @@ pub fn etag_matches(header: Option<&str>, etag: &str) -> bool {
                 v == "*" || weak(v) == want
             })
     })
+}
+
+struct Prebuilt {
+    /// the owner still exists (its Weak also pins the address, so a key never names two owners)
+    alive: Box<dyn Fn() -> bool + Send>,
+    slot: Arc<Slot>,
+}
+
+/// filled once outside the map lock; a concurrent first request waits for the running build or gzip
+#[derive(Default)]
+struct Slot {
+    body: OnceLock<Bytes>,
+    gz: OnceLock<Bytes>,
+}
+
+/// prebuilt bodies by owner address; a dead owner's entry goes on the next insert
+static PREBUILT: LazyLock<Mutex<HashMap<usize, Prebuilt>>> = LazyLock::new(Default::default);
+
+fn prebuilt() -> MutexGuard<'static, HashMap<usize, Prebuilt>> {
+    PREBUILT.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+fn gzip(body: &[u8]) -> Bytes {
+    let mut enc = GzEncoder::new(Vec::with_capacity(body.len() / 4), Compression::default());
+    // writing into a Vec cannot fail
+    let _ = enc.write_all(body);
+    Bytes::from(enc.finish().unwrap_or_default())
+}
+
+/// JSON built once per `owner` (an Arc never mutated after it is built: a feed, a vehicles body) and gzipped once
+/// when a client accepts it, so a request is a buffer clone; `headers` go out beside Content-Type and Vary. The
+/// gzip of a ~400 KB body, and every wait for it, runs through `block_in_place`, outside the map lock.
+pub fn prebuilt_json<T: ?Sized + Send + Sync + 'static>(
+    req: &HeaderMap,
+    owner: &Arc<T>,
+    build: impl FnOnce() -> String,
+    mut headers: HeaderMap,
+) -> Response<Body> {
+    let key = Arc::as_ptr(owner).cast::<()>() as usize;
+    let slot = {
+        let mut m = prebuilt();
+        match m.get(&key) {
+            Some(e) => e.slot.clone(),
+            None => {
+                m.retain(|_, e| (e.alive)());
+                let weak = Arc::downgrade(owner);
+                let slot = Arc::<Slot>::default();
+                m.insert(
+                    key,
+                    Prebuilt {
+                        alive: Box::new(move || weak.strong_count() > 0),
+                        slot: slot.clone(),
+                    },
+                );
+                slot
+            }
+        }
+    };
+    // ponytail: a waiter blocks its worker for the build, a copy of an already serialized body (~0.1 ms)
+    let body = slot.body.get_or_init(|| Bytes::from(build())).clone();
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    headers.insert(VARY, HeaderValue::from_static("Accept-Encoding"));
+    // ponytail: substring test, a client sending "gzip;q=0" still gets gzip; every browser accepts it
+    let out = if header_str(req, "accept-encoding").unwrap_or_default().contains("gzip") {
+        headers.insert(CONTENT_ENCODING, HeaderValue::from_static("gzip"));
+        match slot.gz.get() {
+            Some(gz) => gz.clone(),
+            None => blocking_io(|| slot.gz.get_or_init(|| gzip(&body)).clone()),
+        }
+    } else {
+        body
+    };
+    let mut res = Response::new(full(out));
+    *res.headers_mut() = headers;
+    res
+}
+
+/// JSON with a content ETag (22 chars of the body's base64url sha1), for data a page polls although it often has
+/// not changed: `no-cache` makes the browser revalidate, and an unchanged body is a bodiless 304.
+pub fn json_with_etag(req: &HeaderMap, data: &impl Serialize) -> Response<Body> {
+    let body = match serde_json::to_string(data) {
+        Ok(b) => b,
+        Err(e) => return internal_error("http", e),
+    };
+    let mut tag = js::to_base64url(&Sha1::digest(body.as_bytes()));
+    tag.truncate(22);
+    let etag = format!("\"{tag}\"");
+    let (status, body) = if etag_matches(header_str(req, "if-none-match").as_deref(), &etag) {
+        (StatusCode::NOT_MODIFIED, String::new())
+    } else {
+        (StatusCode::OK, body)
+    };
+    let mut res = json(status, body);
+    let h = res.headers_mut();
+    h.insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    if let Ok(v) = HeaderValue::from_str(&etag) {
+        h.insert(ETAG, v);
+    }
+    res
 }

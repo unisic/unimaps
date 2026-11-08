@@ -265,11 +265,12 @@ pub struct GzmFleetList {
     pub etag: String,
 }
 
+/// `{stats, count, vehicles}` of /api/fleet (also its filtered form in the route).
 #[derive(Serialize)]
-struct ListBody<'a> {
-    stats: &'a FleetStats,
-    count: usize,
-    vehicles: &'a [FleetSummaryItem],
+pub(crate) struct ListBody<'a> {
+    pub(crate) stats: &'a FleetStats,
+    pub(crate) count: usize,
+    pub(crate) vehicles: &'a [FleetSummaryItem],
 }
 
 static LIST_CACHE: Mutex<Option<(FleetTracker, u64, Arc<GzmFleetList>)>> = Mutex::new(None);

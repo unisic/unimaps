@@ -369,6 +369,21 @@ pub fn truthy(v: Option<&serde_json::Value>) -> bool {
     }
 }
 
+/// `s.slice(0, max)` in UTF-16 units, cut before a pair the TS would split.
+pub fn utf16_prefix(s: &str, max: usize) -> &str {
+    if s.len() <= max {
+        return s;
+    }
+    let mut units = 0;
+    for (i, c) in s.char_indices() {
+        units += c.len_utf16();
+        if units > max {
+            return s.get(..i).unwrap_or(s);
+        }
+    }
+    s
+}
+
 /// `encodeURIComponent` (a Rust string has no lone surrogate, so it never throws).
 pub fn encode_uri_component(s: &str) -> String {
     let mut out = String::with_capacity(s.len());

@@ -16,8 +16,9 @@ import path from "node:path";
 import pLimit from "p-limit";
 
 import { isValidId, zbEnabled, zbIdCity } from "./api-helpers";
-import { PUSH_DIR } from "./config";
+import { INTERNAL_TOKEN, PUSH_DIR, ZB_REMOTE } from "./config";
 import { getZb, startZb } from "./gzm";
+import { isRecord } from "./kb-api";
 import { log } from "./logger";
 import { startPoller } from "./poller-singleton";
 import { ALERT_LEADS, alertAction, alertMessage, MAX_ALERTS, type Alert } from "./shared/alerts";
@@ -228,10 +229,11 @@ export class PushAlerts {
   }
 }
 
-async function readBoard(designator: string): Promise<{ rows: readonly TimingRow[]; nowTs: number } | null> {
+export async function readBoard(designator: string): Promise<{ rows: readonly TimingRow[]; nowTs: number } | null> {
   const slug = zbIdCity(designator);
   if (slug) {
     if (!zbEnabled(slug)) return null;
+    if (ZB_REMOTE) return remoteBoard(ZB_REMOTE, designator);
     void startZb(slug);
     const b = getZb(slug).departures(designator);
     return b && b !== "unknown" ? { rows: b.rows as TimingRow[], nowTs: b.server_ts } : null;
@@ -240,6 +242,25 @@ async function readBoard(designator: string): Promise<{ rows: readonly TimingRow
   const b = await stopBoard(designator);
   // every leg failed: not "no departures", ask again next tick
   return b.failedLegs >= b.legs ? null : { rows: b.rows as TimingRow[], nowTs: Date.now() / 1000 };
+}
+
+/** A zbiorkom board from the Rust front, which skips its rate limit for KB_INTERNAL_TOKEN; null = ask again next tick. */
+async function remoteBoard(origin: string, designator: string): Promise<{ rows: readonly TimingRow[]; nowTs: number } | null> {
+  try {
+    const res = await fetch(`${origin}/api/stop/${encodeURIComponent(designator)}/departures`, {
+      headers: { "x-kb-internal": INTERNAL_TOKEN },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (res.status !== 200) {
+      await res.body?.cancel();
+      return null;
+    }
+    const b: unknown = await res.json();
+    if (!isRecord(b) || !Array.isArray(b.rows) || typeof b.server_ts !== "number") return null;
+    return { rows: b.rows as TimingRow[], nowTs: b.server_ts };
+  } catch {
+    return null;
+  }
 }
 
 const KEY = Symbol.for("kb-gtfs.push-alerts");

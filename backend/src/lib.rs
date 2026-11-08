@@ -1,6 +1,7 @@
 //! The Unimaps backend, moving here from the Node one (`lib/`, `server/`) module by module; each module names the
 //! TypeScript file it ports.
 
+pub mod api;
 pub mod api_helpers;
 pub mod config;
 pub mod fetch;

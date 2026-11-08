@@ -74,10 +74,21 @@ pub static PUBLIC_OSRM: LazyLock<bool> = LazyLock::new(|| {
         })
     })
 });
-/// Minimum spacing between OSRM requests, at least 1000 ms on the public host.
-pub static OSRM_MIN_INTERVAL_MS: LazyLock<i64> =
-    LazyLock::new(|| env_int("KB_OSRM_MIN_INTERVAL_MS", 1100, 250).max(if *PUBLIC_OSRM { 1000 } else { 0 }));
+/// Floor of OSRM_MIN_INTERVAL_MS on the public host while the Node sibling runs, for both processes (main.rs hands
+/// it to the child). ponytail: two processes share the public host's 1 req/s until stage 4 removes Node; each keeps
+/// under half of it, back to the TS 1000 ms floor then.
+pub const PUBLIC_OSRM_SHARED_MS: i64 = 2200;
+/// Minimum spacing between OSRM requests, at least PUBLIC_OSRM_SHARED_MS on the public host.
+pub static OSRM_MIN_INTERVAL_MS: LazyLock<i64> = LazyLock::new(|| {
+    env_int("KB_OSRM_MIN_INTERVAL_MS", 1100, 250).max(if *PUBLIC_OSRM { PUBLIC_OSRM_SHARED_MS } else { 0 })
+});
 pub static OSRM_USER_AGENT: LazyLock<String> = LazyLock::new(|| env_str("KB_OSRM_USER_AGENT", &USER_AGENT));
+/// `KB_GEOCODER_URL` (a Photon API behind /api/geocode), None when `off` or blank.
+pub static GEOCODER_URL: LazyLock<Option<String>> = LazyLock::new(|| {
+    let v = env_str("KB_GEOCODER_URL", "https://photon.komoot.io/api/");
+    let v = v.trim_matches(crate::js::is_space);
+    (!v.is_empty() && !v.eq_ignore_ascii_case("off")).then(|| v.to_owned())
+});
 
 /// Metropolia GZM and the other zbiorkom cities: feeds, positions, SDIP overlay, news.
 pub static GZM_GTFS_URL: LazyLock<String> = LazyLock::new(|| {

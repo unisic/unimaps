@@ -276,8 +276,7 @@ impl<T: ZbTransport> GzmLive<T> {
     /// One call at a time (TS runs a search to its end on the event loop): an identical query waits, then hits
     /// the memo, and a search on a swapped-out feed cannot finish after the new feed's.
     // ponytail: the search runs on the calling thread, 100 ms to over 1 s on GZM (TS profile, 2026-10-28): a route
-    // calls it from spawn_blocking; a dedicated worker pool if p95 passes ~300 ms. A caller timing this call for
-    // the search budget also counts its wait for the running search; return the search's own time if that matters
+    // calls it from spawn_blocking; a dedicated worker pool if p95 passes ~300 ms
     pub fn connections(&self, q: &RouteQuery<'_>, avoid_types: &[String]) -> Option<Arc<Vec<ConnectionItinerary>>> {
         let _search = self.search.lock().unwrap_or_else(PoisonError::into_inner);
         let feed = (self.get_feed)()?;

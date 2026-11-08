@@ -1761,6 +1761,7 @@ dependencies = [
  "aes-gcm",
  "bytes",
  "dotenvy",
+ "flate2",
  "hkdf",
  "http-body-util",
  "hyper",

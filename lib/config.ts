@@ -173,6 +173,12 @@ export const ZB_ENABLED = envInt("KB_ZB", 1, 0) !== 0;
 export const ZB_API_URL = envStr("KB_ZB_API_URL", "https://api.zbiorkom.live/api6-open").replace(/\/+$/, "");
 export const ZB_RESIDENT = envInt("KB_ZB_RESIDENT", 2, 1);
 export const ZB_IDLE_MIN = envInt("KB_ZB_IDLE_MIN", 30, 1);
+/**
+ * Set by the Rust front (backend/src/main.rs) on its Node child: the origin that answers every zbiorkom
+ * request. Node then loads no zbiorkom city and reads zbiorkom boards from there with KB_INTERNAL_TOKEN.
+ */
+export const ZB_REMOTE: string | null = envStr("KB_ZB_REMOTE", "").trim().replace(/\/+$/, "") || null;
+export const INTERNAL_TOKEN = envStr("KB_INTERNAL_TOKEN", "");
 
 /**
  * Web push of departure alerts (lib/push-alerts.ts, lib/web-push.ts): KB_PUSH=0 switches it off

@@ -9,6 +9,8 @@ rust-version = "1.88"
 aes-gcm = "0.10.3"
 bytes = "1.12.1"
 dotenvy = "0.15.7"
+# gzip of the prebuilt API bodies (api_helpers::prebuilt_json), the zlib-rs backend zip already uses
+flate2 = { version = "1.1.11", default-features = false, features = ["zlib-rs"] }
 hkdf = "0.12.4"
 http-body-util = "0.1.5"
 hyper = { version = "1.12.0", features = ["http1", "server", "client"] }
@@ -26,7 +28,8 @@ rand_core = { version = "0.6.4", features = ["getrandom"] }
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider", "brotli", "gzip", "deflate"] }
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 serde = { version = "1.0.229", features = ["derive"] }
-serde_json = { version = "1.0.154", features = ["float_roundtrip", "preserve_order"] }
+# raw_value: a merged trips/shapes batch passes Node's part through byte for byte
+serde_json = { version = "1.0.154", features = ["float_roundtrip", "preserve_order", "raw_value"] }
 sha1 = "0.10.6"
 sha2 = "0.10.9"
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "signal", "process", "time", "io-util", "sync"] }

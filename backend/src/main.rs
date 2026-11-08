@@ -1,11 +1,12 @@
 //! The Unimaps server. `unimaps` (or `unimaps serve`) listens on HOST:PORT, serves the static build
-//! (KB_STATIC_DIR, default <cwd>/out) and hands the API to the Node process: started here when KB_NODE_CMD is
-//! set (the Docker image), else expected on 127.0.0.1:KB_NODE_PORT. `unimaps healthcheck` exits 0 when
-//! /api/health answers 2xx (Docker / compose healthcheck).
+//! (KB_STATIC_DIR, default <cwd>/out) and hands the API to the Node process: started here when KB_NODE_CMD is set
+//! (the Docker image), and then this process runs the zbiorkom cities (GZM booted here) and answers their API
+//! requests itself; else Node is expected on 127.0.0.1:KB_NODE_PORT and keeps the whole API, zbiorkom included. `unimaps healthcheck` exits 0 when /api/health answers 2xx (Docker /
+//! compose healthcheck).
 
 use std::ffi::OsString;
 use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpStream};
+use std::net::{IpAddr, SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -14,11 +15,12 @@ use std::time::Duration;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper_util::rt::{TokioIo, TokioTimer};
+use rand_core::{OsRng, RngCore};
 use tokio::net::TcpListener;
 use tokio::process::{Child, Command};
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::Semaphore;
-use unimaps::{gzm_fleet, http, logger, static_files};
+use unimaps::{api, config, gzm, gzm_fleet, http, logger, static_files};
 
 /// ponytail: one cap for every open connection (idle keep-alive ones included, ~8 KB of buffers each).
 const MAX_CONNECTIONS: usize = 1024;
@@ -98,6 +100,38 @@ fn spawn_node(cmd: &str, port: u16, env: Vec<(OsString, OsString)>) -> std::io::
         .spawn()
 }
 
+/// KB_ZB_REMOTE for the Node child: this server's own origin, 127.0.0.1 when it listens on every interface (a
+/// dual-stack `::` takes IPv4 too, while ::1 is missing when IPv6 is disabled on lo).
+fn self_origin(host: &str, port: u16) -> String {
+    match host.parse::<IpAddr>() {
+        Ok(ip) if ip.is_unspecified() => format!("http://127.0.0.1:{port}"),
+        Ok(IpAddr::V6(ip)) => format!("http://[{ip}]:{port}"),
+        _ => format!("http://{host}:{port}"),
+    }
+}
+
+/// 32 random bytes as hex: the secret our Node child shows in x-kb-internal.
+fn internal_token() -> String {
+    let mut b = [0u8; 32];
+    OsRng.fill_bytes(&mut b);
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+/// The child's environment: the one from before .env loading, plus what makes it a sibling of this process. With
+/// KB_ZB_REMOTE set, Node's startGzm/startZb are no-ops and it reads zbiorkom boards from here; the OSRM floor
+/// splits the public host's rate between both processes.
+fn node_env(mut env: Vec<(OsString, OsString)>, origin: String, token: &str) -> Vec<(OsString, OsString)> {
+    env.push(("KB_ZB_REMOTE".into(), origin.into()));
+    env.push(("KB_INTERNAL_TOKEN".into(), token.into()));
+    if *config::PUBLIC_OSRM && config::env_int("KB_OSRM_MIN_INTERVAL_MS", 1100, 250) < config::PUBLIC_OSRM_SHARED_MS {
+        env.push((
+            "KB_OSRM_MIN_INTERVAL_MS".into(),
+            config::PUBLIC_OSRM_SHARED_MS.to_string().into(),
+        ));
+    }
+    env
+}
+
 async fn accept_loop(listener: TcpListener, app: Arc<http::App>) {
     let slots = Arc::new(Semaphore::new(MAX_CONNECTIONS));
     loop {
@@ -139,7 +173,13 @@ async fn serve(base_env: Vec<(OsString, OsString)>) -> ExitCode {
         }
     };
     let node_port = port_var("KB_NODE_PORT", 8090);
-    let mut child = match var("KB_NODE_CMD").map(|cmd| spawn_node(&cmd, node_port, base_env)) {
+    let (host, port) = (var("HOST").unwrap_or_else(|| "0.0.0.0".into()), port_var("PORT", 8080));
+    let mut child = match var("KB_NODE_CMD").map(|cmd| {
+        let token = internal_token();
+        let env = node_env(base_env, self_origin(&host, port), &token);
+        api::set_internal_token(token);
+        spawn_node(&cmd, node_port, env)
+    }) {
         None => None,
         Some(Ok(c)) => Some(c),
         Some(Err(e)) => {
@@ -147,7 +187,6 @@ async fn serve(base_env: Vec<(OsString, OsString)>) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let (host, port) = (var("HOST").unwrap_or_else(|| "0.0.0.0".into()), port_var("PORT", 8080));
     let listener = match TcpListener::bind((host.as_str(), port)).await {
         Ok(l) => l,
         Err(e) => {
@@ -156,11 +195,19 @@ async fn serve(base_env: Vec<(OsString, OsString)>) -> ExitCode {
         }
     };
     logger::info("http", format_args!("listening on http://{host}:{port}"));
+    // only a child we started has KB_ZB_REMOTE: a Node started by hand runs its own GZM (server/http.ts boot()), so
+    // here it keeps the zbiorkom cities and their routes, as in stage 1
+    let owns_zb = child.is_some();
+    if owns_zb {
+        // server/http.ts boot(): GZM beside the BB pollers (a no-op with KB_GZM=0); other zbiorkom cities start on
+        // their first request and the registry arms its own idle sweep
+        gzm::start_gzm();
+    }
     let (mut term, mut int) = (
         signal(SignalKind::terminate()).expect("SIGTERM"),
         signal(SignalKind::interrupt()).expect("SIGINT"),
     );
-    let app = Arc::new(http::App::new(statics, node_port));
+    let app = Arc::new(http::App::new(statics, node_port, owns_zb));
     let exited = tokio::select! {
         _ = accept_loop(listener, app) => None,
         _ = term.recv() => None,
@@ -204,5 +251,19 @@ fn main() -> ExitCode {
             eprintln!("unknown command {other:?}; usage: unimaps [serve | healthcheck]");
             ExitCode::from(2)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::self_origin;
+
+    #[test]
+    fn self_origin_is_ipv4_loopback_for_any_wildcard_bind() {
+        assert_eq!(self_origin("0.0.0.0", 8080), "http://127.0.0.1:8080");
+        assert_eq!(self_origin("::", 8080), "http://127.0.0.1:8080");
+        assert_eq!(self_origin("::1", 8081), "http://[::1]:8081");
+        assert_eq!(self_origin("192.0.2.4", 8080), "http://192.0.2.4:8080");
+        assert_eq!(self_origin("localhost", 8080), "http://localhost:8080");
     }
 }

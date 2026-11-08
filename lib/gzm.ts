@@ -1236,7 +1236,8 @@ export function getGzm(): GzmLive {
 
 /** Starts the feed refresh and the positions loop once per process. Never rejects; a no-op with KB_GZM=0. */
 export async function startGzm(): Promise<void> {
-  if (!config.GZM_ENABLED) return;
+  // the Rust front owns zbiorkom in the split deployment: no feed, poll or output/gzm writer here
+  if (!config.GZM_ENABLED || config.ZB_REMOTE) return;
   const live = getGzm();
   if (live.running) return;
   void startGzmFeed().catch((err: unknown) => log.error("gzm", `feed start failed: ${err}`));
@@ -1340,7 +1341,7 @@ function sweepZb(): void {
 /** Starts a city's feed refresh and positions loop once (GZM: startGzm). Never rejects; a no-op while disabled. */
 export async function startZb(slug: string): Promise<void> {
   if (slug === "gzm") return startGzm();
-  if (!config.ZB_ENABLED) return;
+  if (!config.ZB_ENABLED || config.ZB_REMOTE) return;
   const live = getZb(slug);
   if (live.running || zbState().cities.get(slug)?.live !== live) return;
   void startGzmFeed(slug).catch((err: unknown) => log.error("gzm", `${slug}: feed start failed: ${err}`));
