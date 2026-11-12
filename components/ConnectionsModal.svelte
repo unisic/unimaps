@@ -16,6 +16,10 @@
     initialPoint?: { end: "from" | "to"; at: { lat: number; lon: number; label: string } } | null;
     onSelectStop: (s: Stop) => void;
     onSelectConnection?: (conn: ConnectionItinerary, selectedLegIdx?: number | null) => void;
+    /** desktop: the result to draw on the map under the panel (hovered, else the first); null clears it */
+    onPreviewConnection?: (conn: ConnectionItinerary | null) => void;
+    /** a docked side panel over a usable map instead of a modal sheet */
+    desktop?: boolean;
     /** the live fleet of the city: current delays on today's legs */
     vehicles?: readonly Vehicle[];
   }

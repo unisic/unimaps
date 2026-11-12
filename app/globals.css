@@ -614,6 +614,28 @@ body {
   .journey-trans-pill:hover { transform: translate(-50%, -50%) scale(1.08); }
 }
 
+/* the line's number in the middle of its leg */
+.journey-line-pill {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 7px;
+  border-radius: 8px;
+  border: 1.5px solid var(--color-surface);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4), 0 3px 10px rgba(0, 0, 0, 0.5);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  box-sizing: border-box;
+}
+
 .journey-trans-icon {
   width: 12px;
   height: 12px;

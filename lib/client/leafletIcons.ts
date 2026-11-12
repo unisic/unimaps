@@ -165,6 +165,17 @@ export function makeUserLocationIcon(): L.DivIcon {
   });
 }
 
+/** The line's number on its leg of a journey, like LineBadge: one colour per operator, so on a
+ *  route with transfers it tells the legs apart. */
+export function makeJourneyLineIcon(line: string, color: string): L.DivIcon {
+  return L.divIcon({
+    className: "journey-pin-marker",
+    html: `<div class="journey-pin-wrap"><div class="journey-line-pill" style="background:${escapeHtml(color)}">${escapeHtml(line)}</div></div>`,
+    iconSize: [36, 22],
+    iconAnchor: [18, 11],
+  });
+}
+
 /** Pin markers for a connection journey (start, transfer points, end). */
 export function makeJourneyPinIcon(type: "start" | "transfer" | "walk" | "end", text?: string): L.DivIcon {
   if (type === "transfer" || type === "walk") {

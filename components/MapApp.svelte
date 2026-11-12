@@ -207,6 +207,9 @@
   let trip = $state.raw<TripView | null>(null);
   let journey = $state.raw<JourneyViewState | null>(null);
   let journeySeq = 0;
+  /* desktop search results: the hovered (else first) card's route drawn under the panel */
+  let preview = $state.raw<JourneyViewState | null>(null);
+  let previewTimer: ReturnType<typeof setTimeout> | undefined;
   let vehMeta = $state.raw<Vehicle | null>(null);
   /* no style picked yet: the basemap follows the app theme (set by the pre-paint script in the page head) */
   const themeLayer = (): BaseLayerId => (document.documentElement.dataset.theme === "light" ? "kb" : "dark");
@@ -704,6 +707,8 @@
        stop sheet actually shows */
     closeTrip();
     closeJourney();
+    // desktop: the search panel leaves the map usable, and what is opened there takes its place
+    closeConnModal();
     selectedStop = s;
     const m = map;
     if (!m) return;
@@ -752,14 +757,13 @@
     connModalOpen = true;
   }
 
-  async function handleSelectConnection(conn: ConnectionItinerary, selectedLegIdx: number | null = null) {
-    closeTrip();
-    selectedStop = null;
+  /* road geometry per itinerary, shared by the hover preview and the opened journey; the WeakMap
+     lets it go with the result list */
+  const routedLegs = new WeakMap<ConnectionItinerary, Promise<JourneyLegResolved[]>>();
 
-    const gen = ++journeySeq;
+  function resolveLegs(conn: ConnectionItinerary): JourneyLegResolved[] {
     const { byId, byDesig } = untrack(() => stopsMaps);
-
-    const legsResolved: JourneyLegResolved[] = conn.legs.map((leg) => {
+    return conn.legs.map((leg) => {
       const color = operatorColor(leg.operator, leg.line);
       if (leg.stops) {
         leg.stops.forEach((st) => {
@@ -778,25 +782,14 @@
         lineColor: color,
       };
     });
+  }
 
-    const firstLeg = conn.legs[0];
-    const lastLeg = conn.legs[conn.legs.length - 1];
-    const fromStop = firstLeg ? (byId.get(firstLeg.fromStopId) ?? byDesig.get(firstLeg.fromStopId) ?? null) : null;
-    const toStop = lastLeg ? (byId.get(lastLeg.toStopId) ?? byDesig.get(lastLeg.toStopId) ?? null) : null;
-
-    journey = {
-      gen,
-      itinerary: conn,
-      fromStop,
-      toStop,
-      legs: legsResolved,
-      selectedLegIdx,
-      status: "routing",
-    };
-
+  function routeLegs(conn: ConnectionItinerary, legsResolved: JourneyLegResolved[]): Promise<JourneyLegResolved[]> {
+    const hit = routedLegs.get(conn);
+    if (hit) return hit;
     // Road geometry for all legs in parallel: the server-stored trip shape
     // sliced between the leg's first and last stop, browser OSRM otherwise
-    const routedLegs = await Promise.all(
+    const p = Promise.all(
       legsResolved.map(async (lr) => {
         const legStops = lr.leg.stops ?? [];
         const pts: LatLng[] = legStops.filter((s) => s.lat && s.lon).map((s) => [s.lat!, s.lon!] as LatLng);
@@ -815,9 +808,53 @@
         };
       }),
     );
+    routedLegs.set(conn, p);
+    return p;
+  }
 
-    if (gen !== journeySeq) return;
-    if (journey?.gen === gen) journey = { ...journey, legs: routedLegs, status: "ready" };
+  /* hovering down the list fires a preview per card: draw only where the pointer settles */
+  function handlePreviewConnection(conn: ConnectionItinerary | null) {
+    clearTimeout(previewTimer);
+    if (!conn) {
+      preview = null;
+      return;
+    }
+    previewTimer = setTimeout(async () => {
+      const legs = resolveLegs(conn);
+      const gen = ++journeySeq;
+      const base: JourneyViewState = { gen, itinerary: conn, fromStop: null, toStop: null, legs, selectedLegIdx: null, status: "routing" };
+      preview = base;
+      const routed = await routeLegs(conn, legs);
+      if (preview === base) preview = { ...base, legs: routed, status: "ready" };
+    }, 120);
+  }
+
+  async function handleSelectConnection(conn: ConnectionItinerary, selectedLegIdx: number | null = null) {
+    closeTrip();
+    selectedStop = null;
+    handlePreviewConnection(null);
+
+    const gen = ++journeySeq;
+    const { byId, byDesig } = untrack(() => stopsMaps);
+    const legsResolved = resolveLegs(conn);
+
+    const firstLeg = conn.legs[0];
+    const lastLeg = conn.legs[conn.legs.length - 1];
+    const fromStop = firstLeg ? (byId.get(firstLeg.fromStopId) ?? byDesig.get(firstLeg.fromStopId) ?? null) : null;
+    const toStop = lastLeg ? (byId.get(lastLeg.toStopId) ?? byDesig.get(lastLeg.toStopId) ?? null) : null;
+
+    journey = {
+      gen,
+      itinerary: conn,
+      fromStop,
+      toStop,
+      legs: legsResolved,
+      selectedLegIdx,
+      status: "routing",
+    };
+
+    const routed = await routeLegs(conn, legsResolved);
+    if (journey?.gen === gen) journey = { ...journey, legs: routed, status: "ready" };
   }
 
   /* announcements sheet ("Utrudnienia") */
@@ -1117,6 +1154,7 @@
        would take the nearby sheet's entry with it */
     nearbyOpen = false;
     openLine = null;
+    closeConnModal();
     vehMeta = v;
     if (Number.isFinite(v.lat) && Number.isFinite(v.lon)) zoomToVehicle(v, false);
     void openTripLive(v.id, null, null);
@@ -1364,6 +1402,7 @@
     closeJourney();
     selectedStop = null;
     openLine = null;
+    closeConnModal();
     nearbyPlace = null;
     nearbyOpen = true;
     if (!geo.pos && geo.status !== "locating") geo.locate();
@@ -1375,6 +1414,7 @@
     closeJourney();
     selectedStop = null;
     openLine = null;
+    closeConnModal();
     nearbyPlace = g;
     nearbyOpen = true;
     flyToUser(g);
@@ -1386,6 +1426,7 @@
     closeJourney();
     selectedStop = null;
     nearbyOpen = false;
+    closeConnModal();
     lineVariant = null;
     openLine = l;
   }
@@ -1504,6 +1545,7 @@
     />
     <TripLayer {map} {trip} {desktop} {vehMeta} liveVehicle={liveTripVeh} onSelectStop={handleSelectStop} />
     <JourneyLayer {map} {journey} {desktop} />
+    <JourneyLayer {map} journey={preview} {desktop} />
     <LineLayer
       {map}
       line={openLine}
@@ -1517,7 +1559,7 @@
       {map}
       {vehicles}
       onVehicleClick={handleVehicleClick}
-      hidden={trip != null || journey != null}
+      hidden={trip != null || journey != null || preview != null}
       {lineFilter}
       {operatorFilter}
     />
@@ -1584,6 +1626,8 @@
     initialPoint={connInitialPoint}
     onSelectStop={pickStopFly}
     onSelectConnection={handleSelectConnection}
+    onPreviewConnection={handlePreviewConnection}
+    {desktop}
     {vehicles}
   />
 

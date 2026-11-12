@@ -4,7 +4,7 @@
 
   import { el, KeyedLayers } from "@/components/leafletLayers";
   import { displayStopName } from "@/lib/client/format";
-  import { makeJourneyPinIcon } from "@/lib/client/leafletIcons";
+  import { makeJourneyLineIcon, makeJourneyPinIcon } from "@/lib/client/leafletIcons";
   import { prefersReducedMotion } from "@/lib/client/motion";
   import type { JourneyView, LatLng } from "@/lib/client/types";
 
@@ -107,6 +107,11 @@
         lineCap: "round",
         lineJoin: "round",
       });
+      if (!isLegSelected) return;
+      const { line: name, headsign } = legItem.leg;
+      pin(`journey-line-${lIdx}`, pts[pts.length >> 1], makeJourneyLineIcon(name, color), 200, () =>
+        el("div", "font-medium", `Linia ${name} → ${displayStopName(headsign)}`),
+      );
     });
 
     // Walks between the alighting pole and the next boarding pole: a straight dotted line (no footpath geometry)

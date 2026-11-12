@@ -157,6 +157,8 @@
     initialPoint,
     onSelectStop,
     onSelectConnection,
+    onPreviewConnection,
+    desktop = false,
     vehicles,
   }: Omit<ConnectionsModalProps, "open"> = $props();
 
@@ -206,6 +208,12 @@
   const togglePanel = (p: "time" | "options") => (panel = panel === p ? null : p);
 
   let connections = $state.raw<ConnectionItinerary[] | null>(null);
+  /* desktop: the hovered card's route (else the first one's) is drawn on the map beside the panel */
+  let hovered = $state.raw<ConnectionItinerary | null>(null);
+  const previewConn = $derived(
+    desktop && connections?.length ? (hovered && connections.includes(hovered) ? hovered : connections[0]) : null,
+  );
+  $effect(() => onPreviewConnection?.(previewConn));
   /* "warming": the server is still loading the GZM data (503) */
   let connErr = $state<false | "error" | "warming" | "busy">(false);
   const city = getPageCity();
@@ -271,6 +279,7 @@
     document.addEventListener("keydown", onKey);
     return () => {
       document.removeEventListener("keydown", onKey);
+      onPreviewConnection?.(null);
       last = {
         at: performance.now(),
         day: todayStr,
@@ -752,15 +761,15 @@
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions, a11y_interactive_supports_focus (Escape closes it, on document; same DOM as the React dialog, which took no focus) -->
 <div
   role="dialog"
-  aria-modal="true"
+  aria-modal={!desktop}
   aria-label="Wyszukiwarka połączeń"
-  class="fixed inset-0 z-[2000] flex items-end justify-center bg-black/55 animate-fade md:items-center md:p-4"
+  class="fixed inset-0 z-[2000] flex items-end justify-center bg-black/55 animate-fade md:pointer-events-none md:bg-transparent"
   onclick={(e) => {
     if (e.target === e.currentTarget) onClose();
   }}
 >
   <div
-    class="surface kb-scroll relative flex max-h-[92dvh] w-full flex-col overflow-y-auto rounded-t-3xl md:max-h-[88vh] md:max-w-xl md:overflow-hidden md:rounded-[20px] animate-rise"
+    class="surface kb-scroll relative flex max-h-[92dvh] w-full flex-col overflow-y-auto rounded-t-3xl animate-rise md:pointer-events-auto md:absolute md:bottom-3 md:left-3 md:top-[116px] md:max-h-none md:w-[400px] md:overflow-hidden md:rounded-3xl xl:top-3"
   >
     <!-- Header; on a phone the whole sheet scrolls (the controls alone outgrow it) and the header stays -->
     <header
@@ -1447,7 +1456,9 @@
                   else if (fromStop) onSelectStop(fromStop);
                   onClose();
                 }}
-                class="block w-full rounded-xl bg-tint/4 p-3.5 text-left transition-colors hover:bg-tint/8 active:bg-tint/10"
+                onmouseenter={() => (hovered = conn)}
+                onfocus={() => (hovered = conn)}
+                class="block w-full rounded-xl bg-tint/4 p-3.5 text-left transition-colors hover:bg-tint/8 active:bg-tint/10 {previewConn === conn ? 'ring-1 ring-primary/50' : ''}"
               >
                 <JourneySummary
                   it={conn}
