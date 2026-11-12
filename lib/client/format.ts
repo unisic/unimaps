@@ -204,6 +204,16 @@ export function countdown(secs: number | null, now: number): string {
   return hhmmFromSecs(secs);
 }
 
+/** "za 5 min" / "teraz" until a journey leaves (secs since midnight, live delay added); null more than an hour ahead
+ *  or once it left over a minute ago, when a countdown would only mislead. */
+export function leavesIn(secs: number, now: number): string | null {
+  let delta = secs - now;
+  if (delta < -43200) delta += 86400; // post-midnight departure viewed before midnight
+  if (delta < -60 || delta >= 3600) return null;
+  const mins = Math.round(delta / 60);
+  return mins <= 0 ? "teraz" : `za ${mins} min`;
+}
+
 /**
  * Upstream stop names arrive ALL-CAPS ("BIELSKO-BIAŁA D.A.") — render them in
  * title case ("Bielsko-Biała D.A."). Display-only: search/matching runs on the

@@ -431,6 +431,30 @@ body {
   border-radius: 14px;
   padding: 6px 12px 6px 6px;
 }
+/* the map's long-press / right-click menu ("Trasa stąd / dotąd") */
+.leaflet-popup.kb-popup .leaflet-popup-content-wrapper {
+  background: var(--color-surface);
+  color: var(--color-text);
+  border: 1px solid var(--color-hairline);
+  border-radius: 14px;
+  box-shadow: var(--shadow-float);
+  padding: 4px;
+}
+.leaflet-popup.kb-popup .leaflet-popup-content { margin: 0; }
+.leaflet-popup.kb-popup .leaflet-popup-tip { background: var(--color-surface); box-shadow: none; }
+.kb-popup .point-menu { display: flex; flex-direction: column; }
+.kb-popup .point-menu button {
+  min-height: 40px;
+  padding: 0 14px;
+  border-radius: 10px;
+  font: 500 13px/1 var(--font-sans);
+  text-align: left;
+  color: var(--color-text);
+  transition: background-color 0.15s ease-out;
+}
+.kb-popup .point-menu button:hover,
+.kb-popup .point-menu button:focus-visible { background: color-mix(in srgb, var(--color-tint) 8%, transparent); }
+
 .leaflet-tooltip-top.kb-tooltip::before { border-top-color: var(--color-surface); }
 .leaflet-tooltip-bottom.kb-tooltip::before { border-bottom-color: var(--color-surface); }
 .leaflet-tooltip-left.kb-tooltip::before { border-left-color: var(--color-surface); }

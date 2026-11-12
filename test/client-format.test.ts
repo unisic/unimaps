@@ -18,6 +18,7 @@ import {
   hslColor,
   isBusStation,
   isMzk,
+  leavesIn,
   normalizeText,
   notStartedEta,
   operatorColor,
@@ -76,6 +77,23 @@ describe("countdown", () => {
   it("rolls a large negative delta forward across midnight", () => {
     // departure 00:10 seen at 23:53 is in 17 min, not 24 h ago
     assert.equal(countdown(600, 86000), "17 min");
+  });
+});
+
+describe("leavesIn", () => {
+  it("counts down within the hour, 'teraz' up to a minute past due", () => {
+    assert.equal(leavesIn(36300, 36000), "za 5 min");
+    assert.equal(leavesIn(36000, 36000), "teraz");
+    assert.equal(leavesIn(36000, 36050), "teraz");
+  });
+
+  it("says nothing once it left or more than an hour ahead", () => {
+    assert.equal(leavesIn(36000, 36090), null);
+    assert.equal(leavesIn(36000 + 3600, 36000), null);
+  });
+
+  it("rolls a post-midnight departure seen before midnight forward", () => {
+    assert.equal(leavesIn(600, 86000), "za 17 min");
   });
 });
 

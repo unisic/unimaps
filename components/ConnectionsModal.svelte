@@ -12,6 +12,8 @@
     onLocate?: () => void;
     initialFrom?: Stop | null;
     initialTo?: Stop | null;
+    /** a point picked on the map ("Trasa stąd" / "Trasa dotąd"): fills that end of the last search */
+    initialPoint?: { end: "from" | "to"; at: { lat: number; lon: number; label: string } } | null;
     onSelectStop: (s: Stop) => void;
     onSelectConnection?: (conn: ConnectionItinerary, selectedLegIdx?: number | null) => void;
     /** the live fleet of the city: current delays on today's legs */

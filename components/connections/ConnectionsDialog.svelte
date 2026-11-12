@@ -105,7 +105,7 @@
 
   import type { ConnectionsModalProps } from "@/components/ConnectionsModal.svelte";
   import TimeInput24H from "@/components/connections/TimeInput24H.svelte";
-  import { useLines } from "@/components/hooks.svelte";
+  import { useLines, useNow } from "@/components/hooks.svelte";
   import Icon from "@/components/Icon.svelte";
   import {
     ArrowRightIcon,
@@ -141,6 +141,7 @@
     displayStopName,
     formatDayLabel,
     hhmmFromSecs,
+    leavesIn,
     normalizeText,
     nowHHMM,
     offsetDateISO,
@@ -160,6 +161,7 @@
     onLocate,
     initialFrom,
     initialTo,
+    initialPoint,
     onSelectStop,
     onSelectConnection,
     vehicles,
@@ -228,6 +230,16 @@
     if (performance.now() - last.at < RESULTS_MS) ({ connections, answerLines, expandedIdx } = last);
     activeInput = !last.fromStop && !last.fromGeo ? "from" : !last.toStop && !last.toGeo ? "to" : null;
   }
+  // a point picked on the map fills one end; the other keeps the reopened search, so "stąd" then "dotąd" plans
+  // svelte-ignore state_referenced_locally
+  if (initialPoint) {
+    if (initialPoint.end === "from") [fromStop, fromGeo] = [null, initialPoint.at];
+    else [toStop, toGeo] = [null, initialPoint.at];
+    connections = null;
+    expandedIdx = null;
+    activeInput = !fromStop && !fromGeo ? "from" : !toStop && !toGeo ? "to" : null;
+  }
+  const clock = useNow();
 
   let fromInput: HTMLInputElement | undefined = $state();
   let toInput: HTMLInputElement | undefined = $state();
@@ -1389,6 +1401,8 @@
                 !!fromGeo || (!!fromStop && normalizeText(startPole) !== normalizeText(stopLabel(fromStop.name)))}
               <!-- the bus on the map, else the delay the search boarded it with -->
               {@const delays = conn.legs.map((l) => legVehicle(l, conn.date, vix)?.delay ?? l.delaySec ?? null)}
+              {@const leave =
+                (conn.date ?? selectedDate) === todayStr ? leavesIn(conn.departureSecs + (delays[0] ?? 0), clock.current) : null}
               <div class="rounded-xl bg-tint/4 p-3.5">
                 <!-- Summary row -->
                 <div class="flex items-start justify-between gap-3">
@@ -1412,6 +1426,11 @@
                     </div>
                     <p class="mt-0.5 text-[12px] text-text-mute">
                       {dayBadge} · <span class="tabular-nums">{conn.totalDurationMins} min</span>
+                      {#if leave}
+                        · <span class="font-semibold tabular-nums text-primary"
+                          >{conn.accessWalkMins ? "wyjdź" : "odjazd"} {leave}</span
+                        >
+                      {/if}
                     </p>
                   </div>
                   <span class="shrink-0 rounded-full bg-tint/6 px-2.5 py-1 text-[12px] font-medium text-text-mute">

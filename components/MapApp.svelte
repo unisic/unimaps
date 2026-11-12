@@ -9,12 +9,13 @@
   import { peekVehicleAnimator } from "@/lib/client/vehicleAnimator";
   import { holdWakeLock } from "@/lib/client/wakeLock";
   import { adjustStopRoutePoint, injectDetourPoints } from "@/lib/client/detours";
-  import { arrivedSecs, operatorColor, tripTimeMatchesStop } from "@/lib/client/format";
+  import { arrivedSecs, displayStopName, operatorColor, tripTimeMatchesStop } from "@/lib/client/format";
   import { makeJourneyPinIcon, makeStopPingIcon, makeUserLocationIcon } from "@/lib/client/leafletIcons";
   import { panMotion } from "@/lib/client/motion";
   import { focusPoint, glideTo, installSmoothZoom, isCovered, isLockMove, lockOn } from "@/lib/client/mapGlide";
   import { getSmoothMotion } from "@/lib/client/smoothMotion";
-  import { haversineMeters } from "@/lib/client/geo";
+  import { haversineMeters, nearestStops } from "@/lib/client/geo";
+  import { gzmStopKey } from "@/lib/shared/gzm-stop-key";
   import { startAlertWatchers } from "@/lib/client/alerts";
   import { CITY, GZM_LOADING, getPageCity, withCity } from "@/lib/client/city";
   import { prefetchFavoriteTimetables } from "@/lib/client/timetable";
@@ -42,6 +43,7 @@
   import AnnouncementsSheet from "@/components/AnnouncementsSheet.svelte";
   import CitySheet from "@/components/CitySheet.svelte";
   import ConnectionsModal from "@/components/ConnectionsModal.svelte";
+  import type { ConnectionsModalProps } from "@/components/ConnectionsModal.svelte";
   import RustNotice from "@/components/RustNotice.svelte";
   import Toast from "@/components/Toast.svelte";
   import LineFilterChip from "@/components/LineFilterChip.svelte";
@@ -229,6 +231,7 @@
   const searchRef: { current: TopBarSearchHandle | null } = { current: null };
   let connModalOpen = $state(false);
   let connInitialFrom = $state.raw<Stop | null>(null);
+  let connInitialPoint = $state.raw<ConnectionsModalProps["initialPoint"]>(null);
   let annOpen = $state(false);
   let cityOpen = $state(false);
   /* "W pobliżu": the bottom of the sheet stack. A stop, trip or journey opened from it covers it
@@ -731,6 +734,17 @@
   function closeConnModal() {
     connModalOpen = false;
     connInitialFrom = null;
+    connInitialPoint = null;
+  }
+
+  /* "Trasa stąd / dotąd" from a point on the map, named after the stop next to it */
+  function planFromPoint(at: L.LatLng, end: "from" | "to") {
+    const near = nearestStops(stops, { lat: at.lat, lon: at.lng }, 1)[0];
+    // a GTFS city's pole number ("Katowice Rynek 2T") says nothing to a rider: the stop's name, as the search lists it
+    const name = near && (city === "bb" ? near.s.name : gzmStopKey(near.s.name));
+    const label = near && near.dist <= 300 ? `Punkt przy: ${displayStopName(name)}` : "Punkt na mapie";
+    connInitialPoint = { end, at: { lat: at.lat, lon: at.lng, label } };
+    connModalOpen = true;
   }
 
   function handlePlanRoute(s: Stop) {
@@ -1206,6 +1220,33 @@
     };
   });
 
+  /* long-press (touch) or right-click on the map: a connection from or to that point */
+  $effect(() => {
+    const m = map;
+    if (!m) return;
+    const popup = L.popup({ className: "kb-popup", closeButton: false, offset: [0, -2], autoPanPadding: [16, 16] });
+    const onMenu = (e: L.LeafletMouseEvent) => {
+      const el = document.createElement("div");
+      el.className = "point-menu";
+      for (const [text, end] of [["Trasa stąd", "from"], ["Trasa dotąd", "to"]] as const) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.textContent = text;
+        b.onclick = () => {
+          m.closePopup(popup);
+          planFromPoint(e.latlng, end);
+        };
+        el.append(b);
+      }
+      popup.setLatLng(e.latlng).setContent(el).openOn(m);
+    };
+    m.on("contextmenu", onMenu);
+    return () => {
+      m.off("contextmenu", onMenu);
+      popup.remove();
+    };
+  });
+
   /* the vector style failed twice (or the raster style is picked): plain raster tiles under everything */
   const tiles = $derived(BASE_LAYERS[baseLayer]);
   const raster = $derived(basemap.status === "failed" || tiles.kind !== "vector");
@@ -1540,6 +1581,7 @@
     geoStatus={geo.status}
     onLocate={geo.locate}
     initialFrom={connInitialFrom}
+    initialPoint={connInitialPoint}
     onSelectStop={pickStopFly}
     onSelectConnection={handleSelectConnection}
     {vehicles}
