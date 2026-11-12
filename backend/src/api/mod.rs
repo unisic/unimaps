@@ -35,6 +35,7 @@ pub mod status;
 pub mod stop_departures;
 pub mod stop_timetable;
 pub mod stops;
+pub mod traffic;
 pub mod trip;
 pub mod trip_execution;
 pub mod trips;
@@ -63,6 +64,7 @@ pub enum Route {
     Stops,
     Trip,
     TripExecution,
+    Traffic,
     Trips,
     Vehicles,
 }
@@ -95,6 +97,7 @@ pub fn match_route(path: &str) -> Option<(Route, &str)> {
         ["stops"] => (Stops, ""),
         ["trip", id] if !id.is_empty() => (Trip, *id),
         ["trip_execution"] => (TripExecution, ""),
+        ["traffic"] => (Traffic, ""),
         ["trips"] => (Trips, ""),
         ["vehicles"] => (Vehicles, ""),
         _ => return None,
@@ -244,6 +247,7 @@ async fn run_owned(route: Route, req: ApiRequest) -> Response<Body> {
             Some(res) => res,
             None => trip_execution::get_bb(&req, bb).await,
         },
+        Route::Traffic => traffic::get_owned(&req).await,
         Route::Trips => trips::get_owned(&req, bb).await,
         Route::Vehicles => match vehicles::get(&req) {
             Some(res) => res,
@@ -305,6 +309,7 @@ mod tests {
             ("/api/stops", Stops, get_only),
             ("/api/trip/1", Trip, get_only),
             ("/api/trip_execution", TripExecution, get_only),
+            ("/api/traffic", Traffic, get_only),
             ("/api/trips", Trips, get_only),
             ("/api/vehicles", Vehicles, get_only),
         ] {

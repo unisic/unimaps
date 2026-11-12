@@ -293,6 +293,21 @@ export interface GetConnectionsOptions {
   city?: City;
 }
 
+let trafficOff = false;
+
+/** Live road speed (m/s) at a point from /api/traffic; null when unknown, failed or aborted. A 404 (no TomTom key
+ *  on the server) turns it off for the page's life. */
+export async function getTrafficSpeed(lat: number, lon: number, signal?: AbortSignal): Promise<number | null> {
+  if (trafficOff) return null;
+  const p = new URLSearchParams({ lat: lat.toFixed(5), lon: lon.toFixed(5) });
+  try {
+    return (await fetchJSON<{ speed: number | null }>(`/api/traffic?${p.toString()}`, { signal })).speed;
+  } catch (err) {
+    if (err instanceof HttpError && err.status === 404) trafficOff = true;
+    return null;
+  }
+}
+
 /** A street, address or place from /api/geocode. */
 export interface GeoHit {
   name: string;

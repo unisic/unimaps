@@ -145,6 +145,13 @@ pub static GEOCODER_URL: LazyLock<Option<String>> = LazyLock::new(|| {
     (!v.is_empty() && !v.eq_ignore_ascii_case("off")).then(|| v.to_owned())
 });
 
+/// `KB_TOMTOM_KEY`: a TomTom API key for /api/traffic, None (route off) when unset or blank.
+pub static TOMTOM_KEY: LazyLock<Option<String>> = LazyLock::new(|| {
+    let v = env_str("KB_TOMTOM_KEY", "");
+    let v = v.trim_matches(crate::js::is_space);
+    (!v.is_empty()).then(|| v.to_owned())
+});
+
 /// Metropolia GZM and the other zbiorkom cities: feeds, positions, SDIP overlay, news.
 pub static GZM_GTFS_URL: LazyLock<String> = LazyLock::new(|| {
     env_str(
