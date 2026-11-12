@@ -145,6 +145,16 @@ pub static GEOCODER_URL: LazyLock<Option<String>> = LazyLock::new(|| {
     (!v.is_empty() && !v.eq_ignore_ascii_case("off")).then(|| v.to_owned())
 });
 
+/// `KB_FOOT_PBF_URL`: the OSM extract the walking paths come from (`backend/src/footpaths.rs`), None when `off`.
+pub static FOOT_PBF_URL: LazyLock<Option<String>> = LazyLock::new(|| {
+    let v = env_str(
+        "KB_FOOT_PBF_URL",
+        "https://download.geofabrik.de/europe/poland/slaskie-latest.osm.pbf",
+    );
+    let v = v.trim_matches(crate::js::is_space);
+    (!v.is_empty() && !v.eq_ignore_ascii_case("off")).then(|| v.to_owned())
+});
+
 /// `KB_TOMTOM_KEY`: a TomTom API key for /api/traffic, None (route off) when unset or blank.
 pub static TOMTOM_KEY: LazyLock<Option<String>> = LazyLock::new(|| {
     let v = env_str("KB_TOMTOM_KEY", "");

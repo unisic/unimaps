@@ -5,7 +5,7 @@
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 use icu_properties::CodePointMapData;
 use icu_properties::props::{GeneralCategory, GeneralCategoryGroup};
@@ -19,7 +19,13 @@ use crate::shared::fleet::fold_text;
 const WALK_MAX_M: f64 = 350.0;
 /// poles closer than this are one stop (the KB and MZK pole of one shelter), no walk; twins of one operator stand >= 5 m apart
 const SAME_STOP_M: f64 = 4.0;
+/// over a straight line: slow enough to cover the detour of the real path
 const WALK_MPS: f64 = 1.1;
+/// along a footpath (`footpaths.rs`): jakdojade's walks measure 1.23-1.4 m/s
+const WALK_PATH_MPS: f64 = 1.3;
+/// a footpath is searched up to this many times the walk's straight-line limit; past it (a data gap, or a detour
+/// round the railway) the walk keeps its straight-line estimate
+const WALK_PATH_X: f64 = 2.0;
 /// a search from a point starts at the nearest ACCESS_MAX_POLES poles within its walk radius, by default ACCESS_MAX_M
 const ACCESS_MAX_M: f64 = 800.0;
 const ACCESS_MAX_POLES: usize = 24;
@@ -229,6 +235,7 @@ pub struct RouterInput {
     pub mzk_day_types: HashMap<String, String>,
 }
 
+#[derive(Clone, Copy)]
 struct Footpath {
     to: u32,
     secs: i32,
@@ -267,8 +274,10 @@ pub struct RouterIndex {
     /// stop number -> router stop id
     pub stop_ids: Vec<String>,
     pub stop_num: HashMap<String, u32>,
-    /// walkable poles per stop number
+    /// walkable poles per stop number, timed over the straight line
     foot: Vec<Vec<Footpath>>,
+    /// `foot` timed along the footpaths, once the footpath graph is in
+    walked: OnceLock<Vec<Vec<Footpath>>>,
     /// an MZK course whose calls differ between day types has one entry per variant (`<id>#<n>`)
     pub trips: IndexMap<String, TripEntry>,
     pub services: HashMap<String, [u8; 7]>,
@@ -431,6 +440,11 @@ fn approx_dist_meters(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
     let d_lat = (lat2 - lat1) * 111_320.0;
     let d_lon = (lon2 - lon1) * 111_320.0 * (((lat1 + lat2) / 2.0) * (std::f64::consts::PI / 180.0)).cos();
     (d_lat * d_lat + d_lon * d_lon).sqrt()
+}
+
+/// Walk along a footpath of `m` metres, whole minutes, at least one.
+fn path_secs(m: f64) -> i32 {
+    60 * (m / WALK_PATH_MPS / 60.0).ceil().max(1.0) as i32
 }
 
 /// Walk over a straight-line distance, whole minutes; poles of one shelter are 0.
@@ -841,17 +855,30 @@ pub fn build_router_index(input: RouterInput) -> RouterIndex {
         }
     }
 
-    RouterIndex {
+    let idx = RouterIndex {
         stops,
         poles_by_name,
         poles_by_clean_key,
         stop_ids,
         stop_num,
         foot,
+        walked: OnceLock::new(),
         trips,
         services: input.services,
         mzk_day_types: input.mzk_day_types,
         days: Mutex::new(IndexMap::new()),
+    };
+    idx.walks();
+    idx
+}
+
+/// Times the walking transfers of the routers already built along the footpaths (the graph has just loaded).
+pub fn warm_walks() {
+    if let Some(idx) = lock(&CACHE).clone() {
+        idx.walks();
+    }
+    for feed in crate::gzm_feed::loaded_feeds() {
+        feed.router.walks();
     }
 }
 
@@ -935,7 +962,49 @@ impl RouterIndex {
 
     /// The walking transfers of a pole as (stop number, secs), in stop-number order.
     pub fn foot_of(&self, stop: u32) -> impl Iterator<Item = (u32, i32)> + '_ {
-        self.foot[stop as usize].iter().map(|f| (f.to, f.secs))
+        self.walks()[stop as usize].iter().map(|f| (f.to, f.secs))
+    }
+
+    fn coords(&self, stop: u32) -> (f64, f64) {
+        self.stops
+            .get(&self.stop_ids[stop as usize])
+            .map_or((f64::NAN, f64::NAN), |s| (s.lat, s.lon))
+    }
+
+    /// The transfers along the footpaths once the graph is in (timed on first use, ~1 s for GZM), else `foot`.
+    fn walks(&self) -> &[Vec<Footpath>] {
+        let Some(g) = crate::footpaths::graph() else {
+            return &self.foot;
+        };
+        self.walked.get_or_init(|| {
+            // each pair once, from its lower stop number
+            let mut secs: HashMap<(u32, u32), i32> = HashMap::new();
+            for (a, list) in self.foot.iter().enumerate() {
+                let a = a as u32;
+                let pairs: Vec<u32> = list.iter().filter(|f| f.to > a && f.secs > 0).map(|f| f.to).collect();
+                if pairs.is_empty() {
+                    continue;
+                }
+                let to: Vec<(f64, f64)> = pairs.iter().map(|&b| self.coords(b)).collect();
+                let m = g.walk_m(self.coords(a), &to, WALK_MAX_M * WALK_PATH_X);
+                for (b, m) in pairs.into_iter().zip(m) {
+                    if let Some(m) = m {
+                        secs.insert((a, b), path_secs(m));
+                    }
+                }
+            }
+            (self.foot.iter().enumerate())
+                .map(|(a, list)| {
+                    let a = a as u32;
+                    list.iter()
+                        .map(|f| Footpath {
+                            to: f.to,
+                            secs: *secs.get(&(a.min(f.to), a.max(f.to))).unwrap_or(&f.secs),
+                        })
+                        .collect()
+                })
+                .collect()
+        })
     }
 }
 
@@ -961,10 +1030,17 @@ fn access_poles(idx: &RouterIndex, at: Point) -> Vec<Origin> {
         .collect();
     near.sort_by(|a, b| a.1.total_cmp(&b.1));
     near.truncate(ACCESS_MAX_POLES);
-    near.into_iter()
-        .map(|(stop, d)| Origin {
+    let paths = crate::footpaths::graph().map(|g| {
+        let to: Vec<(f64, f64)> = near.iter().map(|&(stop, _)| idx.coords(stop)).collect();
+        g.walk_m((at.lat, at.lon), &to, max_m * WALK_PATH_X)
+    });
+    (near.into_iter().enumerate())
+        .map(|(i, (stop, d))| Origin {
             stop,
-            walk: foot_secs(d),
+            walk: match paths.as_ref().and_then(|p| p[i]) {
+                Some(m) if d >= SAME_STOP_M => path_secs(m),
+                _ => foot_secs(d),
+            },
         })
         .collect()
 }

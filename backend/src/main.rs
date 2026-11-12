@@ -15,7 +15,9 @@ use hyper_util::rt::{TokioIo, TokioTimer};
 use tokio::net::TcpListener;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::Semaphore;
-use unimaps::{config, fetch, gtfs_builder, gzm, http, logger, poller_singleton, push_alerts, push_news, static_files};
+use unimaps::{
+    config, fetch, footpaths, gtfs_builder, gzm, http, logger, poller_singleton, push_alerts, push_news, static_files,
+};
 
 /// ponytail: one cap for every open connection (idle keep-alive ones included, ~8 KB of buffers each).
 const MAX_CONNECTIONS: usize = 1024;
@@ -170,6 +172,7 @@ fn boot() {
         }
     });
     gzm::start_gzm();
+    footpaths::start_footpaths();
     if *config::PUSH_ENABLED {
         push_alerts::get_push_alerts();
         push_news::get_push_news();
