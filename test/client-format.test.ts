@@ -19,6 +19,7 @@ import {
   isBusStation,
   isMzk,
   leavesIn,
+  transferPlaces,
   normalizeText,
   notStartedEta,
   operatorColor,
@@ -77,6 +78,18 @@ describe("countdown", () => {
   it("rolls a large negative delta forward across midnight", () => {
     // departure 00:10 seen at 23:53 is in 17 min, not 24 h ago
     assert.equal(countdown(600, 86000), "17 min");
+  });
+});
+
+describe("transferPlaces", () => {
+  it("names each change, the walk in lower case", () => {
+    const legs = [
+      { fromStopName: "KATOWICE RYNEK 2T", toStopName: "DĄB HUTA BAILDON 1T" },
+      { fromStopName: "DĄB HUTA BAILDON 01", toStopName: "CHORZÓW HALA 01", walkMins: 1 },
+      { fromStopName: "CHORZÓW HALA 01", toStopName: "BATORY", walkMins: 0 },
+    ];
+    assert.equal(transferPlaces(legs), "Dąb Huta Baildon 1T → Dąb Huta Baildon 01 (pieszo 1 min) / Chorzów Hala 01");
+    assert.equal(transferPlaces(legs.slice(0, 1)), "");
   });
 });
 

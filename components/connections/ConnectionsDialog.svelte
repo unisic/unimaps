@@ -122,6 +122,7 @@
     MapTrifoldIcon,
     PathIcon,
     ShieldCheckIcon,
+    SlidersHorizontalIcon,
     XIcon,
   } from "@/components/icon-paths";
   import { CHIP, chip, CHIP_OFF } from "@/components/ui";
@@ -147,6 +148,7 @@
     offsetDateISO,
     przystanekPlural,
     todayISO,
+    transferPlaces,
   } from "@/lib/client/format";
   import { formatDistance, haversineMeters, nearestStops } from "@/lib/client/geo";
   import { hasRoute, placesOf, pushRecent, setPlace, toggleRoute, type SavedRoute } from "@/lib/client/places";
@@ -208,6 +210,8 @@
   /* lines of the last answer: the "Pomiń" chips stay put while the next search runs */
   let answerLines = $state.raw<readonly string[]>([]);
   let walkM = $state(storedWalk());
+  /* on a phone the filter rows fold under one chip once both ends are set, so the results show without a scroll */
+  let filtersOpen = $state(false);
 
   let connections = $state.raw<ConnectionItinerary[] | null>(null);
   /* "warming": the server is still loading the GZM data (503) */
@@ -323,6 +327,14 @@
   const toParam = $derived(toGeo ? geoParam(toGeo) : toStop ? toStop.id || toStop.name : null);
 
   const walkParam = $derived(fromParam?.startsWith("geo:") || toGeo ? walkM : undefined);
+  const activeFilters = $derived(
+    +directOnly +
+      +(minTransfer5 && !directOnly) +
+      +(sortBy !== "departure") +
+      avoidTypes.length +
+      avoidLines.length +
+      +(walkParam !== undefined && walkM !== WALK_DEFAULT),
+  );
 
   // Async connection fetcher
   $effect(() => {
@@ -907,7 +919,8 @@
 
       <!-- Day, time and filters; on a phone hidden while a stop is being picked, so the
            suggestions sit under the inputs instead of under the keyboard -->
-      <div class="space-y-3 {activeInput ? 'max-md:hidden' : ''}">
+      <!-- gap, not space-y: a folded filter block leaves no margin behind -->
+      <div class="flex flex-col gap-3 {activeInput ? 'max-md:hidden' : ''}">
         <!-- Day selection row -->
         <div class="flex items-start gap-1.5">
           <span class="w-[52px] shrink-0 text-[12px] leading-8 text-text-faint">Dzień:</span>
@@ -981,6 +994,20 @@
               {#if fromParam && toParam}
                 <button
                   type="button"
+                  onclick={() => (filtersOpen = !filtersOpen)}
+                  aria-expanded={filtersOpen}
+                  aria-controls="conn-filters"
+                  class="{chip(activeFilters > 0)} md:hidden"
+                >
+                  <Icon icon={SlidersHorizontalIcon} class="text-[14px]" />
+                  <span>Filtry{activeFilters ? ` (${activeFilters})` : ""}</span>
+                  <Icon
+                    icon={CaretDownIcon}
+                    class="text-[13px] transition-transform duration-200 {filtersOpen ? 'rotate-180' : ''}"
+                  />
+                </button>
+                <button
+                  type="button"
                   onclick={handleRefresh}
                   disabled={loading}
                   class="{CHIP} ml-auto bg-tint/8 px-3 text-text hover:bg-tint/12 disabled:opacity-50"
@@ -993,137 +1020,139 @@
           {/if}
         </div>
 
-        <!-- Filter chips row -->
-        <div class="flex items-start gap-1.5 border-t border-hairline pt-3">
-          <span class="w-[52px] shrink-0 text-[12px] leading-8 text-text-faint">Filtry:</span>
-          <div class="flex min-w-0 flex-1 flex-wrap gap-1.5">
+        <div id="conn-filters" class="space-y-3 {fromParam && toParam && !filtersOpen ? 'max-md:hidden' : ''}">
+          <!-- Filter chips row -->
+          <div class="flex items-start gap-1.5 border-t border-hairline pt-3">
+            <span class="w-[52px] shrink-0 text-[12px] leading-8 text-text-faint">Filtry:</span>
+            <div class="flex min-w-0 flex-1 flex-wrap gap-1.5">
 
-            <!-- Direct only filter chip -->
-            <button
-              type="button"
-              onclick={() => {
-                directOnly = !directOnly;
-                connections = null;
-              }}
-              class={chip(directOnly)}
-              aria-pressed={directOnly}
-              title="Pokaż wyłącznie bezpośrednie połączenia bez przesiadek"
-            >
-              <Icon icon={BusIcon} class="text-[14px]" weight={directOnly ? "fill" : "bold"} />
-              <span>Tylko bezpośrednie</span>
-              {#if directOnly}<Icon icon={CheckIcon} class="animate-pop text-[13px]" />{/if}
-            </button>
-
-            <!-- Min 5 min transfer buffer (when transfers are allowed) -->
-            {#if !directOnly}
+              <!-- Direct only filter chip -->
               <button
                 type="button"
                 onclick={() => {
-                  minTransfer5 = !minTransfer5;
+                  directOnly = !directOnly;
                   connections = null;
                 }}
-                class={chip(minTransfer5)}
-                aria-pressed={minTransfer5}
-                title="Filtruj połączenia z bezpiecznym czasem na przesiadkę (min. 5 minut)"
+                class={chip(directOnly)}
+                aria-pressed={directOnly}
+                title="Pokaż wyłącznie bezpośrednie połączenia bez przesiadek"
               >
-                <Icon icon={ShieldCheckIcon} class="text-[14px]" weight={minTransfer5 ? "fill" : "bold"} />
-                <span>Bezpieczna przesiadka (5 min)</span>
-                {#if minTransfer5}<Icon icon={CheckIcon} class="animate-pop text-[13px]" />{/if}
+                <Icon icon={BusIcon} class="text-[14px]" weight={directOnly ? "fill" : "bold"} />
+                <span>Tylko bezpośrednie</span>
+                {#if directOnly}<Icon icon={CheckIcon} class="animate-pop text-[13px]" />{/if}
               </button>
-            {/if}
 
-            <!-- Sort order chip: each tap steps to the next order -->
-            <button
-              type="button"
-              onclick={() => {
-                sortBy = nextSort.id;
-                connections = null;
-              }}
-              class={chip(sortBy !== "departure")}
-              title={`${sort.title}. Dotknij: ${nextSort.label.toLowerCase()}`}
-            >
-              <Icon icon={sort.icon} class="text-[14px]" weight={sortBy !== "departure" ? "fill" : "bold"} />
-              <span>{sort.label}</span>
-            </button>
+              <!-- Min 5 min transfer buffer (when transfers are allowed) -->
+              {#if !directOnly}
+                <button
+                  type="button"
+                  onclick={() => {
+                    minTransfer5 = !minTransfer5;
+                    connections = null;
+                  }}
+                  class={chip(minTransfer5)}
+                  aria-pressed={minTransfer5}
+                  title="Filtruj połączenia z bezpiecznym czasem na przesiadkę (min. 5 minut)"
+                >
+                  <Icon icon={ShieldCheckIcon} class="text-[14px]" weight={minTransfer5 ? "fill" : "bold"} />
+                  <span>Bezpieczna przesiadka (5 min)</span>
+                  {#if minTransfer5}<Icon icon={CheckIcon} class="animate-pop text-[13px]" />{/if}
+                </button>
+              {/if}
+
+              <!-- Sort order chip: each tap steps to the next order -->
+              <button
+                type="button"
+                onclick={() => {
+                  sortBy = nextSort.id;
+                  connections = null;
+                }}
+                class={chip(sortBy !== "departure")}
+                title={`${sort.title}. Dotknij: ${nextSort.label.toLowerCase()}`}
+              >
+                <Icon icon={sort.icon} class="text-[14px]" weight={sortBy !== "departure" ? "fill" : "bold"} />
+                <span>{sort.label}</span>
+              </button>
+            </div>
           </div>
+
+          {#if modes.length > 1}
+            <div class="flex items-start gap-1.5" role="group" aria-label="Pomiń środki transportu">
+              <span class="w-[52px] shrink-0 text-[12px] leading-8 text-text-faint">Bez:</span>
+              <div class="flex min-w-0 flex-1 flex-wrap gap-1.5">
+                {#each modes as m (m.type)}
+                  {@const on = avoidTypes.includes(m.type)}
+                  <button
+                    type="button"
+                    onclick={() => {
+                      avoidTypes = toggled(avoidTypes, m.type);
+                      connections = null;
+                    }}
+                    class={chip(on)}
+                    aria-pressed={on}
+                    title={on ? `Wyszukaj też z: ${m.label}` : `Wyszukaj bez: ${m.label}`}
+                  >
+                    <span class="text-[14px]">
+                      <ModeIcon mode={m.mode} weight={on ? "fill" : "bold"} />
+                    </span>
+                    <span class={on ? "line-through" : undefined}>{m.label}</span>
+                  </button>
+                {/each}
+              </div>
+            </div>
+          {/if}
+
+          {#if avoidLines.length > 0 || answerLines.length > 1}
+            <div class="flex items-start gap-1.5" role="group" aria-label="Pomiń linie">
+              <span class="w-[52px] shrink-0 text-[12px] leading-8 text-text-faint">Pomiń:</span>
+              <div class="flex min-w-0 flex-1 flex-wrap gap-1.5">
+                {#each [...avoidLines, ...answerLines.filter((l) => !avoidLines.includes(l))].slice(0, AVOID_CHIPS) as line (line)}
+                  {@const on = avoidLines.includes(line)}
+                  <button
+                    type="button"
+                    onclick={() => {
+                      avoidLines = toggled(avoidLines, line);
+                      connections = null;
+                    }}
+                    class="{chip(on)} tabular-nums"
+                    aria-pressed={on}
+                    title={on ? `Wyszukaj też z linią ${line}` : `Wyszukaj bez linii ${line}`}
+                  >
+                    <span class={on ? "line-through" : undefined}>{line}</span>
+                  </button>
+                {/each}
+              </div>
+            </div>
+          {/if}
+
+          {#if fromGeo || toGeo}
+            <div class="flex items-start gap-1.5" role="group" aria-label="Jak daleko do przystanku">
+              <span class="w-[52px] shrink-0 text-[12px] leading-8 text-text-faint">Dojście:</span>
+              <div class="flex min-w-0 flex-1 flex-wrap gap-1.5">
+                {#each WALK_OPTIONS as m (m)}
+                  <button
+                    type="button"
+                    onclick={() => {
+                      walkM = m;
+                      connections = null;
+                      try {
+                        window.localStorage.setItem(WALK_KEY, String(m));
+                      } catch {
+                        /* private mode: the choice lasts for this modal only */
+                      }
+                    }}
+                    class={chip(walkM === m)}
+                    aria-pressed={walkM === m}
+                    title={`Przystanki do ${fmtWalk(m)} w linii prostej`}
+                  >
+                    <Icon icon={PersonSimpleWalkIcon} class="text-[14px]" weight={walkM === m ? "fill" : "bold"} />
+                    <span>do {fmtWalk(m)}</span>
+                  </button>
+                {/each}
+              </div>
+            </div>
+          {/if}
         </div>
-
-        {#if modes.length > 1}
-          <div class="flex items-start gap-1.5" role="group" aria-label="Pomiń środki transportu">
-            <span class="w-[52px] shrink-0 text-[12px] leading-8 text-text-faint">Bez:</span>
-            <div class="flex min-w-0 flex-1 flex-wrap gap-1.5">
-              {#each modes as m (m.type)}
-                {@const on = avoidTypes.includes(m.type)}
-                <button
-                  type="button"
-                  onclick={() => {
-                    avoidTypes = toggled(avoidTypes, m.type);
-                    connections = null;
-                  }}
-                  class={chip(on)}
-                  aria-pressed={on}
-                  title={on ? `Wyszukaj też z: ${m.label}` : `Wyszukaj bez: ${m.label}`}
-                >
-                  <span class="text-[14px]">
-                    <ModeIcon mode={m.mode} weight={on ? "fill" : "bold"} />
-                  </span>
-                  <span class={on ? "line-through" : undefined}>{m.label}</span>
-                </button>
-              {/each}
-            </div>
-          </div>
-        {/if}
-
-        {#if avoidLines.length > 0 || answerLines.length > 1}
-          <div class="flex items-start gap-1.5" role="group" aria-label="Pomiń linie">
-            <span class="w-[52px] shrink-0 text-[12px] leading-8 text-text-faint">Pomiń:</span>
-            <div class="flex min-w-0 flex-1 flex-wrap gap-1.5">
-              {#each [...avoidLines, ...answerLines.filter((l) => !avoidLines.includes(l))].slice(0, AVOID_CHIPS) as line (line)}
-                {@const on = avoidLines.includes(line)}
-                <button
-                  type="button"
-                  onclick={() => {
-                    avoidLines = toggled(avoidLines, line);
-                    connections = null;
-                  }}
-                  class="{chip(on)} tabular-nums"
-                  aria-pressed={on}
-                  title={on ? `Wyszukaj też z linią ${line}` : `Wyszukaj bez linii ${line}`}
-                >
-                  <span class={on ? "line-through" : undefined}>{line}</span>
-                </button>
-              {/each}
-            </div>
-          </div>
-        {/if}
-
-        {#if fromGeo || toGeo}
-          <div class="flex items-start gap-1.5" role="group" aria-label="Jak daleko do przystanku">
-            <span class="w-[52px] shrink-0 text-[12px] leading-8 text-text-faint">Dojście:</span>
-            <div class="flex min-w-0 flex-1 flex-wrap gap-1.5">
-              {#each WALK_OPTIONS as m (m)}
-                <button
-                  type="button"
-                  onclick={() => {
-                    walkM = m;
-                    connections = null;
-                    try {
-                      window.localStorage.setItem(WALK_KEY, String(m));
-                    } catch {
-                      /* private mode: the choice lasts for this modal only */
-                    }
-                  }}
-                  class={chip(walkM === m)}
-                  aria-pressed={walkM === m}
-                  title={`Przystanki do ${fmtWalk(m)} w linii prostej`}
-                >
-                  <Icon icon={PersonSimpleWalkIcon} class="text-[14px]" weight={walkM === m ? "fill" : "bold"} />
-                  <span>do {fmtWalk(m)}</span>
-                </button>
-              {/each}
-            </div>
-          </div>
-        {/if}
       </div>
     </div>
 
@@ -1425,19 +1454,18 @@
                       {/if}
                     </div>
                     <p class="mt-0.5 text-[12px] text-text-mute">
-                      {dayBadge} · <span class="tabular-nums">{conn.totalDurationMins} min</span>
-                      {#if leave}
-                        · <span class="font-semibold tabular-nums text-primary"
-                          >{conn.accessWalkMins ? "wyjdź" : "odjazd"} {leave}</span
-                        >
-                      {/if}
+                      {dayBadge} · <span class="tabular-nums">{conn.totalDurationMins} min</span> ·
+                      {isDirect
+                        ? "bez przesiadek"
+                        : `${conn.transfersCount} ${conn.transfersCount === 1 ? "przesiadka" : "przesiadki"}`}
                     </p>
                   </div>
-                  <span class="shrink-0 rounded-full bg-tint/6 px-2.5 py-1 text-[12px] font-medium text-text-mute">
-                    {isDirect
-                      ? "Bezpośredni"
-                      : `${conn.transfersCount} ${conn.transfersCount === 1 ? "przesiadka" : "przesiadki"}`}
-                  </span>
+                  {#if leave}
+                    <p class="shrink-0 text-right leading-tight">
+                      <span class="block text-[11px] text-text-faint">{conn.accessWalkMins ? "wyjdź" : "odjazd"}</span>
+                      <span class="text-[19px] font-semibold tracking-tight tabular-nums text-primary">{leave}</span>
+                    </p>
+                  {/if}
                 </div>
 
                 <!-- Line badges summary -->
@@ -1486,9 +1514,9 @@
                 {/if}
 
                 <!-- Transfer info if applicable -->
-                {#if !isDirect && conn.transferStopName}
+                {#if !isDirect && conn.legs.length > 1}
                   <p class="mt-2 text-[12px] text-text-faint">
-                    Przesiadka: <span class="font-medium text-text-mute">{displayStopName(conn.transferStopName)}</span>
+                    Przesiadka: <span class="font-medium text-text-mute">{transferPlaces(conn.legs)}</span>
                     (oczekiwanie: {conn.transferWaitMins ?? 0} min)
                   </p>
                 {/if}
@@ -1496,74 +1524,19 @@
                   <p class="mt-1 text-[12px] font-medium text-late">Opóźnienie: możesz nie zdążyć na przesiadkę</p>
                 {/if}
 
-                <!-- Collapsible leg details -->
-                <div class="mt-3 border-t border-hairline pt-1">
+                <div class="mt-3 flex items-center justify-between gap-3 border-t border-hairline pt-3">
                   <button
                     type="button"
                     onclick={() => (expandedIdx = isExpanded ? null : idx)}
                     aria-expanded={isExpanded}
-                    class="flex h-9 w-full items-center justify-between text-[12px] font-medium text-text-mute transition-colors hover:text-text"
+                    class="tap -ml-1 inline-flex h-9 items-center gap-1 px-1 text-[12px] font-medium text-text-mute transition-colors hover:text-text"
                   >
-                    <span>{isExpanded ? "Ukryj szczegóły trasy" : "Pokaż szczegóły trasy"}</span>
+                    <span>Szczegóły</span>
                     <Icon
                       icon={CaretDownIcon}
                       class={`text-[13px] text-text-faint transition-transform duration-200 ${isExpanded ? "rotate-180" : ""}`}
                     />
                   </button>
-
-                  {#if isExpanded}
-                    <div class="mt-1 space-y-2 animate-fade">
-                      {#each conn.legs as leg, lIdx (lIdx)}
-                        <div class="rounded-xl bg-tint/4 p-3">
-                          <div class="flex items-center justify-between gap-2">
-                            <div class="flex min-w-0 items-center gap-2">
-                              <LineBadge line={leg.line} operator={leg.operator} />
-                              <span class="truncate text-[13px] font-medium text-text">
-                                Kierunek: {displayStopName(leg.headsign)}
-                              </span>
-                            </div>
-                            <span class="shrink-0 text-[12px] tabular-nums text-text-faint">
-                              {leg.stopsCount}
-                              {przystanekPlural(leg.stopsCount)} · {leg.durationMins} min
-                            </span>
-                          </div>
-                          <div class="ml-1 mt-2.5 space-y-1 border-l-2 border-tint/12 pl-2.5 text-[12px] text-text-mute">
-                            <p>
-                              <span class="font-medium tabular-nums text-text">{leg.departureTime}</span>
-                              {displayStopName(leg.fromStopName)}
-                            </p>
-                            <p>
-                              <span class="font-medium tabular-nums text-text">{leg.arrivalTime}</span>
-                              {displayStopName(leg.toStopName)}
-                            </p>
-                          </div>
-                          <div class="mt-2 flex justify-end">
-                            <button
-                              type="button"
-                              onclick={(e) => {
-                                e.stopPropagation();
-                                if (onSelectConnection) onSelectConnection(conn, lIdx);
-                                onClose();
-                              }}
-                              class="{CHIP} -mr-1.5 px-3 text-text hover:bg-tint/8"
-                            >
-                              <span>Pokaż ten odcinek na mapie</span>
-                              <Icon icon={ArrowRightIcon} class="text-[13px]" />
-                            </button>
-                          </div>
-                        </div>
-                      {/each}
-                    </div>
-                  {/if}
-                </div>
-
-                <!-- Action buttons -->
-                <div class="mt-1 flex items-center justify-between gap-3 border-t border-hairline pt-3">
-                  <span class="text-[12px] text-text-faint">
-                    {conn.legs.length > 1
-                      ? `${conn.legs.length} linie · ${conn.transfersCount} ${conn.transfersCount === 1 ? "przesiadka" : "przesiadki"}`
-                      : "Bez przesiadek"}
-                  </span>
                   <button
                     type="button"
                     onclick={() => {
@@ -1574,9 +1547,54 @@
                     class="{CTA} h-9 shrink-0 text-[13px]"
                   >
                     <Icon icon={MapTrifoldIcon} class="text-[15px]" />
-                    <span>Pokaż całą trasę na mapie</span>
+                    <span>Pokaż na mapie</span>
                   </button>
                 </div>
+
+                {#if isExpanded}
+                  <div class="mt-3 space-y-2 animate-fade">
+                    {#each conn.legs as leg, lIdx (lIdx)}
+                      <div class="rounded-xl bg-tint/4 p-3">
+                        <div class="flex items-center justify-between gap-2">
+                          <div class="flex min-w-0 items-center gap-2">
+                            <LineBadge line={leg.line} operator={leg.operator} />
+                            <span class="truncate text-[13px] font-medium text-text">
+                              Kierunek: {displayStopName(leg.headsign)}
+                            </span>
+                          </div>
+                          <span class="shrink-0 text-[12px] tabular-nums text-text-faint">
+                            {leg.stopsCount}
+                            {przystanekPlural(leg.stopsCount)} · {leg.durationMins} min
+                          </span>
+                        </div>
+                        <div class="ml-1 mt-2.5 space-y-1 border-l-2 border-tint/12 pl-2.5 text-[12px] text-text-mute">
+                          <p>
+                            <span class="font-medium tabular-nums text-text">{leg.departureTime}</span>
+                            {displayStopName(leg.fromStopName)}
+                          </p>
+                          <p>
+                            <span class="font-medium tabular-nums text-text">{leg.arrivalTime}</span>
+                            {displayStopName(leg.toStopName)}
+                          </p>
+                        </div>
+                        <div class="mt-2 flex justify-end">
+                          <button
+                            type="button"
+                            onclick={(e) => {
+                              e.stopPropagation();
+                              if (onSelectConnection) onSelectConnection(conn, lIdx);
+                              onClose();
+                            }}
+                            class="{CHIP} -mr-1.5 px-3 text-text hover:bg-tint/8"
+                          >
+                            <span>Pokaż ten odcinek na mapie</span>
+                            <Icon icon={ArrowRightIcon} class="text-[13px]" />
+                          </button>
+                        </div>
+                      </div>
+                    {/each}
+                  </div>
+                {/if}
               </div>
             {/each}
 
