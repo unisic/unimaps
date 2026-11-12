@@ -4,11 +4,24 @@
 
   import { el, KeyedLayers } from "@/components/leafletLayers";
   import { displayStopName } from "@/lib/client/format";
+  import { legPoints } from "@/lib/client/journey";
   import { makeJourneyLineIcon, makeJourneyPinIcon } from "@/lib/client/leafletIcons";
   import { prefersReducedMotion } from "@/lib/client/motion";
+  import { pointAt, preparePolyline } from "@/lib/shared/polyline";
   import type { JourneyView, LatLng } from "@/lib/client/types";
 
-  let { map, journey, desktop }: { map: L.Map; journey: JourneyView | null; desktop: boolean } = $props();
+  let {
+    map,
+    journey,
+    desktop,
+    fit = true,
+  }: {
+    map: L.Map;
+    journey: JourneyView | null;
+    desktop: boolean;
+    /** frame the journey (or its selected leg) when it changes; off for the search preview, framed with all the routes */
+    fit?: boolean;
+  } = $props();
 
   const TIP: L.TooltipOptions = { direction: "top", sticky: true, className: "kb-tooltip" };
 
@@ -17,25 +30,14 @@
   // Determine points for bounds fitting
   const allPoints = $derived.by(() => {
     if (!journey) return [];
-    const pts: LatLng[] = [];
-    journey.legs.forEach((l, lIdx) => {
-      if (selectedIdx !== null && selectedIdx !== lIdx) return;
-      if (l.routed && l.routed.length >= 2) {
-        pts.push(...l.routed);
-      } else if (l.leg.stops) {
-        for (const s of l.leg.stops) {
-          if (s.lat && s.lon) pts.push([s.lat, s.lon]);
-        }
-      }
-    });
-    return pts;
+    return journey.legs.flatMap((l, lIdx) => (selectedIdx === null || selectedIdx === lIdx ? legPoints(l) : []));
   });
 
   // Fit bounds once per journey and selected leg: the routed legs replace the journey object
   // ~1 s later and must not yank back a map the user has started moving
   let fitted: string | null = null;
   $effect(() => {
-    if (!allPoints.length) return;
+    if (!fit || !allPoints.length) return;
     const fitKey = `${journey?.gen}:${selectedIdx}`;
     if (fitted === fitKey) return;
     fitted = fitKey;
@@ -72,10 +74,64 @@
     layers.put(
       key,
       () => L.marker(at, { icon, zIndexOffset }).bindTooltip(tip, TIP),
-      (m) => m.setLatLng(at).setIcon(icon).setZIndexOffset(zIndexOffset).getTooltip()?.setContent(tip),
+      (m) => {
+        // a new icon is a new element: one per redraw would cut a pin's entrance short
+        if ((m.options.icon?.options as L.DivIconOptions | undefined)?.html !== icon.options.html) m.setIcon(icon);
+        m.setLatLng(at).setZIndexOffset(zIndexOffset).getTooltip()?.setContent(tip);
+      },
     );
 
+  /* the entrance of a new generation: each leg draws from its first stop to its last, one after another (time split
+     by the ride minutes), its stops and pins arriving as the line reaches them. WAAPI, so a redraw mid-way (the road
+     geometry landing) keeps running; reduced motion skips it */
+  const DRAW_MS = 450;
+  const MIN_LEG_MS = 120;
+  // --ease-out-soft and --ease-spring: WAAPI takes no var()
+  const EASE_OUT = "cubic-bezier(0.22, 1, 0.36, 1)";
+  const EASE_SPRING = "cubic-bezier(0.32, 0.72, 0, 1)";
+  let enteredGen: number | null = null;
+
+  function sweep(p: L.Path, delay: number, duration: number): void {
+    const e = p.getElement();
+    if (!e) return;
+    for (const a of e.getAnimations()) a.cancel();
+    // the dash pattern in path-length units: one dash as long as the line, its offset walks it in
+    e.setAttribute("pathLength", "1");
+    const a = e.animate(
+      [
+        { strokeDasharray: "1 1", strokeDashoffset: 1 },
+        { strokeDasharray: "1 1", strokeDashoffset: 0 },
+      ],
+      { duration, delay, easing: EASE_OUT, fill: "backwards" },
+    );
+    a.onfinish = () => e.removeAttribute("pathLength");
+  }
+  function arrive(e: Element | undefined, delay: number, pop: boolean): void {
+    if (!e) return;
+    for (const a of e.getAnimations()) a.cancel();
+    e.animate(pop ? [{ opacity: 0, transform: "scale(0.85)" }, { opacity: 1, transform: "none" }] : [{ opacity: 0 }, { opacity: 1 }], {
+      duration: pop ? 300 : 200,
+      delay,
+      easing: pop ? EASE_SPRING : EASE_OUT,
+      fill: "backwards",
+    });
+  }
+  const pinIn = (m: L.Marker, delay: number) => arrive(m.getElement()?.firstElementChild ?? undefined, delay, true);
+  // when the eased sweep reaches fraction f of its line: EASE_OUT read as quint-out, 1 - (1 - u)^5 = f
+  const reach = (f: number) => 1 - Math.pow(1 - f, 0.2);
+
   function draw(journey: JourneyView, selectedIdx: number | null): void {
+    const enter = journey.gen !== enteredGen && !!journey.enter && !prefersReducedMotion();
+    enteredGen = journey.gen;
+    const weight = journey.legs.map((l) => Math.max(60, l.leg.arrivalSecs - l.leg.departureSecs));
+    const total = weight.reduce((a, b) => a + b, 0);
+    const slots: { at: number; ms: number }[] = [];
+    for (const w of weight) {
+      const at = slots.length ? slots[slots.length - 1].at + slots[slots.length - 1].ms : 0;
+      slots.push({ at, ms: Math.max(MIN_LEG_MS, (DRAW_MS * w) / total) });
+    }
+    const end = slots.length ? slots[slots.length - 1].at + slots[slots.length - 1].ms : 0;
+
     const startLeg = journey.legs[0]?.leg;
     const startStop = startLeg?.stops?.[0];
     const lastLeg = journey.legs[journey.legs.length - 1]?.leg;
@@ -85,13 +141,11 @@
     journey.legs.forEach((legItem, lIdx) => {
       const isLegSelected = selectedIdx === null || selectedIdx === lIdx;
       const color = legItem.lineColor;
-      const pts: LatLng[] =
-        legItem.routed && legItem.routed.length >= 2
-          ? legItem.routed
-          : (legItem.leg.stops?.flatMap((s): LatLng[] => (s.lat && s.lon ? [[s.lat, s.lon]] : [])) ?? []);
+      const pts = legPoints(legItem);
       if (pts.length < 2) return;
+      const slot = slots[lIdx];
       // Casing line
-      line(`journey-leg-${lIdx}-casing`, pts, {
+      const casing = line(`journey-leg-${lIdx}-casing`, pts, {
         color: "#0d1013",
         className: "route-casing",
         weight: isLegSelected ? 9 : 6,
@@ -100,18 +154,27 @@
         lineJoin: "round",
       });
       // Colored route line
-      line(`journey-leg-${lIdx}`, pts, {
+      const route = line(`journey-leg-${lIdx}`, pts, {
         color,
         weight: isLegSelected ? 5 : 3.5,
         opacity: isLegSelected ? 0.95 : 0.4,
         lineCap: "round",
         lineJoin: "round",
       });
+      if (enter) {
+        sweep(casing, slot.at, slot.ms);
+        sweep(route, slot.at, slot.ms);
+      }
       if (!isLegSelected) return;
       const { line: name, headsign } = legItem.leg;
-      pin(`journey-line-${lIdx}`, pts[pts.length >> 1], makeJourneyLineIcon(name, color), 200, () =>
+      // halfway along the line: the middle vertex sits wherever the shape is densest
+      const pl = preparePolyline(pts);
+      const mid = pl ? pointAt(pl, pl.length / 2) : null;
+      const label = pin(`journey-line-${lIdx}`, mid ? [mid.lat, mid.lon] : pts[pts.length >> 1], makeJourneyLineIcon(name, color), 200, () =>
         el("div", "font-medium", `Linia ${name} → ${displayStopName(headsign)}`),
       );
+      // the number lands as the line passes the middle, where it sits
+      if (enter) pinIn(label, slot.at + slot.ms * reach(0.5));
     });
 
     // Walks between the alighting pole and the next boarding pole: a straight dotted line (no footpath geometry)
@@ -125,8 +188,12 @@
         [to.lat, to.lon],
       ];
       // same dash period as the dots, so each dot gets a rim in the map's contrast colour
-      line(`journey-walk-${i}-casing`, pts, { color: "#0d1013", className: "route-casing", weight: 8, opacity: on ? 0.85 : 0.35, dashArray: "1 10", lineCap: "round" });
-      line(`journey-walk-${i}`, pts, { color: "#e8eaed", className: "route-walk", weight: 5, opacity: on ? 0.95 : 0.4, dashArray: "1 10", lineCap: "round" });
+      const rim = line(`journey-walk-${i}-casing`, pts, { color: "#0d1013", className: "route-casing", weight: 8, opacity: on ? 0.85 : 0.35, dashArray: "1 10", lineCap: "round" });
+      const dots = line(`journey-walk-${i}`, pts, { color: "#e8eaed", className: "route-walk", weight: 5, opacity: on ? 0.95 : 0.4, dashArray: "1 10", lineCap: "round" });
+      if (enter) {
+        arrive(rim.getElement(), slots[i + 1].at, false);
+        arrive(dots.getElement(), slots[i + 1].at, false);
+      }
     });
 
     // Intermediate stops across legs
@@ -134,9 +201,10 @@
       const isLegSelected = selectedIdx === null || selectedIdx === lIdx;
       const color = legItem.lineColor;
       const stops = legItem.leg.stops ?? [];
+      const slot = slots[lIdx];
       stops.slice(1, -1).forEach((st, sIdx) => {
         if (!st.lat || !st.lon) return;
-        dot(
+        const stop = dot(
           `journey-stop-${lIdx}-${sIdx}-${st.stopId}`,
           [st.lat, st.lon],
           isLegSelected ? 4 : 3,
@@ -157,6 +225,7 @@
               el("div", "text-[11px] text-text-faint", `Linia ${legItem.leg.line}`),
             ),
         );
+        if (enter) arrive(stop.getElement(), slot.at + slot.ms * reach((sIdx + 1) / (stops.length - 1)), false);
       });
     });
 
@@ -173,7 +242,7 @@
       const walk = nextLeg?.walkMins ?? 0;
       const icon = walk ? makeJourneyPinIcon("walk", `${walk} min`) : makeJourneyPinIcon("transfer", `${waitMins} min`);
 
-      pin(`journey-trans-${lIdx}-${transStop.stopId}`, [transStop.lat, transStop.lon], icon, 250, () =>
+      const at = pin(`journey-trans-${lIdx}-${transStop.stopId}`, [transStop.lat, transStop.lon], icon, 250, () =>
         el(
           "div",
           "",
@@ -198,11 +267,12 @@
           ),
         ),
       );
+      if (enter) pinIn(at, slots[lIdx].at + slots[lIdx].ms);
     });
 
     // Origin start marker
     if (startStop && startStop.lat && startStop.lon) {
-      pin("journey-start", [startStop.lat, startStop.lon], makeJourneyPinIcon("start"), 300, () =>
+      const start = pin("journey-start", [startStop.lat, startStop.lon], makeJourneyPinIcon("start"), 300, () =>
         el(
           "div",
           "",
@@ -217,11 +287,12 @@
           ),
         ),
       );
+      if (enter) pinIn(start, 0);
     }
 
     // Destination end marker
     if (endStop && endStop.lat && endStop.lon) {
-      pin("journey-end", [endStop.lat, endStop.lon], makeJourneyPinIcon("end"), 300, () =>
+      const finish = pin("journey-end", [endStop.lat, endStop.lon], makeJourneyPinIcon("end"), 300, () =>
         el(
           "div",
           "",
@@ -236,6 +307,8 @@
           ),
         ),
       );
+      // the destination lands when the line reaches it
+      if (enter) pinIn(finish, end);
     }
   }
 

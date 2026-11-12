@@ -1,12 +1,17 @@
 <script lang="ts">
+  import { quintOut } from "svelte/easing";
+  import { fly } from "svelte/transition";
+
   import Icon from "@/components/Icon.svelte";
-  import { CaretRightIcon, PersonSimpleWalkIcon } from "@/components/icon-paths";
-  import LineBadge from "@/components/ui/LineBadge.svelte";
-  import { delayClass, delayTxt, minsToLeave } from "@/lib/client/format";
+  import { PersonSimpleWalkIcon } from "@/components/icon-paths";
+  import { delayClass, delayTxt, minsToLeave, operatorColor } from "@/lib/client/format";
+  import { journeySegments } from "@/lib/client/journey";
+  import { prefersReducedMotion } from "@/lib/client/motion";
   import type { ConnectionItinerary } from "@/lib/client/types";
 
-  /** One journey at a glance, as jakdojade lays it out; spans only, so it fits inside a button: the wait to leave, the lines, walk / board / ride /
-   *  alight, the whole duration. The result card and JourneyView's header share it. */
+  /** One journey at a glance; spans only, so it fits inside a button: the clock times and the wait to leave, the
+   *  journey as a strip (rides in their line colours, walks, waits; widths by minutes), the totals. The result card and
+   *  JourneyView's header share it. */
   let {
     it,
     delays,
@@ -28,54 +33,69 @@
   const board = $derived(legs[0]);
   const alight = $derived(legs[legs.length - 1]);
   const mins = $derived(live ? minsToLeave(it.departureSecs + (delays[0] ?? 0), now) : null);
-  const ride = $derived(board && alight ? Math.round((alight.arrivalSecs - board.departureSecs) / 60) : null);
-  const PILL = "rounded-md px-1.5 py-px font-semibold tabular-nums text-bg";
+  const segments = $derived(journeySegments(it));
+  const walk = $derived(it.walkMinutes ?? segments.reduce((a, s) => a + (s.kind === "walk" ? s.mins : 0), 0));
+  const xfers = $derived(it.transfersCount === 1 ? "1 przesiadka" : it.transfersCount < 5 ? `${it.transfersCount} przesiadki` : `${it.transfersCount} przesiadek`);
+  // the new minute drops in from above, like a departure board; local to the {#key}, so a card's own entrance skips it
+  const tick = () => ({ y: "-60%", duration: prefersReducedMotion() ? 0 : 240, easing: quintOut });
 </script>
 
-<span class="flex items-start gap-3">
-  <span class="block w-[74px] shrink-0 leading-none">
-    {#if mins != null}
-      <span class="block text-[11px] text-text-mute">{it.accessWalkMins ? "Wyjdź za:" : "Odjazd za:"}</span>
-      {#if mins === 0}
-        <span class="mt-1 block text-[24px] font-semibold tracking-tight text-text">teraz</span>
-      {:else}
-        <span class="mt-1 inline-block text-[30px] font-semibold tracking-tight tabular-nums text-text">{mins}</span><span
-          class="text-[13px] font-semibold text-text">&nbsp;min</span
-        >
+<span class="block">
+  <span class="flex items-end justify-between gap-3">
+    <span class="flex min-w-0 items-baseline gap-1.5 tabular-nums">
+      <span class="text-[19px] font-semibold tracking-tight text-text">{board?.departureTime ?? it.departureTime}</span>
+      <span class="text-[13px] text-text-faint" aria-hidden="true">→</span>
+      <span class="sr-only">przyjazd</span>
+      <span class="text-[15px] font-medium text-text-mute">{alight?.arrivalTime ?? it.arrivalTime}</span>
+      {#if it.arrivesNextDay}<span class="text-[12px] font-medium text-late" title="Przyjazd następnego dnia">+1 d.</span>{/if}
+    </span>
+    <span class="shrink-0 text-right leading-none">
+      {#if mins != null}
+        <span class="text-[11px] text-text-mute">{it.accessWalkMins ? (mins ? "wyjdź za" : "wyjdź") : mins ? "za" : ""}</span>
+        {#key mins}
+          <span in:fly={tick()} class="inline-block text-[24px] font-semibold tracking-tight tabular-nums text-primary"
+            >{mins === 0 ? "teraz" : mins}</span
+          >
+        {/key}
+        {#if mins > 0}<span class="text-[12px] font-semibold text-primary">min</span>{/if}
+      {:else if dayLabel && dayLabel !== "Dziś"}
+        <span class="text-[12px] font-medium text-text-mute">{dayLabel}</span>
       {/if}
-    {:else}
-      <span class="block text-[11px] text-text-mute">{dayLabel && dayLabel !== "Dziś" ? dayLabel : "Odjazd"}</span>
-      <span class="mt-1 block text-[24px] font-semibold tracking-tight tabular-nums text-text">{it.departureTime}</span>
+    </span>
+  </span>
+
+  <!-- the strip draws in left to right, the way the journey goes (.journey-strip) -->
+  <span class="journey-strip mt-2.5 flex h-[22px] gap-[3px]">
+    {#each segments as s, i (i)}
+      {#if s.kind === "ride"}
+        <span
+          class="flex min-w-[34px] items-center justify-center overflow-hidden rounded-md px-1 text-[12px] font-semibold tabular-nums text-white"
+          style:flex-grow={s.mins}
+          style:background={operatorColor(s.leg.operator, s.leg.line)}
+          title="Linia {s.leg.line}, {s.mins} min">{s.leg.line}</span
+        >
+      {:else if s.kind === "walk"}
+        <span
+          class="flex min-w-[20px] items-center justify-center rounded-md bg-tint/8 text-[12px] text-text-mute"
+          style:flex-grow={s.mins}
+          title="Pieszo {s.mins} min"><Icon icon={PersonSimpleWalkIcon} /></span
+        >
+      {:else}
+        <span class="min-w-1 rounded-md bg-tint/4" style:flex-grow={s.mins} title="Czekasz {s.mins} min"></span>
+      {/if}
+    {/each}
+  </span>
+
+  <span class="mt-2 flex items-center gap-1.5 text-[12px] tabular-nums text-text-mute">
+    <span class="font-medium text-text">{it.totalDurationMins} min</span>
+    <span aria-hidden="true">·</span>
+    <span>{it.transfersCount ? xfers : "bez przesiadek"}</span>
+    {#if walk > 0}
+      <span aria-hidden="true">·</span>
+      <span>{walk} min pieszo</span>
     {/if}
     {#if delays[0] != null}
-      <span class="mt-1 block text-[11px] font-medium tabular-nums {delayClass(delays[0])}">{delayTxt(delays[0])}</span>
+      <span class="ml-auto font-medium {delayClass(delays[0])}">{delayTxt(delays[0])}</span>
     {/if}
   </span>
-
-  <span class="block min-w-0 flex-1">
-    <span class="flex flex-wrap items-center gap-1">
-      {#each legs as leg, i (i)}
-        {#if i > 0}<Icon icon={CaretRightIcon} class="text-[11px] text-text-faint" />{/if}
-        <LineBadge line={leg.line} operator={leg.operator} />
-      {/each}
-    </span>
-    <span class="mt-2 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[12px] tabular-nums text-text-mute">
-      {#if it.accessWalkMins}
-        <span class="inline-flex items-center gap-0.5"
-          ><Icon icon={PersonSimpleWalkIcon} class="text-[13px]" />{it.accessWalkMins} min</span
-        >
-      {/if}
-      <span class="{PILL} bg-good" title="Odjazd">{board?.departureTime ?? it.departureTime}</span>
-      {#if ride != null}<span>{ride} min</span>{/if}
-      <span class="{PILL} bg-primary" title="Przyjazd">{alight?.arrivalTime ?? it.arrivalTime}</span>
-      {#if it.arrivesNextDay}<span class="font-medium text-late" title="Przyjazd następnego dnia">+1 d.</span>{/if}
-      {#if it.egressWalkMins}
-        <span class="inline-flex items-center gap-0.5"
-          ><Icon icon={PersonSimpleWalkIcon} class="text-[13px]" />{it.egressWalkMins} min</span
-        >
-      {/if}
-    </span>
-  </span>
-
-  <span class="shrink-0 pt-0.5 text-[13px] tabular-nums text-text-mute">{it.totalDurationMins} min</span>
 </span>

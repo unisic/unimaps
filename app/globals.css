@@ -188,6 +188,14 @@ body {
 .stagger > *:nth-child(5) { animation-delay: 0.14s; }
 .stagger > *:nth-child(6) { animation-delay: 0.17s; }
 
+/* a journey's strip (JourneySummary) draws in left to right, the way the journey goes, in step with the route
+   drawing in on the map (JourneyLayer, 450 ms); the delay lets a staggered card start to rise first */
+.journey-strip { animation: strip-in 0.45s var(--ease-out-soft) 0.08s backwards; }
+@keyframes strip-in {
+  from { clip-path: inset(0 100% 0 0); }
+  to { clip-path: inset(0 0 0 0); }
+}
+
 /* ---------- vehicle markers: [heading arrow] + operator logo + line number ---------- */
 
 .veh-marker { background: none; border: 0; }
@@ -389,6 +397,8 @@ body {
 .leaflet-overlay-pane .route-casing { stroke: var(--color-bg); }
 .leaflet-overlay-pane .route-walk { stroke: var(--color-text); }
 .leaflet-overlay-pane .route-stop { fill: var(--color-bg); }
+/* the other routes of a search under the chosen one: muted, in the map's text colour */
+.leaflet-overlay-pane .journey-alt { stroke: var(--color-text-mute); }
 
 /* stop names under an opened trip's stops: text in the route's colour (--route-c, set on the label pane) on a halo in
    the map's contrast colour; the dark theme lifts the colour toward white, a dark line colour would sink into the halo */

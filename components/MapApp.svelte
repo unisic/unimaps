@@ -15,6 +15,7 @@
   import { focusPoint, glideTo, installSmoothZoom, isCovered, isLockMove, lockOn } from "@/lib/client/mapGlide";
   import { getSmoothMotion } from "@/lib/client/smoothMotion";
   import { haversineMeters, nearestStops } from "@/lib/client/geo";
+  import { distinctRoutes } from "@/lib/client/journey";
   import { gzmStopKey } from "@/lib/shared/gzm-stop-key";
   import { startAlertWatchers } from "@/lib/client/alerts";
   import { CITY, GZM_LOADING, getPageCity, withCity } from "@/lib/client/city";
@@ -61,6 +62,7 @@
   import StopsLayer from "@/components/StopsLayer.svelte";
   import TripLayer from "@/components/TripLayer.svelte";
   import JourneyLayer from "@/components/JourneyLayer.svelte";
+  import JourneyAltLayer from "@/components/JourneyAltLayer.svelte";
   import VectorBaseLayer from "@/components/VectorBaseLayer.svelte";
 
   const NOT_STARTED = "Pojazd jeszcze nie wyruszył";
@@ -210,6 +212,11 @@
   /* desktop search results: the hovered (else first) card's route drawn under the panel */
   let preview = $state.raw<JourneyViewState | null>(null);
   let previewTimer: ReturnType<typeof setTimeout> | undefined;
+  /* the last search's results: every distinct route is drawn muted under the chosen one (desktop search panel, an
+     opened journey), a click on one opens it */
+  let results = $state.raw<ConnectionItinerary[]>([]);
+  /* the list the first preview was drawn for: that preview draws in, the hovered ones after it swap at once */
+  let previewedFor: ConnectionItinerary[] | null = null;
   let vehMeta = $state.raw<Vehicle | null>(null);
   /* no style picked yet: the basemap follows the app theme (set by the pre-paint script in the page head) */
   const themeLayer = (): BaseLayerId => (document.documentElement.dataset.theme === "light" ? "kb" : "dark");
@@ -760,6 +767,8 @@
   /* road geometry per itinerary, shared by the hover preview and the opened journey; the WeakMap
      lets it go with the result list */
   const routedLegs = new WeakMap<ConnectionItinerary, Promise<JourneyLegResolved[]>>();
+  /* the settled ones, readable at once: a hovered card whose route is drawn already shows it without a straight-line frame */
+  const routedNow = new WeakMap<ConnectionItinerary, JourneyLegResolved[]>();
 
   function resolveLegs(conn: ConnectionItinerary): JourneyLegResolved[] {
     const { byId, byDesig } = untrack(() => stopsMaps);
@@ -809,6 +818,7 @@
       }),
     );
     routedLegs.set(conn, p);
+    void p.then((r) => routedNow.set(conn, r));
     return p;
   }
 
@@ -820,18 +830,58 @@
       return;
     }
     previewTimer = setTimeout(async () => {
-      const legs = resolveLegs(conn);
+      const done = routedNow.get(conn);
+      const legs = done ?? resolveLegs(conn);
       const gen = ++journeySeq;
-      const base: JourneyViewState = { gen, itinerary: conn, fromStop: null, toStop: null, legs, selectedLegIdx: null, status: "routing" };
+      const enter = previewedFor !== results;
+      previewedFor = results;
+      const base: JourneyViewState = {
+        gen,
+        itinerary: conn,
+        fromStop: null,
+        toStop: null,
+        legs,
+        selectedLegIdx: null,
+        status: done ? "ready" : "routing",
+        enter,
+      };
       preview = base;
+      if (done) return;
       const routed = await routeLegs(conn, legs);
       if (preview === base) preview = { ...base, legs: routed, status: "ready" };
     }, 120);
   }
 
+  const MAX_ALT_ROUTES = 6;
+  const altVisible = $derived(journey != null || (desktop && connModalOpen));
+  const altList = $derived(altVisible ? distinctRoutes(results, MAX_ALT_ROUTES) : []);
+  let alts = $state.raw<{ it: ConnectionItinerary; legs: JourneyLegResolved[] }[]>([]);
+  $effect(() => {
+    const next = altList.map((it) => ({ it, legs: routedNow.get(it) ?? resolveLegs(it) }));
+    alts = next;
+    let live = true;
+    for (const { it, legs } of next) {
+      if (legs.some((l) => l.routed)) continue;
+      void routeLegs(it, legs).then((r) => {
+        if (live) alts = alts.map((a) => (a.it === it ? { it, legs: r } : a));
+      });
+    }
+    return () => {
+      live = false;
+    };
+  });
+
+  function handlePickAlt(it: ConnectionItinerary) {
+    if (journey?.itinerary === it) return;
+    closeConnModal();
+    void handleSelectConnection(it, null);
+  }
+
   async function handleSelectConnection(conn: ConnectionItinerary, selectedLegIdx: number | null = null) {
     closeTrip();
     selectedStop = null;
+    // the search's preview drew this route already: it stays, no second entrance
+    const shown = preview?.itinerary === conn;
     handlePreviewConnection(null);
 
     const gen = ++journeySeq;
@@ -843,15 +893,18 @@
     const fromStop = firstLeg ? (byId.get(firstLeg.fromStopId) ?? byDesig.get(firstLeg.fromStopId) ?? null) : null;
     const toStop = lastLeg ? (byId.get(lastLeg.toStopId) ?? byDesig.get(lastLeg.toStopId) ?? null) : null;
 
+    const done = routedNow.get(conn);
     journey = {
       gen,
       itinerary: conn,
       fromStop,
       toStop,
-      legs: legsResolved,
+      legs: done ?? legsResolved,
       selectedLegIdx,
-      status: "routing",
+      status: done ? "ready" : "routing",
+      enter: !shown,
     };
+    if (done) return;
 
     const routed = await routeLegs(conn, legsResolved);
     if (journey?.gen === gen) journey = { ...journey, legs: routed, status: "ready" };
@@ -1544,8 +1597,15 @@
       minZoom={cityCfg.stopMinZoom}
     />
     <TripLayer {map} {trip} {desktop} {vehMeta} liveVehicle={liveTripVeh} onSelectStop={handleSelectStop} />
+    <JourneyAltLayer
+      {map}
+      routes={alts}
+      active={journey?.itinerary ?? preview?.itinerary ?? null}
+      fit={desktop && journey == null}
+      onPick={handlePickAlt}
+    />
     <JourneyLayer {map} {journey} {desktop} />
-    <JourneyLayer {map} journey={preview} {desktop} />
+    <JourneyLayer {map} journey={preview} {desktop} fit={false} />
     <LineLayer
       {map}
       line={openLine}
@@ -1627,6 +1687,7 @@
     onSelectStop={pickStopFly}
     onSelectConnection={handleSelectConnection}
     onPreviewConnection={handlePreviewConnection}
+    onResults={(list) => (results = list)}
     {desktop}
     {vehicles}
   />

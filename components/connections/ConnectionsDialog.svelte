@@ -70,6 +70,13 @@
     { id: "arrive", label: "Przyjazd do", title: "Połączenia z przyjazdem najpóźniej o wybranej godzinie" },
   ];
   const WHEN_TODAY: { id: When; label: string; title?: string }[] = [{ id: "now", label: "Teraz" }, ...WHEN_LATER];
+  /** the most transfers a journey may take; the router caps at 4 */
+  const TRANSFER_CAPS = [
+    { id: "0", label: "Bez", title: "Tylko bezpośrednie połączenia" },
+    { id: "1", label: "do 1" },
+    { id: "2", label: "do 2" },
+    { id: "any", label: "Dowolnie" },
+  ] as const;
 
   /** The dialog mounts per opening: its last search stays here for the page's life, so a sheet closed by
    *  mistake reopens on it. Older than RESTORE_MS it opens fresh (the route is in "Ostatnie wyszukiwania");
@@ -89,7 +96,7 @@
     arriveBy: boolean;
     hour: string;
     minute: string;
-    directOnly: boolean;
+    maxTransfers: number | null;
     minTransfer5: boolean;
     sortBy: SortBy;
     avoidTypes: readonly string[];
@@ -158,6 +165,7 @@
     onSelectStop,
     onSelectConnection,
     onPreviewConnection,
+    onResults,
     desktop = false,
     vehicles,
   }: Omit<ConnectionsModalProps, "open"> = $props();
@@ -195,7 +203,9 @@
   let minute = $state(minute0);
 
   // Filters state
-  let directOnly = $state(false);
+  /** at most this many transfers; null = any, 0 = direct only */
+  let maxTransfers = $state<number | null>(null);
+  const directOnly = $derived(maxTransfers === 0);
   let minTransfer5 = $state(false);
   let sortBy = $state<SortBy>("departure");
   let avoidTypes = $state.raw<readonly string[]>([]);
@@ -214,6 +224,7 @@
     desktop && connections?.length ? (hovered && connections.includes(hovered) ? hovered : connections[0]) : null,
   );
   $effect(() => onPreviewConnection?.(previewConn));
+  $effect(() => onResults?.(connections ?? []));
   /* "warming": the server is still loading the GZM data (503) */
   let connErr = $state<false | "error" | "warming" | "busy">(false);
   const city = getPageCity();
@@ -227,7 +238,7 @@
   // svelte-ignore state_referenced_locally
   if (!initialFrom && !initialTo && last && last.day === todayStr && performance.now() - last.at < RESTORE_MS) {
     ({ fromStop, toStop, toGeo, dateMode, selectedDate, timeMode, arriveBy, hour, minute } = last);
-    ({ directOnly, minTransfer5, sortBy, avoidTypes, avoidLines } = last);
+    ({ maxTransfers, minTransfer5, sortBy, avoidTypes, avoidLines } = last);
     // a GPS origin follows the rider
     fromGeo = last.fromGeo && !last.fromGeo.label && geoPos ? { lat: geoPos.lat, lon: geoPos.lon } : last.fromGeo;
     if (performance.now() - last.at < RESULTS_MS) ({ connections, answerLines } = last);
@@ -293,7 +304,7 @@
         arriveBy,
         hour,
         minute,
-        directOnly,
+        maxTransfers,
         minTransfer5,
         sortBy,
         avoidTypes,
@@ -326,7 +337,7 @@
 
   const walkParam = $derived(fromParam?.startsWith("geo:") || toGeo ? walkM : undefined);
   const activeFilters = $derived(
-    +directOnly +
+    +(maxTransfers != null) +
       +(minTransfer5 && !directOnly) +
       +(sortBy !== "departure") +
       avoidTypes.length +
@@ -346,7 +357,7 @@
       time: time ?? undefined,
       date: selectedDate,
       dayLabel: effectiveDayLabel,
-      directOnly,
+      maxTransfers: maxTransfers ?? undefined,
       minTransfer: minTransfer5 ? 5 : undefined,
       sortBy,
       avoid: avoidLines,
@@ -953,7 +964,7 @@
           <div id="conn-time" class="animate-fade space-y-3 rounded-xl bg-tint/4 p-3">
             <!-- Day selection row -->
             <div class="flex items-start gap-1.5">
-              <span class="w-[52px] shrink-0 text-[12px] leading-8 text-text-faint">Dzień:</span>
+              <span class="w-[66px] shrink-0 text-[12px] leading-8 text-text-faint">Dzień:</span>
               <div class="flex min-w-0 flex-1 flex-wrap gap-1.5">
                 <button type="button" onclick={handlePickToday} class={chip(dateMode === "today")}>Dziś</button>
                 <button type="button" onclick={handlePickTomorrow} class={chip(dateMode === "tomorrow")}>Jutro</button>
@@ -980,7 +991,7 @@
             <!-- When: now, leave at or arrive by; the time and its nudges only for a set time -->
             <div class="space-y-2">
               <div class="flex items-center gap-1.5">
-                <span class="w-[52px] shrink-0 text-[12px] text-text-faint">Czas:</span>
+                <span class="w-[66px] shrink-0 text-[12px] text-text-faint">Czas:</span>
                 <div class="min-w-0 flex-1 md:max-w-sm">
                   <Segmented
                     label="Czas podróży"
@@ -1026,27 +1037,25 @@
           </div>
         {:else if panel === "options"}
           <div id="conn-options" class="animate-fade space-y-3 rounded-xl bg-tint/4 p-3">
-            <!-- Filter chips row -->
-            <div class="flex items-start gap-1.5">
-              <span class="w-[52px] shrink-0 text-[12px] leading-8 text-text-faint">Filtry:</span>
-              <div class="flex min-w-0 flex-1 flex-wrap gap-1.5">
-
-                <!-- Direct only filter chip -->
-                <button
-                  type="button"
-                  onclick={() => {
-                    directOnly = !directOnly;
+            <div class="flex items-center gap-1.5">
+              <span class="w-[66px] shrink-0 text-[12px] text-text-faint">Przesiadki:</span>
+              <div class="min-w-0 flex-1 md:max-w-sm">
+                <Segmented
+                  label="Najwięcej przesiadek"
+                  value={maxTransfers == null ? "any" : String(maxTransfers)}
+                  options={TRANSFER_CAPS}
+                  onChange={(id) => {
+                    maxTransfers = id === "any" ? null : Number(id);
                     connections = null;
                   }}
-                  class={chip(directOnly)}
-                  aria-pressed={directOnly}
-                  title="Pokaż wyłącznie bezpośrednie połączenia bez przesiadek"
-                >
-                  <Icon icon={BusIcon} class="text-[14px]" weight={directOnly ? "fill" : "bold"} />
-                  <span>Tylko bezpośrednie</span>
-                  {#if directOnly}<Icon icon={CheckIcon} class="animate-pop text-[13px]" />{/if}
-                </button>
+                />
+              </div>
+            </div>
 
+            <!-- Filter chips row -->
+            <div class="flex items-start gap-1.5">
+              <span class="w-[66px] shrink-0 text-[12px] leading-8 text-text-faint">Filtry:</span>
+              <div class="flex min-w-0 flex-1 flex-wrap gap-1.5">
                 <!-- Min 5 min transfer buffer (when transfers are allowed) -->
                 {#if !directOnly}
                   <button
@@ -1083,7 +1092,7 @@
 
             {#if modes.length > 1}
               <div class="flex items-start gap-1.5" role="group" aria-label="Pomiń środki transportu">
-                <span class="w-[52px] shrink-0 text-[12px] leading-8 text-text-faint">Bez:</span>
+                <span class="w-[66px] shrink-0 text-[12px] leading-8 text-text-faint">Bez:</span>
                 <div class="flex min-w-0 flex-1 flex-wrap gap-1.5">
                   {#each modes as m (m.type)}
                     {@const on = avoidTypes.includes(m.type)}
@@ -1109,7 +1118,7 @@
 
             {#if avoidLines.length > 0 || answerLines.length > 1}
               <div class="flex items-start gap-1.5" role="group" aria-label="Pomiń linie">
-                <span class="w-[52px] shrink-0 text-[12px] leading-8 text-text-faint">Pomiń:</span>
+                <span class="w-[66px] shrink-0 text-[12px] leading-8 text-text-faint">Pomiń:</span>
                 <div class="flex min-w-0 flex-1 flex-wrap gap-1.5">
                   {#each [...avoidLines, ...answerLines.filter((l) => !avoidLines.includes(l))].slice(0, AVOID_CHIPS) as line (line)}
                     {@const on = avoidLines.includes(line)}
@@ -1132,7 +1141,7 @@
 
             {#if fromGeo || toGeo}
               <div class="flex items-start gap-1.5" role="group" aria-label="Jak daleko do przystanku">
-                <span class="w-[52px] shrink-0 text-[12px] leading-8 text-text-faint">Dojście:</span>
+                <span class="w-[66px] shrink-0 text-[12px] leading-8 text-text-faint">Dojście:</span>
                 <div class="flex min-w-0 flex-1 flex-wrap gap-1.5">
                   {#each WALK_OPTIONS as m (m)}
                     <button
@@ -1382,7 +1391,7 @@
                 <button
                   type="button"
                   onclick={() => {
-                    directOnly = false;
+                    maxTransfers = null;
                     connections = null;
                   }}
                   class="{CTA} h-9 text-[13px]"
@@ -1441,42 +1450,46 @@
               </button>
             </div>
 
-            {#each connections as conn, idx (`${conn.departureTime}-${conn.arrivalTime}-${idx}`)}
-              {@const startPole = conn.legs[0]?.fromStopName ?? ""}
-              <!-- the exact pole when the search named a whole stop (GZM) or a location -->
-              {@const showPole =
-                !!fromGeo || (!!fromStop && normalizeText(startPole) !== normalizeText(stopLabel(fromStop.name)))}
-              <!-- the bus on the map, else the delay the search boarded it with -->
-              {@const delays = conn.legs.map((l) => legVehicle(l, conn.date, vix)?.delay ?? l.delaySec ?? null)}
-              <!-- the whole card opens the journey: its map, timeline and leg tabs are the details -->
-              <button
-                type="button"
-                onclick={() => {
-                  if (onSelectConnection) onSelectConnection(conn, null);
-                  else if (fromStop) onSelectStop(fromStop);
-                  onClose();
-                }}
-                onmouseenter={() => (hovered = conn)}
-                onfocus={() => (hovered = conn)}
-                class="block w-full rounded-xl bg-tint/4 p-3.5 text-left transition-colors hover:bg-tint/8 active:bg-tint/10 {previewConn === conn ? 'ring-1 ring-primary/50' : ''}"
-              >
-                <JourneySummary
-                  it={conn}
-                  {delays}
-                  now={clock.current}
-                  live={(conn.date ?? selectedDate) === todayStr}
-                  dayLabel={conn.dayLabel || effectiveDayLabel}
-                />
-                {#if showPole}
-                  <span class="mt-2 block truncate text-[12px] text-text-faint">
-                    Odjazd z: <span class="font-medium text-text-mute">{displayStopName(startPole)}</span>
-                  </span>
-                {/if}
-                {#if transferAtRisk(conn.legs, delays)}
-                  <span class="mt-1 block text-[12px] font-medium text-late">Opóźnienie: możesz nie zdążyć na przesiadkę</span>
-                {/if}
-              </button>
-            {/each}
+            <!-- one entrance per result list: every search, refresh and earlier / later page mounts a new list -->
+            <div class="stagger space-y-2.5">
+              {#each connections as conn, idx (`${conn.departureTime}-${conn.arrivalTime}-${idx}`)}
+                {@const startPole = conn.legs[0]?.fromStopName ?? ""}
+                <!-- the exact pole when the search named a whole stop (GZM) or a location -->
+                {@const showPole =
+                  !!fromGeo || (!!fromStop && normalizeText(startPole) !== normalizeText(stopLabel(fromStop.name)))}
+                <!-- the bus on the map, else the delay the search boarded it with -->
+                {@const delays = conn.legs.map((l) => legVehicle(l, conn.date, vix)?.delay ?? l.delaySec ?? null)}
+                <!-- the whole card opens the journey: its map, timeline and leg tabs are the details -->
+                <button
+                  type="button"
+                  onclick={() => {
+                    if (onSelectConnection) onSelectConnection(conn, null);
+                    else if (fromStop) onSelectStop(fromStop);
+                    onClose();
+                  }}
+                  onmouseenter={() => (hovered = conn)}
+                  onfocus={() => (hovered = conn)}
+                  class="block w-full rounded-xl bg-tint/4 p-3.5 text-left transition-[background-color,scale] duration-150 [transition-timing-function:var(--ease-spring)] hover:bg-tint/8 active:scale-[0.985] active:bg-tint/10
+                    {previewConn === conn ? 'ring-1 ring-primary/50' : ''}"
+                >
+                  <JourneySummary
+                    it={conn}
+                    {delays}
+                    now={clock.current}
+                    live={(conn.date ?? selectedDate) === todayStr}
+                    dayLabel={conn.dayLabel || effectiveDayLabel}
+                  />
+                  {#if showPole}
+                    <span class="mt-2 block truncate text-[12px] text-text-faint">
+                      Odjazd z: <span class="font-medium text-text-mute">{displayStopName(startPole)}</span>
+                    </span>
+                  {/if}
+                  {#if transferAtRisk(conn.legs, delays)}
+                    <span class="mt-1 block text-[12px] font-medium text-late">Opóźnienie: możesz nie zdążyć na przesiadkę</span>
+                  {/if}
+                </button>
+              {/each}
+            </div>
 
             <!-- Later connections button -->
             <div class="flex justify-center py-1">

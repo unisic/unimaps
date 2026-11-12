@@ -371,5 +371,7 @@ export interface JourneyView {
   legs: JourneyLegResolved[];
   selectedLegIdx: number | null;
   status: "routing" | "ready";
+  /** the map draws this generation's route in from start to end (an opened journey, a search's first preview) */
+  enter?: boolean;
 }
 

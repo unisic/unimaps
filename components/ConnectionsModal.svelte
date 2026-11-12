@@ -18,6 +18,8 @@
     onSelectConnection?: (conn: ConnectionItinerary, selectedLegIdx?: number | null) => void;
     /** desktop: the result to draw on the map under the panel (hovered, else the first); null clears it */
     onPreviewConnection?: (conn: ConnectionItinerary | null) => void;
+    /** every search's result list, [] while one loads: the map draws their routes */
+    onResults?: (list: ConnectionItinerary[]) => void;
     /** a docked side panel over a usable map instead of a modal sheet */
     desktop?: boolean;
     /** the live fleet of the city: current delays on today's legs */
