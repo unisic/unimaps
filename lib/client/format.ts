@@ -1,6 +1,6 @@
 import { delayMinutes } from "../shared/departures";
 import { CITY, getPageCity } from "./city";
-import type { ConnectionLeg, Stop, TripExecutionResponse, TripTime, TripView, Vehicle } from "./types";
+import type { Stop, TripExecutionResponse, TripTime, TripView, Vehicle } from "./types";
 
 /**
  * TWO STOP ID SPACES (upstream quirk — crossed on purpose): a trip time's
@@ -204,27 +204,13 @@ export function countdown(secs: number | null, now: number): string {
   return hhmmFromSecs(secs);
 }
 
-/** "za 5 min" / "teraz" until a journey leaves (secs since midnight, live delay added); null more than an hour ahead
- *  or once it left over a minute ago, when a countdown would only mislead. */
-export function leavesIn(secs: number, now: number): string | null {
+/** Whole minutes until a journey leaves (secs since midnight, live delay added), 0 = due now; null more than an
+ *  hour ahead or once it left over a minute ago, when a countdown would only mislead. */
+export function minsToLeave(secs: number, now: number): number | null {
   let delta = secs - now;
   if (delta < -43200) delta += 86400; // post-midnight departure viewed before midnight
   if (delta < -60 || delta >= 3600) return null;
-  const mins = Math.round(delta / 60);
-  return mins <= 0 ? "teraz" : `za ${mins} min`;
-}
-
-/** "A → B (pieszo 4 min) / C": the transfers of a journey, names in title case. Built from the legs, not the
- *  server's transferStopName, whose walk note displayStopName would capitalise ("Pieszo 4 Min"). */
-export function transferPlaces(legs: readonly Pick<ConnectionLeg, "fromStopName" | "toStopName" | "walkMins">[]): string {
-  return legs
-    .slice(1)
-    .map((b, i) => {
-      const a = legs[i].toStopName;
-      const at = a === b.fromStopName ? displayStopName(a) : `${displayStopName(a)} → ${displayStopName(b.fromStopName)}`;
-      return b.walkMins ? `${at} (pieszo ${b.walkMins} min)` : at;
-    })
-    .join(" / ");
+  return Math.max(0, Math.round(delta / 60));
 }
 
 /**
