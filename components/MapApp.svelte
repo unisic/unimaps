@@ -78,7 +78,8 @@
   /** the CSS glide of a vehicle marker to its next fix (globals.css .veh-marker) */
   const MARKER_GLIDE_MS = 900;
   /* road geometry is routed server-side with OSRM: its usage policy asks for credit */
-  const OSRM_CREDIT = 'Trasy: <a href="https://project-osrm.org/" target="_blank" rel="noopener noreferrer">OSRM</a>';
+  const OSRM_CREDIT =
+    'Trasy: <a href="https://project-osrm.org/" target="_blank" rel="noopener noreferrer">OSRM</a>, piesze: <a href="https://routing.openstreetmap.de/about.html" target="_blank" rel="noopener noreferrer">FOSSGIS</a> (<a href="https://www.openstreetmap.org/fixthemap" target="_blank" rel="noopener noreferrer">popraw mapę</a>)';
 
   type LastRequest =
     | { kind: "live"; execId: string; tripId: string | number | null; stop: Stop | null }

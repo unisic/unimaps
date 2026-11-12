@@ -3,6 +3,7 @@
   import { onDestroy } from "svelte";
 
   import { el, KeyedLayers } from "@/components/leafletLayers";
+  import { walkRoute, walkRouteNow } from "@/lib/client/api";
   import { displayStopName } from "@/lib/client/format";
   import { legPoints } from "@/lib/client/journey";
   import { makeJourneyLineIcon, makeJourneyPinIcon } from "@/lib/client/leafletIcons";
@@ -26,6 +27,8 @@
   const TIP: L.TooltipOptions = { direction: "top", sticky: true, className: "kb-tooltip" };
 
   const selectedIdx = $derived(journey?.selectedLegIdx ?? null);
+  /* bumped when a footpath lands, so the walk redraws along it */
+  let walksLanded = $state(0);
 
   // Determine points for bounds fitting
   const allPoints = $derived.by(() => {
@@ -177,16 +180,22 @@
       if (enter) pinIn(label, slot.at + slot.ms * reach(0.5));
     });
 
-    // Walks between the alighting pole and the next boarding pole: a straight dotted line (no footpath geometry)
+    // Walks between the alighting pole and the next boarding pole: along the footpaths once they arrive, a straight
+    // dotted line until then (or when the foot router fails)
     journey.legs.slice(1).forEach(({ leg }, i) => {
       const from = journey.legs[i].leg.stops?.at(-1);
       const to = leg.stops?.[0];
       if (!leg.walkMins || !from?.lat || !from.lon || !to?.lat || !to.lon) return;
       const on = selectedIdx === null || selectedIdx === i || selectedIdx === i + 1;
-      const pts: LatLng[] = [
-        [from.lat, from.lon],
-        [to.lat, to.lon],
-      ];
+      const a: LatLng = [from.lat, from.lon];
+      const b: LatLng = [to.lat, to.lon];
+      let pts = walkRouteNow(a, b);
+      if (!pts) {
+        pts = [a, b];
+        void walkRoute(a, b).then((path) => {
+          if (path) walksLanded++;
+        });
+      }
       // same dash period as the dots, so each dot gets a rim in the map's contrast colour
       const rim = line(`journey-walk-${i}-casing`, pts, { color: "#0d1013", className: "route-casing", weight: 8, opacity: on ? 0.85 : 0.35, dashArray: "1 10", lineCap: "round" });
       const dots = line(`journey-walk-${i}`, pts, { color: "#e8eaed", className: "route-walk", weight: 5, opacity: on ? 0.95 : 0.4, dashArray: "1 10", lineCap: "round" });
@@ -314,6 +323,7 @@
 
   /* layers keyed like the old JSX children: a re-run (routed legs, another selected leg) updates them in place */
   $effect(() => {
+    void walksLanded;
     if (journey) draw(journey, selectedIdx);
     layers.sweep();
   });

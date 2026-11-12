@@ -231,6 +231,53 @@ async function fetchChunkRoute(points: LatLng[]): Promise<LatLng[]> {
   return res && res.length >= 2 ? res : points;
 }
 
+/* FOSSGIS's OSRM foot profile (osm.org's walking directions): footways, crossings, underpasses. Their usage policy
+   allows at most one request a second, so requests leave one per second; a settled path is kept for the page's life. */
+const OSRM_FOOT = "https://routing.openstreetmap.de/routed-foot/route/v1/driving";
+const walkCache = new Map<string, Promise<LatLng[] | null>>();
+const walkDone = new Map<string, LatLng[]>();
+let footNextAt = 0;
+
+const walkKey = (a: LatLng, b: LatLng) => `${a[0].toFixed(5)},${a[1].toFixed(5)};${b[0].toFixed(5)},${b[1].toFixed(5)}`;
+
+/** The footpath from a to b if it has already arrived (walkRoute), else undefined. */
+export function walkRouteNow(a: LatLng, b: LatLng): LatLng[] | undefined {
+  return walkDone.get(walkKey(a, b));
+}
+
+/** Footpath geometry from a to b, ends included; null when the router fails (the caller keeps its straight line). */
+export function walkRoute(a: LatLng, b: LatLng): Promise<LatLng[] | null> {
+  const key = walkKey(a, b);
+  const hit = walkCache.get(key);
+  if (hit) return hit;
+  const p = (async (): Promise<LatLng[] | null> => {
+    const now = Date.now();
+    const wait = Math.max(0, footNextAt - now);
+    footNextAt = Math.max(footNextAt, now) + 1_000;
+    if (wait) await new Promise((r) => setTimeout(r, wait));
+    try {
+      const d = await fetchJSON<OsrmResponse>(`${OSRM_FOOT}/${a[1]},${a[0]};${b[1]},${b[0]}?overview=full&geometries=geojson`, {
+        signal: AbortSignal.timeout(OSRM_TIMEOUT_MS),
+      });
+      const line = d.routes?.[0]?.geometry?.coordinates;
+      if (line && line.length >= 2) {
+        // the router starts and ends on the nearest path: the poles themselves close the line
+        const path: LatLng[] = [a, ...line.map((c): LatLng => [c[1], c[0]]), b];
+        walkDone.set(key, path);
+        capMap(walkDone, ROUTE_CACHE_MAX);
+        return path;
+      }
+    } catch {
+      // straight line
+    }
+    walkCache.delete(key);
+    return null;
+  })();
+  walkCache.set(key, p);
+  capMap(walkCache, ROUTE_CACHE_MAX);
+  return p;
+}
+
 /**
  * Road geometry through `points` ([lat, lon]). Splits longer routes into
  * overlapping chunks (max 12 waypoints) so OSRM URL limits and waypoint limits
