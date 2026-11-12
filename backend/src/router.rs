@@ -152,6 +152,8 @@ pub struct RouteQuery<'a> {
     pub arrive_by: bool,
     pub limit: Option<i32>,
     pub direct_only: bool,
+    /// at most this many transfers (0 = direct only); None = up to MAX_RIDES - 1
+    pub max_transfers: Option<u32>,
     pub min_transfer_secs: Option<i32>,
     pub max_transfer_secs: Option<i32>,
     /// None or "" = today
@@ -1765,7 +1767,11 @@ fn search_day(
         q,
         q.live.filter(|_| day.is_today),
     );
-    let rides = if q.direct_only { 1 } else { MAX_RIDES };
+    let rides = match (q.direct_only, q.max_transfers) {
+        (true, _) => 1,
+        (false, Some(m)) => (m as usize + 1).min(MAX_RIDES),
+        (false, None) => MAX_RIDES,
+    };
     let walk_x = if q.sort_by == SortBy::Walk { 3 } else { 1 };
     let change = q.min_transfer_secs.unwrap_or(DEFAULT_CHANGE_SECS);
     let back = q.arrive_by;

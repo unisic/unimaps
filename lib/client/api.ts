@@ -275,7 +275,8 @@ export interface GetConnectionsOptions {
   time?: string;
   date?: string;
   dayLabel?: string;
-  directOnly?: boolean;
+  /** at most this many transfers (0 to 4) */
+  maxTransfers?: number;
   minTransfer?: number;
   sortBy?: "departure" | "duration" | "arrival" | "transfers" | "walk";
   /** line names never ridden */
@@ -323,7 +324,7 @@ export async function getConnections(
     if (optionsOrTime.time) p.set("time", optionsOrTime.time);
     if (optionsOrTime.date) p.set("date", optionsOrTime.date);
     if (optionsOrTime.dayLabel) p.set("dayLabel", optionsOrTime.dayLabel);
-    if (optionsOrTime.directOnly) p.set("direct", "true");
+    if (optionsOrTime.maxTransfers != null) p.set("maxTransfers", String(optionsOrTime.maxTransfers));
     if (optionsOrTime.minTransfer != null) p.set("minTransfer", String(optionsOrTime.minTransfer));
     if (optionsOrTime.sortBy) p.set("sortBy", optionsOrTime.sortBy);
     if (optionsOrTime.avoid?.length) p.set("avoid", optionsOrTime.avoid.join(","));

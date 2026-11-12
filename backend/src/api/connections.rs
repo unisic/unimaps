@@ -198,6 +198,7 @@ struct Params {
     arrive_by: bool,
     limit: Option<i32>,
     direct_only: bool,
+    max_transfers: Option<u32>,
     min_transfer_secs: Option<i32>,
     date: Option<String>,
     day_label: Option<String>,
@@ -217,6 +218,7 @@ impl Params {
         let day_label = param("dayLabel").filter(|d| !d.is_empty());
         let direct = param("direct").or_else(|| param("directOnly"));
         let min_transfer = param("minTransfer").unwrap_or_default();
+        let max_transfers = param("maxTransfers").unwrap_or_default();
         let sort_by = param("sortBy");
         let limit = param("limit").unwrap_or_default();
         let walk = param("walk").unwrap_or_default();
@@ -275,6 +277,13 @@ impl Params {
         if !min_transfer.is_empty() && !int_ok(&min_transfer) {
             return Err(bad_request("Invalid 'minTransfer' parameter (expected minutes)"));
         }
+        let max_transfers = match max_transfers.as_str() {
+            "" => None,
+            m => match m.parse::<u32>() {
+                Ok(n) if n <= 4 => Some(n),
+                _ => return Err(bad_request("Invalid 'maxTransfers' parameter (0 to 4)")),
+            },
+        };
         if !limit.is_empty() && !int_ok(&limit) {
             return Err(bad_request("Invalid 'limit' parameter (expected an integer)"));
         }
@@ -294,6 +303,7 @@ impl Params {
             arrive_by,
             limit: int(&limit),
             direct_only: matches!(direct.as_deref(), Some("true" | "1")),
+            max_transfers,
             min_transfer_secs: int(&min_transfer).map(|m| m * 60),
             date: (!date.is_empty()).then_some(date),
             day_label,
@@ -315,6 +325,7 @@ impl Params {
             arrive_by: self.arrive_by,
             limit: self.limit,
             direct_only: self.direct_only,
+            max_transfers: self.max_transfers,
             min_transfer_secs: self.min_transfer_secs,
             date: self.date.as_deref(),
             day_label: self.day_label.as_deref(),
