@@ -1,13 +1,29 @@
 <script module lang="ts">
   import type { FleetCity, FleetSummaryItem } from "@/lib/client/fleet";
-  import { compareLineNames, matchesFleetQuery } from "@/lib/shared/fleet";
+  import { classifyDelay, compareLineNames, matchesFleetQuery } from "@/lib/shared/fleet";
 
-  import { hasActiveFilters, type FleetFilters, type FleetSort, type StatusFilter } from "./fleetFilters";
+  import { CLEARED, hasActiveFilters, type FleetFilters, type FleetSort, type FleetView, type StatusFilter } from "./fleetFilters";
 
-  function vehicleState(v: FleetSummaryItem): Exclude<StatusFilter, "all"> {
+  function vehicleState(v: FleetSummaryItem): "active" | "waiting" | "depot" {
     if (v.status !== "active") return "depot";
     return v.notStarted ? "waiting" : "active";
   }
+
+  function isLate(v: FleetSummaryItem): boolean {
+    if (vehicleState(v) !== "active" || v.delaySec === undefined) return false;
+    const c = classifyDelay(v.delaySec);
+    return c === "late" || c === "veryLate";
+  }
+
+  function matchesStatus(v: FleetSummaryItem, status: StatusFilter): boolean {
+    if (status === "all") return true;
+    return status === "late" ? isLate(v) : vehicleState(v) === status;
+  }
+
+  /** drove today: a depot vehicle that came back, not one that stayed in all day */
+  const droveToday = (v: FleetSummaryItem) => v.coursesCountToday > 0 || v.kmToday > 0;
+
+  const sideOf = (v: FleetSummaryItem) => v.sideNumber;
 
   const STATE_RANK = { active: 0, waiting: 1, depot: 2 } as const;
 
@@ -30,6 +46,9 @@
       case "delay":
         // the most delayed first; vehicles without a measured delay at the end
         return out.sort((a, b) => (b.delaySec ?? -Infinity) - (a.delaySec ?? -Infinity) || bySide(a, b));
+      case "built":
+        // the newest first; vehicles phototrans does not list at the end
+        return out.sort((a, b) => (b.built ?? 0) - (a.built ?? 0) || bySide(a, b));
       default:
         return out.sort(
           (a, b) =>
@@ -43,9 +62,58 @@
   const STATUS_CHIPS: { key: StatusFilter; label: string }[] = [
     { key: "all", label: "Wszystkie" },
     { key: "active", label: "W trasie" },
+    { key: "late", label: "Spóźnione" },
     { key: "waiting", label: "Czeka na odjazd" },
     { key: "depot", label: "Nie kursuje" },
   ];
+
+  const VIEWS: { key: FleetView; label: string }[] = [
+    { key: "list", label: "Pojazdy" },
+    { key: "models", label: "Modele" },
+  ];
+
+  /** "Rzadkie dziś w trasie": a running vehicle of a model with at most this many units in the list */
+  const RARE_MAX = 3;
+
+  interface ModelGroup {
+    model: string;
+    producer: string;
+    total: number;
+    active: number;
+    /** "2016-2025" from the vehicles' own years, else the fleet table's range */
+    years: string;
+    thumb?: string;
+    fuel: FleetSummaryItem["fuelType"];
+    mega: boolean;
+  }
+
+  /** One row per model, the most numerous first; `list` keeps its order, so a running vehicle's photo wins. */
+  function groupModels(list: FleetSummaryItem[]): ModelGroup[] {
+    const by = new Map<string, FleetSummaryItem[]>();
+    for (const v of list) {
+      const g = by.get(v.model);
+      if (g) g.push(v);
+      else by.set(v.model, [v]);
+    }
+    const out: ModelGroup[] = [];
+    for (const [model, vs] of by) {
+      const built = vs.flatMap((v) => (v.built ? [v.built] : []));
+      const lo = Math.min(...built);
+      const hi = Math.max(...built);
+      out.push({
+        model,
+        producer: vs[0].producer,
+        total: vs.length,
+        active: vs.filter((v) => vehicleState(v) === "active").length,
+        years: built.length === 0 ? (vs[0].year ?? "") : lo === hi ? String(lo) : `${lo}-${hi}`,
+        thumb: vs.find((v) => v.thumb)?.thumb,
+        fuel: vs[0].fuelType,
+        mega: vs[0].lengthCategory === "MEGA",
+      });
+    }
+    // an unknown model ("") last
+    return out.sort((a, b) => Number(!a.model) - Number(!b.model) || b.total - a.total || a.model.localeCompare(b.model, "pl"));
+  }
 
   /** ponytail: GZM lists ~1 400 vehicles; 200 cards per step keep the DOM small. Upgrade: a virtual list. */
   const PAGE_ROWS = 200;
@@ -55,13 +123,15 @@
     side: "Numer boczny",
     delay: "Opóźnienie",
     km: "Km dziś",
+    built: "Rocznik",
   };
 </script>
 
 <script lang="ts">
   import LineBadge from "@/components/ui/LineBadge.svelte";
+  import { ptThumbUrl } from "@/lib/shared/fleet";
 
-  import { clockFromEpoch, FLEET_CITY, FUEL_LABEL, FUEL_LABEL_PLURAL, fmtInt, fmtKm, pluralPl, SERIES_FILL } from "./common";
+  import { clockFromEpoch, FLEET_CITY, fleetCount, FUEL_LABEL, FUEL_LABEL_PLURAL, fmtInt, fmtKm, pluralPl, SERIES_FILL } from "./common";
   import DelayBadge from "./DelayBadge.svelte";
   import { fuelIcon, SEARCH } from "./icons";
   import Svg from "./Svg.svelte";
@@ -77,7 +147,8 @@
     vehicles: FleetSummaryItem[];
     filters: FleetFilters;
     onFiltersChange: (patch: Partial<FleetFilters>) => void;
-    onOpen: (side: string) => void;
+    /** `order`: the sides as listed, for the card's prev/next */
+    onOpen: (side: string, order: string[]) => void;
     nowEpoch: number;
     city?: FleetCity;
   } = $props();
@@ -87,7 +158,7 @@
   const q = $derived(filters.q);
   const brand = $derived(FLEET_CITY[city]);
   // "Pokaż więcej" counts for the filters it was pressed under; any filter change starts over
-  const filterKey = $derived(`${q}\n${filters.status}\n${filters.fuel}\n${filters.line}\n${filters.sort}`);
+  const filterKey = $derived(`${q}\n${filters.status}\n${filters.fuel}\n${filters.line}\n${filters.model}\n${filters.sort}`);
   let more = $state({ key: "", rows: PAGE_ROWS });
   const limit = $derived(more.key === filterKey ? more.rows : PAGE_ROWS);
 
@@ -107,16 +178,41 @@
 
   // filters other than the status chip, so each chip can show its own count
   const base = $derived(
-    vehicles.filter((v) => (filters.fuel === "all" || v.fuelType === filters.fuel) && matchesLine(v, filters.line) && matchesFleetQuery(v, q)),
+    vehicles.filter(
+      (v) =>
+        (filters.fuel === "all" || v.fuelType === filters.fuel) &&
+        (!filters.model || v.model === filters.model) &&
+        matchesLine(v, filters.line) &&
+        matchesFleetQuery(v, q),
+    ),
   );
 
   const counts = $derived.by(() => {
-    const c = { all: base.length, active: 0, waiting: 0, depot: 0 };
-    for (const v of base) c[vehicleState(v)]++;
+    const c = { all: base.length, active: 0, late: 0, waiting: 0, depot: 0 };
+    for (const v of base) {
+      c[vehicleState(v)]++;
+      if (isLate(v)) c.late++;
+    }
     return c;
   });
 
-  const shown = $derived(sortVehicles(filters.status === "all" ? base : base.filter((v) => vehicleState(v) === filters.status), filters.sort));
+  const shown = $derived(sortVehicles(base.filter((v) => matchesStatus(v, filters.status)), filters.sort));
+  const visible = $derived(shown.slice(0, limit));
+  // "Nie kursuje" splits into the vehicles back from their courses and the ones that stayed in
+  const split = $derived(filters.status === "depot" && filters.view === "list");
+  const returnedCount = $derived(split ? shown.filter(droveToday).length : 0);
+
+  const models = $derived(filters.view === "models" ? groupModels(shown) : []);
+
+  // whole list, not the filtered one: a model is rare in the fleet, not in a search result
+  const rare = $derived.by(() => {
+    const n = new Map<string, number>();
+    for (const v of vehicles) if (v.model) n.set(v.model, (n.get(v.model) ?? 0) + 1);
+    return vehicles
+      .filter((v) => vehicleState(v) === "active" && (n.get(v.model) ?? Infinity) <= RARE_MAX)
+      .sort((a, b) => (n.get(a.model) ?? 0) - (n.get(b.model) ?? 0) || bySide(a, b))
+      .slice(0, 5);
+  });
 
   const runningNow = $derived(vehicles.filter((v) => v.status === "active").length);
   const filtered = $derived(hasActiveFilters(filters));
@@ -175,6 +271,22 @@
   {/if}
 {/snippet}
 
+<!-- A phototrans thumbnail, hotlinked like the card's photos; lazy, so only rows near the viewport fetch one.
+     A photo phototrans has since removed hides itself. -->
+{#snippet photo(thumb: string, size: string)}
+  <img
+    src={ptThumbUrl(thumb)}
+    alt=""
+    width="300"
+    height="200"
+    loading="lazy"
+    decoding="async"
+    referrerpolicy="no-referrer"
+    onerror={(e) => ((e.currentTarget as HTMLImageElement).hidden = true)}
+    class="shrink-0 rounded-lg bg-surface-2 object-cover {size}"
+  />
+{/snippet}
+
 <!-- GZM: the trip's brigade next to the line badge ("69" + "bryg. 1" reads as 69/1). -->
 {#snippet brigade(v: FleetSummaryItem)}
   {#if v.brigade}
@@ -192,18 +304,20 @@
   {@const drove = courses > 0 || v.kmToday > 0}
   {@const fuel = v.fuelType !== null && v.fuelType !== "diesel" ? v.fuelType : null}
   {@const hasTags = fuel !== null || v.lengthCategory === "MEGA"}
+  {@const year = v.built ?? v.year}
   <button
     type="button"
-    onclick={() => onOpen(v.sideNumber)}
+    onclick={() => onOpen(v.sideNumber, split ? [...shown.filter(droveToday), ...shown.filter((x) => !droveToday(x))].map(sideOf) : shown.map(sideOf))}
     class="flex h-full w-full flex-col gap-2.5 rounded-2xl border p-3.5 text-left transition-[background-color,border-color] {s === 'depot'
       ? 'border-hairline bg-surface/60 hover:bg-surface'
       : 'border-hairline bg-surface hover:border-tint/15 hover:bg-surface-2'}"
   >
-    <span class="flex items-start justify-between gap-3">
-      <span class="min-w-0">
+    <span class="flex items-start gap-3">
+      {#if v.thumb}{@render photo(v.thumb, "h-10 w-15")}{/if}
+      <span class="min-w-0 flex-1">
         <span class="block text-[15px] font-semibold text-text tabular-nums">#{v.label ?? v.sideNumber}</span>
         <span class="block truncate text-[12.5px] text-text-mute"
-          >{v.company ? `${v.company}${v.model ? `, ${v.model}` : ""}` : v.model}{#if v.year}<span class="text-text-faint">{` (${v.year})`}</span>{/if}</span
+          >{v.company ? `${v.company}${v.model ? `, ${v.model}` : ""}` : v.model}{#if year}<span class="text-text-faint">{` (${year})`}</span>{/if}</span
         >
       </span>
       {@render statusPill(v)}
@@ -347,19 +461,46 @@
       )}
     </div>
 
-    <div class="flex min-h-8 items-center justify-between gap-3 text-[12.5px] text-text-mute">
+    {#if filters.model}
+      <button
+        type="button"
+        onclick={() => onFiltersChange({ model: "" })}
+        title="Pokaż wszystkie modele"
+        class="inline-flex min-h-9 max-w-full items-center gap-2 rounded-full border border-primary/50 bg-primary-dim px-3.5 text-[13px] font-medium text-text"
+      >
+        <span class="truncate">Model: {filters.model}</span>
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true">
+          <path d="M18 6 6 18M6 6l12 12" />
+        </svg>
+      </button>
+    {/if}
+
+    <div class="flex min-h-8 flex-wrap items-center justify-between gap-x-3 gap-y-2 text-[12.5px] text-text-mute">
       <p aria-live="polite" class="tabular-nums">
-        {filtered ? `Pokazano ${fmtInt(shown.length)} z ${fmtInt(vehicles.length)}` : `${fmtInt(vehicles.length)} pojazdów ${brand.short}`}
+        {filtered ? `Pokazano ${fmtInt(shown.length)} z ${fmtInt(vehicles.length)}` : fleetCount(city, vehicles.length)}{filters.view === "models"
+          ? `, ${fmtInt(models.length)} ${pluralPl(models.length, "model", "modele", "modeli")}`
+          : ""}
       </p>
-      {#if filtered}
-        <button
-          type="button"
-          onclick={() => onFiltersChange({ q: "", status: "all", fuel: "all", line: "" })}
-          class="min-h-8 rounded-lg px-2 font-medium text-primary hover:bg-primary-dim"
-        >
-          Wyczyść filtry
-        </button>
-      {/if}
+      <div class="flex items-center gap-2">
+        {#if filtered}
+          <button type="button" onclick={() => onFiltersChange(CLEARED)} class="min-h-8 rounded-lg px-2 font-medium text-primary hover:bg-primary-dim">
+            Wyczyść filtry
+          </button>
+        {/if}
+        <div role="group" aria-label="Widok" class="inline-flex rounded-lg border border-hairline bg-surface p-0.5">
+          {#each VIEWS as w (w.key)}
+            {@const on = filters.view === w.key}
+            <button
+              type="button"
+              aria-pressed={on}
+              onclick={() => onFiltersChange({ view: w.key })}
+              class="min-h-8 rounded-md px-3 font-medium transition-colors {on ? 'bg-primary-dim text-text' : 'text-text-mute hover:text-text'}"
+            >
+              {w.label}
+            </button>
+          {/each}
+        </div>
+      </div>
     </div>
   </div>
 
@@ -369,14 +510,82 @@
     </p>
   {/if}
 
-  {#if shown.length > 0}
-    <ul class="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3" aria-label="Pojazdy">
-      {#each shown.slice(0, limit) as v (v.sideNumber)}
+  {#if rare.length > 0 && !filtered}
+    <section aria-labelledby="{uid}-rare" class="mb-3 rounded-xl border border-hairline bg-surface px-4 py-3">
+      <h2 id="{uid}-rare" class="text-[13px] font-semibold text-text">Rzadkie dziś w trasie</h2>
+      <p class="text-[12px] text-text-faint">
+        Modele, których {city === "gzm" ? "widać dziś" : `${brand.short} ma`} najwyżej {RARE_MAX}
+        {pluralPl(RARE_MAX, "sztukę", "sztuki", "sztuk")}
+      </p>
+      <ul class="mt-2 flex flex-wrap gap-2">
+        {#each rare as v (v.sideNumber)}
+          <li class="min-w-0">
+            <button
+              type="button"
+              onclick={() => onOpen(v.sideNumber, rare.map(sideOf))}
+              class="inline-flex min-h-9 max-w-full items-center gap-2 rounded-full border border-hairline bg-surface-2 py-1 pl-1 pr-3 text-[12.5px] transition-colors hover:bg-tint/8"
+            >
+              {#if v.lineName}<LineBadge line={v.lineName} operator={brand.operator} />{/if}
+              <span class="font-semibold text-text tabular-nums">#{v.label ?? v.sideNumber}</span>
+              <span class="truncate text-text-mute">{v.model}</span>
+            </button>
+          </li>
+        {/each}
+      </ul>
+    </section>
+  {/if}
+
+  {#if shown.length === 0}
+    <div class="rounded-2xl border border-hairline bg-surface px-4 py-12 text-center">
+      <p class="text-[14px] font-medium text-text">Brak pojazdów dla tych filtrów</p>
+      <p class="mt-1 text-[13px] text-text-mute">
+        {filters.q.trim() ? `Nic nie pasuje do „${filters.q.trim()}”.` : "Zmień stan, napęd, linię albo model."}
+      </p>
+      <button
+        type="button"
+        onclick={() => onFiltersChange(CLEARED)}
+        class="mt-4 min-h-10 rounded-full bg-surface-3 px-4 text-[13px] font-semibold text-text hover:bg-tint/12"
+      >
+        Wyczyść filtry
+      </button>
+    </div>
+  {:else if filters.view === "models"}
+    <ul class="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3" aria-label="Modele">
+      {#each models as m (m.model)}
+        {@const fuel = m.fuel !== null && m.fuel !== "diesel" ? FUEL_LABEL[m.fuel] : null}
+        {@const meta = [m.producer && !m.model.startsWith(m.producer) ? m.producer : "", m.years, fuel ?? "", m.mega ? "Przegubowy" : ""].filter(Boolean)}
         <li>
-          {@render vehicleCard(v, brand.operator)}
+          {#if m.model}
+            <button
+              type="button"
+              onclick={() => onFiltersChange({ model: m.model, view: "list" })}
+              class="flex h-full w-full items-center gap-3 rounded-2xl border border-hairline bg-surface p-2.5 text-left transition-[background-color,border-color] hover:border-tint/15 hover:bg-surface-2"
+            >
+              {@render modelRow(m, meta)}
+            </button>
+          {:else}
+            <div class="flex h-full w-full items-center gap-3 rounded-2xl border border-hairline bg-surface p-2.5">
+              {@render modelRow(m, meta)}
+            </div>
+          {/if}
         </li>
       {/each}
     </ul>
+  {:else}
+    {#if split}
+      <h2 class="mb-2 text-[13px] font-semibold text-text">
+        Wróciły dziś <span class="font-normal text-text-faint tabular-nums">{fmtInt(returnedCount)}</span>
+      </h2>
+    {/if}
+    {@render cards(split ? visible.filter(droveToday) : visible)}
+    {#if split && returnedCount < shown.length}
+      <details class="mt-4">
+        <summary class="min-h-10 cursor-pointer py-2 text-[13px] font-semibold text-text">
+          Dziś nie wyjechały <span class="font-normal text-text-faint tabular-nums">{fmtInt(shown.length - returnedCount)}</span>
+        </summary>
+        {@render cards(visible.filter((v) => !droveToday(v)))}
+      </details>
+    {/if}
     {#if shown.length > limit}
       <div class="mt-4 text-center">
         <button
@@ -389,19 +598,33 @@
         >
       </div>
     {/if}
-  {:else}
-    <div class="rounded-2xl border border-hairline bg-surface px-4 py-12 text-center">
-      <p class="text-[14px] font-medium text-text">Brak pojazdów dla tych filtrów</p>
-      <p class="mt-1 text-[13px] text-text-mute">
-        {filters.q.trim() ? `Nic nie pasuje do „${filters.q.trim()}”.` : "Zmień stan, napęd albo linię."}
-      </p>
-      <button
-        type="button"
-        onclick={() => onFiltersChange({ q: "", status: "all", fuel: "all", line: "" })}
-        class="mt-4 min-h-10 rounded-full bg-surface-3 px-4 text-[13px] font-semibold text-text hover:bg-tint/12"
-      >
-        Wyczyść filtry
-      </button>
-    </div>
   {/if}
 </div>
+
+{#snippet modelRow(m: ModelGroup, meta: string[])}
+  {#if m.thumb}
+    {@render photo(m.thumb, "h-16 w-24")}
+  {:else}
+    <span aria-hidden="true" class="h-16 w-24 shrink-0 rounded-lg bg-surface-2"></span>
+  {/if}
+  <span class="min-w-0 flex-1">
+    <span class="block truncate text-[14px] font-semibold text-text">{m.model || "Model nieznany"}</span>
+    {#if meta.length > 0}<span class="block truncate text-[12.5px] text-text-mute">{meta.join(", ")}</span>{/if}
+    <span class="mt-1 flex flex-wrap gap-x-3 text-[12px] tabular-nums">
+      <span class="text-text">{fmtInt(m.total)} {pluralPl(m.total, "pojazd", "pojazdy", "pojazdów")}</span>
+      {#if m.active > 0}<span class="text-good">{fmtInt(m.active)} w trasie</span>{/if}
+    </span>
+  </span>
+{/snippet}
+
+{#snippet cards(list: FleetSummaryItem[])}
+  {#if list.length > 0}
+    <ul class="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3" aria-label="Pojazdy">
+      {#each list as v (v.sideNumber)}
+        <li>
+          {@render vehicleCard(v, brand.operator)}
+        </li>
+      {/each}
+    </ul>
+  {/if}
+{/snippet}

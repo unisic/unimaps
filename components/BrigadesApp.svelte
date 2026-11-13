@@ -42,8 +42,8 @@
   import { localUpdatedAt, readBrygadyCity, type FleetStats } from "@/lib/client/fleet";
   import { useFleet } from "@/lib/client/fleet.svelte";
 
-  import { clockFromEpoch, FLEET_CITY, fmtDelayMin, fmtInt, fmtKm, pluralPl } from "./brygady/common";
-  import { DEFAULT_FILTERS, type FleetFilters } from "./brygady/fleetFilters";
+  import { clockFromEpoch, FLEET_CITY, fleetOf, fmtDelayMin, fmtInt, fmtKm, pluralPl } from "./brygady/common";
+  import { CLEARED, DEFAULT_FILTERS, type FleetFilters } from "./brygady/fleetFilters";
   import FleetList from "./brygady/FleetList.svelte";
   import FleetStatsView from "./brygady/FleetStatsView.svelte";
   import { useEpochNow } from "./brygady/hooks.svelte";
@@ -71,7 +71,12 @@
     filters = { ...filters, ...patch };
   }
 
-  function openVehicle(s: string) {
+  /** the list the card was opened from, for its prev/next buttons (a deep link or a chart opens without one) */
+  let order = $state.raw<readonly string[]>([]);
+  const at = $derived(side ? order.indexOf(side) : -1);
+
+  function openVehicle(s: string, from: readonly string[] = []) {
+    if (!sheetEntry()) order = from;
     const url = urlWith((p) => p.set("tabor", s));
     if (sheetEntry()) window.history.replaceState({ kbTabor: true }, "", url);
     else window.history.pushState({ kbTabor: true }, "", url);
@@ -94,7 +99,7 @@
   }
 
   function pickLine(line: string) {
-    filters = { ...filters, q: "", status: "all", fuel: "all", line };
+    filters = { ...filters, ...CLEARED, line, view: "list" };
     setTab("pojazdy");
     requestAnimationFrame(() => tabsEl?.scrollIntoView({ block: "start" }));
   }
@@ -172,7 +177,7 @@
     {@render tile(
       "W trasie",
       fmtInt(running),
-      `z ${fmtInt(stats.totalFleet)} pojazdów${stats.waitingCount > 0 ? `, ${stats.waitingCount} czeka` : ""}`,
+      `z ${fleetOf(city, stats.totalFleet)}${stats.waitingCount > 0 ? `, ${stats.waitingCount} ${pluralPl(stats.waitingCount, "czeka", "czekają", "czeka")}` : ""}`,
     )}
     {@render tile(
       "Punktualność",
@@ -338,9 +343,14 @@
   </main>
 </div>
 {#if side}
-  {#key side}
-    <VehicleSheet {side} {seed} onClose={closeVehicle} />
-  {/key}
+  <VehicleSheet
+    {side}
+    {seed}
+    onClose={closeVehicle}
+    prev={at > 0 ? order[at - 1] : undefined}
+    next={at >= 0 ? order[at + 1] : undefined}
+    onStep={openVehicle}
+  />
 {/if}
 {#if side === null && showTop}
   <button

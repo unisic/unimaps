@@ -42,6 +42,7 @@ pub mod phototrans;
 pub mod poller;
 pub mod poller_singleton;
 pub mod push_alerts;
+pub mod push_fleet;
 pub mod push_news;
 pub mod rate_limit;
 pub mod route_info;

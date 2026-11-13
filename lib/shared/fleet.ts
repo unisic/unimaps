@@ -240,6 +240,15 @@ export interface FleetSummaryItem {
   lastSeenAt: number;
   /** line of the latest course, for a vehicle that is not running now */
   lastLineName?: string;
+  /** production year, from the phototrans index */
+  built?: number;
+  /** the newest phototrans thumbnail, "<dir>/<photo id>": see ptThumbUrl */
+  thumb?: string;
+}
+
+/** The URL of a FleetSummaryItem `thumb` (the card's VehiclePhoto.thumb is already one). */
+export function ptThumbUrl(thumb: string): string {
+  return `https://phototrans.eu/images/photos/thumbnail/${thumb}.jpg`;
 }
 
 export interface FleetStats {
@@ -327,8 +336,8 @@ export function compareLineNames(a: string, b: string): number {
 }
 
 /**
- * Free-text vehicle search: a side number ("#23…" by prefix, or 3+ digits; GZM: the printed
- * label, or the whole "<company>_<fleet>" key), a line number (exact, current or served today:
+ * Free-text vehicle search: a side number ("#23…" by prefix, 3+ digits by prefix, or a shorter
+ * one typed whole: "95" finds #95; GZM: the printed label, or the whole "<company>_<fleet>" key), a line number (exact, current or served today:
  * "1" must not list side numbers 100-199), a GZM brigade as printed ("69/1", "69/" for all of
  * line 69), or a folded substring of model, producer, company, direction, stop. A bare number is
  * never a text substring: "1" means line 1, not every "Urbino 12".
@@ -347,7 +356,8 @@ export function matchesFleetQuery(
   const bare = hash ? q.slice(1).trim() : q;
   // a lone "#" is the start of a side number being typed: keep the list until a digit narrows it
   if (hash && !bare) return true;
-  if (/^\d+$/.test(bare) && (hash || bare.length >= 3) && (v.label ?? v.sideNumber).startsWith(bare)) return true;
+  const side = v.label ?? v.sideNumber;
+  if (/^\d+$/.test(bare) && (hash || bare.length >= 3 || side === bare) && side.startsWith(bare)) return true;
   // MZK side numbers are digits only: a "_" query can only be a GZM key
   if (bare.includes("_") && v.sideNumber.startsWith(bare)) return true;
   if (hash) return false;

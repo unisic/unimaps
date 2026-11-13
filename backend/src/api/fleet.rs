@@ -2,7 +2,7 @@
 //! form, or one vehicle's card by `?sideNumber=`; another zbiorkom city has no fleet tracker: 404. BB (no `?city=`):
 //! the MZK fleet list with `serverNow`, or one vehicle's card.
 
-use hyper::header::{CACHE_CONTROL, CONTENT_TYPE, ETAG, HeaderName, HeaderValue};
+use hyper::header::{CACHE_CONTROL, ETAG, HeaderMap, HeaderName, HeaderValue, VARY};
 use hyper::{Response, StatusCode};
 use jiff::Timestamp;
 use serde::Serialize;
@@ -10,7 +10,9 @@ use serde_json::json;
 
 use super::ApiRequest;
 use super::stop_departures::json_no_store;
-use crate::api_helpers::{bad_request, etag_matches, json_with_etag, not_found, query_param, upstream_error};
+use crate::api_helpers::{
+    bad_request, etag_matches, json_with_etag, not_found, prebuilt_json, query_param, upstream_error,
+};
 use crate::fleet_tracker::{FleetSummaryFilter, FleetTracker, blocking_io};
 use crate::gzm::start_gzm;
 use crate::gzm_fleet::{ListBody, fleet_list_body, get_gzm_fleet_tracker, is_gzm_side};
@@ -121,20 +123,22 @@ pub fn handle<'t>(req: &ApiRequest, tracker: impl FnOnce() -> &'t FleetTracker) 
         return Some(json_with_etag(&req.headers, &body));
     }
 
+    // ~350 KB raw for 838 vehicles, polled every 20 s: gzipped once per tracker version (~45 KB)
     let list = fleet_list_body(tracker);
-    let hit = etag_matches(header_str(&req.headers, "if-none-match").as_deref(), &list.etag);
-    let mut res = Response::new(full(if hit { String::new() } else { list.body.clone() }));
-    if hit {
-        *res.status_mut() = StatusCode::NOT_MODIFIED;
-    }
-    let h = res.headers_mut();
-    h.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-    h.insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    let mut headers = HeaderMap::new();
+    headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
     if let Ok(v) = HeaderValue::from_str(&list.etag) {
-        h.insert(ETAG, v);
+        headers.insert(ETAG, v);
     }
-    h.insert(X_SERVER_TIME, HeaderValue::from(Timestamp::now().as_millisecond()));
-    Some(res)
+    headers.insert(X_SERVER_TIME, HeaderValue::from(Timestamp::now().as_millisecond()));
+    if etag_matches(header_str(&req.headers, "if-none-match").as_deref(), &list.etag) {
+        headers.insert(VARY, HeaderValue::from_static("Accept-Encoding"));
+        let mut res = Response::new(full(String::new()));
+        *res.status_mut() = StatusCode::NOT_MODIFIED;
+        *res.headers_mut() = headers;
+        return Some(res);
+    }
+    Some(prebuilt_json(&req.headers, &list, || list.body.clone(), headers))
 }
 
 /// The BB branch (no `?city=`) over the MZK tracker from `tracker` (the dispatcher passes `get_fleet_tracker`).

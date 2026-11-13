@@ -1,6 +1,10 @@
 <script module lang="ts">
   import type { FleetCurrentCourse, FleetVehicleDetail } from "@/lib/shared/fleet";
 
+  /* "Nietypowy przydział" needs this many courses held, and the current line under this share of them */
+  const UNUSUAL_MIN = 30;
+  const UNUSUAL_SHARE = 0.03;
+
   const FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]),select,textarea,summary,[tabindex]:not([tabindex="-1"])';
 
   /** Opens a live course on the map in place (the card sits over the map); without it the link navigates. */
@@ -19,7 +23,7 @@
 </script>
 
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
 
   import { useNow } from "@/components/hooks.svelte";
   import Icon from "@/components/Icon.svelte";
@@ -27,7 +31,8 @@
   import LineBadge from "@/components/ui/LineBadge.svelte";
   import ShareButton from "@/components/ui/ShareButton.svelte";
   import { cityOfSide, isNotFound, type FleetSummaryItem } from "@/lib/client/fleet";
-  import { useVehicleDetail } from "@/lib/client/fleet.svelte";
+  import { fleetWatches, forgetFleetWatch, setFleetWatch } from "@/lib/client/alerts";
+  import { useVehicleDetail, useVehicleHistory } from "@/lib/client/fleet.svelte";
   import type { PredictedNextCourse, VehicleCourseRecord, VehiclePhoto } from "@/lib/shared/fleet";
 
   import Block from "./Block.svelte";
@@ -38,7 +43,7 @@
   import DelayBadge from "./DelayBadge.svelte";
   import GanttLegend from "./GanttLegend.svelte";
   import { useEpochNow } from "./hooks.svelte";
-  import { ALERT, CHEVRON_DOWN, INFO, MAP } from "./icons";
+  import { ALERT, BELL, CHEVRON_DOWN, CHEVRON_LEFT, CHEVRON_RIGHT, INFO, MAP } from "./icons";
   import Svg from "./Svg.svelte";
   import VehicleHistory from "./VehicleHistory.svelte";
 
@@ -48,11 +53,18 @@
     seed,
     onClose,
     onShowOnMap,
+    prev,
+    next,
+    onStep,
   }: {
     side: string;
     seed?: FleetSummaryItem;
     onClose: () => void;
     onShowOnMap?: ShowOnMap;
+    /** the neighbours in the list the card was opened from; the sheet stays open and swaps the vehicle */
+    prev?: string;
+    next?: string;
+    onStep?: (side: string) => void;
   } = $props();
 
   const uid = $props.id();
@@ -62,6 +74,9 @@
   const brand = $derived(FLEET_CITY[city]);
   // svelte-ignore state_referenced_locally
   const detail = useVehicleDetail(() => side, cityOfSide(side));
+  // svelte-ignore state_referenced_locally
+  const history = useVehicleHistory(() => side, cityOfSide(side));
+  let scroller: HTMLDivElement | undefined = $state();
 
   onMount(() => {
     const prevFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -96,9 +111,30 @@
     return () => {
       document.removeEventListener("keydown", onKey);
       document.body.style.overflow = prevOverflow;
-      if (prevFocus?.isConnected) prevFocus.focus({ preventScroll: true });
+      // the page behind is still inert in this flush (BrigadesApp drops it after the sheet): focus a frame later
+      requestAnimationFrame(() => {
+        if (prevFocus?.isConnected) prevFocus.focus({ preventScroll: true });
+      });
     };
   });
+
+  /* phone: pull the handle or the header down to close; a short slow pull springs back */
+  let pull = $state.raw<{ id: number; y: number; t: number } | null>(null);
+  let pullY = $state(0);
+  function onPullStart(e: PointerEvent) {
+    if (pull || !e.isPrimary || e.pointerType === "mouse") return;
+    if ((e.target as HTMLElement).closest("button,a")) return;
+    pull = { id: e.pointerId, y: e.clientY, t: e.timeStamp };
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  }
+  function onPullEnd(e: PointerEvent) {
+    if (pull?.id !== e.pointerId) return;
+    // average speed in px/ms: a flick closes a short pull too
+    const flick = pullY / Math.max(1, e.timeStamp - pull.t) > 0.6;
+    pull = null;
+    if (e.type === "pointerup" && (pullY > 120 || (flick && pullY > 30))) onClose();
+    else pullY = 0;
+  }
 
   const vehicle = $derived(detail.data?.vehicle);
   const notFound = $derived(isNotFound(detail.error));
@@ -106,12 +142,65 @@
   const company = $derived(vehicle?.company ?? seed?.company);
   // GZM shows the printed fleet number, not the "<company>_<fleet>" key (MZK: the side number itself)
   const label = $derived(vehicle?.label ?? seed?.label ?? side.slice(side.indexOf("_") + 1));
+  // this vehicle's own year from phototrans before the model's range from the fleet table
+  const headYear = $derived(vehicle?.tech?.built ?? vehicle?.year);
 
   /* ── vehicle body ── */
 
   const nowSecs = useNow(30_000);
   const nowEpoch = useEpochNow(30_000);
-  let expanded = $state.raw<ReadonlySet<string>>(new Set());
+  // keyed by the side: a vehicle reached with prev/next starts with every course folded
+  let open = $state.raw<{ side: string; ids: ReadonlySet<string> }>({ side: "", ids: new Set() });
+  const expanded = $derived(open.side === side ? open.ids : new Set<string>());
+
+  /* "Powiadom, gdy wyjedzie": the sides this browser watches, and why the last try failed */
+  let watched = $state.raw(fleetWatches());
+  let watchHint = $state.raw<{ side: string; text: string } | null>(null);
+
+  async function toggleWatch() {
+    const s = side;
+    const on = !watched.has(s);
+    watchHint = null;
+    if (on && typeof Notification !== "undefined" && Notification.permission === "default") await Notification.requestPermission();
+    const ok = await setFleetWatch(s, on);
+    watched = fleetWatches();
+    if (on && !ok)
+      watchHint = {
+        side: s,
+        text:
+          typeof Notification !== "undefined" && Notification.permission === "denied"
+            ? "Powiadomienia są zablokowane w ustawieniach przeglądarki."
+            : "Nie udało się włączyć powiadomienia. Na iPhonie dodaj aplikację do ekranu początkowego.",
+      };
+  }
+
+  // the server dropped the watch when it pushed: the vehicle runs a begun course
+  $effect(() => {
+    if (vehicle?.status === "active" && !vehicle.currentCourse?.notStarted && untrack(() => watched).has(side)) {
+      forgetFleetWatch(side);
+      watched = fleetWatches();
+    }
+  });
+
+  function step(to: string) {
+    onStep?.(to);
+    scroller?.scrollTo({ top: 0 });
+  }
+
+  /** "Nietypowy przydział": the line it runs now took under UNUSUAL_SHARE of its courses on the days held */
+  const unusual = $derived.by(() => {
+    const line = vehicle?.status === "active" ? vehicle.currentCourse?.lineName : undefined;
+    const days = history.data?.days;
+    if (!line || !days) return null;
+    let total = 0;
+    let onLine = 0;
+    for (const d of days)
+      for (const c of d.courses) {
+        total++;
+        if (c.lineName === line) onLine++;
+      }
+    return total >= UNUSUAL_MIN && onLine / total < UNUSUAL_SHARE ? { line, onLine, total, days: days.length } : null;
+  });
 
   const ganttCourses = $derived.by((): GanttCourse[] => {
     if (!vehicle) return [];
@@ -155,10 +244,10 @@
   const CONFIDENCE_LABEL: Record<PredictedNextCourse["confidence"], string> = { high: "pewne", medium: "prawdopodobne", low: "możliwe" };
 
   function toggle(id: string) {
-    const next = new Set(expanded);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
-    expanded = next;
+    const ids = new Set(expanded);
+    if (ids.has(id)) ids.delete(id);
+    else ids.add(id);
+    open = { side, ids };
   }
 
   /** thumbnails that failed to load: phototrans removed the photo since the index was built */
@@ -166,7 +255,7 @@
   const photos = $derived((vehicle?.photos ?? []).filter((p) => !brokenPhotos.has(p.thumb)));
 
   function reveal(id: string) {
-    if (!expanded.has(id)) expanded = new Set(expanded).add(id);
+    if (!expanded.has(id)) open = { side, ids: new Set(expanded).add(id) };
     requestAnimationFrame(() => document.getElementById(`course-${id}`)?.scrollIntoView({ block: "nearest", behavior: "smooth" }));
   }
 </script>
@@ -249,6 +338,18 @@
         </p>
       {/if}
 
+      {#if unusual && unusual.line === c.lineName}
+        <p class="mt-3 flex gap-2 rounded-xl bg-surface-2 px-3 py-2.5 text-[12.5px] text-text">
+          <Svg icon={INFO} size={15} class="mt-px shrink-0 text-late" />
+          <span>
+            <span class="font-semibold">Nietypowy przydział.</span>
+            Linia {unusual.line} to {unusual.onLine} z {unusual.total}
+            {pluralPl(unusual.total, "kursu", "kursów", "kursów")} tego {brand.vehGen} z ostatnich {unusual.days}
+            {pluralPl(unusual.days, "dnia", "dni", "dni")}.
+          </span>
+        </p>
+      {/if}
+
       <div class="mt-auto flex flex-wrap items-center justify-between gap-2 pt-3">
         <span class="text-[12px] text-text-faint">Pozycja {fmtAgo(c.fixAt ?? v.lastSeenAt, nowEpoch.current)}</span>
         {#if exec}
@@ -271,6 +372,7 @@
   {:else}
     {@const loc = v.lastKnownLocation}
     {@const hasCoords = loc && Math.abs(loc.lat) > 1 && Math.abs(loc.lon) > 1}
+    {@const on = watched.has(v.sideNumber)}
     <section aria-label="Stan pojazdu" class="flex flex-col rounded-2xl border border-hairline bg-surface p-4">
       <p class="text-[15px] font-semibold text-text">Nie kursuje</p>
       <p class="mt-1 text-[13px] text-text-mute">
@@ -280,6 +382,26 @@
           Dziś nie wyjechał na trasę.
         {/if}
       </p>
+      <div class="mt-3">
+        <button
+          type="button"
+          onclick={toggleWatch}
+          aria-pressed={on}
+          class="inline-flex min-h-10 items-center gap-2 rounded-full px-4 text-[13px] font-semibold transition-colors {on
+            ? 'bg-primary-dim text-primary'
+            : 'bg-surface-3 text-text hover:bg-tint/12'}"
+        >
+          <Svg icon={BELL} size={15} />
+          {on ? "Powiadomię, gdy wyjedzie" : "Powiadom, gdy wyjedzie"}
+        </button>
+        <p class="mt-1.5 text-[12px] text-text-faint">
+          {watchHint?.side === v.sideNumber
+            ? watchHint.text
+            : on
+              ? "Dotknij, aby anulować. Powiadomienie wygasa po 24 godzinach."
+              : "Jedno powiadomienie, gdy ruszy w najbliższy kurs, także przy zamkniętej stronie."}
+        </p>
+      </div>
       {#if v.lastSeenAt > 0 && hasCoords && loc}
         <div class="mt-auto pt-3">
           <a
@@ -351,14 +473,10 @@
   {@const cancelled = c.status === "cancelled"}
   {@const km = c.drivenMeters !== undefined ? c.drivenMeters / 1000 : null}
   {@const extra = [brigade ? `brygada ${brigade}` : null, km !== null && km > 0 ? fmtKm(km) : null].filter(Boolean).join(", ")}
+  {@const expandable = (c.stops?.length ?? 0) > 0 || (cancelled && Boolean(c.cancelledReason))}
+  <!-- a past GZM course keeps no stop list: such a row has nothing to expand -->
   <li id="course-{c.id}" class="scroll-mt-4">
-    <button
-      type="button"
-      aria-expanded={open}
-      aria-controls={panelId}
-      onclick={() => toggle(c.id)}
-      class="flex min-h-12 w-full items-center gap-3 rounded-lg px-1 py-2 text-left transition-colors hover:bg-tint/5"
-    >
+    {#snippet head()}
       <!-- a phone has no room for a time column: the time leads the second line there -->
       <span class="hidden w-[5.5rem] shrink-0 text-[12.5px] text-text-mute tabular-nums sm:block">
         {c.startTime}–{c.endTime}
@@ -384,57 +502,70 @@
           <DelayBadge sec={c.delaySec} />
         </span>
       {/if}
-      <Svg icon={CHEVRON_DOWN} size={16} class="shrink-0 text-text-faint transition-transform {open ? 'rotate-180' : ''}" />
-    </button>
-    <div id={panelId} hidden={!open} class="pb-3 pl-1 pr-1">
-      {#if open}
-        {#if cancelled && c.cancelledReason}
-          <p class="mb-2 flex gap-2 rounded-lg bg-danger/10 px-3 py-2 text-[12.5px] leading-snug text-text">
-            <Svg icon={ALERT} size={14} class="mt-0.5 shrink-0 text-danger" />
-            {c.cancelledReason}
-          </p>
-        {/if}
-        {#if c.stops && c.stops.length > 0}
-          <div class="kb-scroll max-h-80 overflow-y-auto rounded-lg border border-hairline">
-            <table class="w-full text-[12.5px] tabular-nums">
-              <thead class="sticky top-0 bg-surface-2 text-left text-text-mute">
-                <tr>
-                  <th scope="col" class="px-3 py-1.5 font-medium">Przystanek</th>
-                  <th scope="col" class="px-2 py-1.5 text-right font-medium">Rozkład</th>
-                  <th scope="col" class="px-3 py-1.5 text-right font-medium">{c.status === "in_progress" ? "Prognoza" : "Ostatnia prognoza"}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {#each c.stops as st, i (`${st.symbol}-${i}`)}
-                  <tr
-                    class="border-t border-hairline {st.status === 'current' ? 'bg-primary-dim' : ''}"
-                    aria-current={st.status === "current" ? "location" : undefined}
-                  >
-                    <th scope="row" class="px-3 py-1.5 text-left font-normal {st.status === 'passed' ? 'text-text-mute' : 'text-text'}">
-                      <span class="flex items-center gap-2">
-                        <span
-                          aria-hidden="true"
-                          class="h-1.5 w-1.5 shrink-0 rounded-full {st.status === 'current'
-                            ? 'bg-primary'
-                            : st.status === 'passed'
-                              ? 'bg-text-faint'
-                              : 'border border-text-faint'}"
-                        ></span>
-                        {st.name}
-                      </span>
-                    </th>
-                    <td class="px-2 py-1.5 text-right text-text-mute">{st.scheduledTime}</td>
-                    <td class="px-3 py-1.5 text-right text-text">{st.plannedTime !== st.scheduledTime ? st.plannedTime : ""}</td>
-                  </tr>
-                {/each}
-              </tbody>
-            </table>
-          </div>
-        {:else}
-          <p class="text-[12.5px] text-text-mute">Brak listy przystanków dla tego kursu.</p>
-        {/if}
+      {#if expandable}
+        <Svg icon={CHEVRON_DOWN} size={16} class="shrink-0 text-text-faint transition-transform {open ? 'rotate-180' : ''}" />
       {/if}
-    </div>
+    {/snippet}
+    {#if !expandable}
+      <div class="flex min-h-12 w-full items-center gap-3 px-1 py-2">{@render head()}</div>
+    {:else}
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={panelId}
+        onclick={() => toggle(c.id)}
+        class="flex min-h-12 w-full items-center gap-3 rounded-lg px-1 py-2 text-left transition-colors hover:bg-tint/5"
+      >{@render head()}</button>
+      <div id={panelId} hidden={!open} class="pb-3 pl-1 pr-1">
+        {#if open}
+          {#if cancelled && c.cancelledReason}
+            <p class="mb-2 flex gap-2 rounded-lg bg-danger/10 px-3 py-2 text-[12.5px] leading-snug text-text">
+              <Svg icon={ALERT} size={14} class="mt-0.5 shrink-0 text-danger" />
+              {c.cancelledReason}
+            </p>
+          {/if}
+          {#if c.stops && c.stops.length > 0}
+            <div class="kb-scroll max-h-80 overflow-y-auto rounded-lg border border-hairline">
+              <table class="w-full text-[12.5px] tabular-nums">
+                <thead class="sticky top-0 bg-surface-2 text-left text-text-mute">
+                  <tr>
+                    <th scope="col" class="px-3 py-1.5 font-medium">Przystanek</th>
+                    <th scope="col" class="px-2 py-1.5 text-right font-medium">Rozkład</th>
+                    <th scope="col" class="px-3 py-1.5 text-right font-medium">{c.status === "in_progress" ? "Prognoza" : "Ostatnia prognoza"}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {#each c.stops as st, i (`${st.symbol}-${i}`)}
+                    <tr
+                      class="border-t border-hairline {st.status === 'current' ? 'bg-primary-dim' : ''}"
+                      aria-current={st.status === "current" ? "location" : undefined}
+                    >
+                      <th scope="row" class="px-3 py-1.5 text-left font-normal {st.status === 'passed' ? 'text-text-mute' : 'text-text'}">
+                        <span class="flex items-center gap-2">
+                          <span
+                            aria-hidden="true"
+                            class="h-1.5 w-1.5 shrink-0 rounded-full {st.status === 'current'
+                              ? 'bg-primary'
+                              : st.status === 'passed'
+                                ? 'bg-text-faint'
+                                : 'border border-text-faint'}"
+                          ></span>
+                          {st.name}
+                        </span>
+                      </th>
+                      <td class="px-2 py-1.5 text-right text-text-mute">{st.scheduledTime}</td>
+                      <td class="px-3 py-1.5 text-right text-text">{st.plannedTime !== st.scheduledTime ? st.plannedTime : ""}</td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
+          {:else}
+            <p class="text-[12.5px] text-text-mute">Brak listy przystanków dla tego kursu.</p>
+          {/if}
+        {/if}
+      </div>
+    {/if}
   </li>
 {/snippet}
 
@@ -575,7 +706,9 @@
       {/if}
     </Block>
 
-    <VehicleHistory side={v.sideNumber} operator={v.operator} />
+    {#key v.sideNumber}
+      <VehicleHistory side={v.sideNumber} operator={v.operator} />
+    {/key}
 
     <Block title="Dane techniczne">
       {#if photos.length > 0}
@@ -609,8 +742,9 @@
           <dd class="text-text">{v.producer || "–"}</dd>
           <dt class="text-text-mute">Model</dt>
           <dd class="text-text">{v.model || "–"}</dd>
-          <dt class="text-text-mute">Rok produkcji</dt>
-          <dd class="text-text tabular-nums">{v.year ?? "–"}</dd>
+          <!-- v.year is the model's year range from the fleet table; phototrans knows this vehicle's own year -->
+          <dt class="text-text-mute">{t?.built || !v.year || /^\d{4}$/.test(v.year) ? "Rok produkcji" : "Roczniki modelu"}</dt>
+          <dd class="text-text tabular-nums">{t?.built ?? v.year ?? "–"}</dd>
           <dt class="text-text-mute">Długość</dt>
           <dd class="text-text">{v.lengthCategory ? LENGTH_LABEL[v.lengthCategory] : "–"}</dd>
           <dt class="text-text-mute">Napęd</dt>
@@ -641,32 +775,64 @@
     aria-labelledby={titleId}
     tabindex="-1"
     class="relative flex max-h-[92dvh] w-full animate-rise flex-col overflow-hidden rounded-t-3xl border border-hairline bg-bg shadow-[var(--shadow-sheet)] focus:outline-none md:max-h-[88dvh] md:max-w-3xl md:rounded-3xl"
+    style:transform={pullY > 0 ? `translate3d(0, ${pullY}px, 0)` : undefined}
+    style:transition={pull ? "none" : "transform 0.25s var(--ease-spring)"}
   >
-    <div aria-hidden="true" class="mx-auto mt-2 h-1 w-10 shrink-0 rounded-full bg-tint/15 md:hidden"></div>
-    <header class="flex shrink-0 items-center gap-2 border-b border-hairline px-4 pb-3 pt-2 md:pt-4">
-      <div class="min-w-0 flex-1">
-        <h2 id={titleId} class="truncate text-[18px] font-bold text-text tabular-nums">
-          Pojazd #{label}
-        </h2>
-        <p class="truncate text-[13px] text-text-mute">
-          {company ? `${company}${model ? ", " : ""}` : null}{model ?? (notFound ? "Nieznany pojazd" : " ")}{#if vehicle?.year}<span class="text-text-faint">{` (${vehicle.year})`}</span>{/if}
-        </p>
-      </div>
-      <ShareButton
-        title="Pojazd {brand.short} #{label}"
-        path="/brygady?{city === 'gzm' ? 'city=gzm&' : ''}tabor={encodeURIComponent(side)}"
-      />
-      <button
-        type="button"
-        onclick={onClose}
-        aria-label="Zamknij kartę pojazdu"
-        class="grid h-11 w-11 shrink-0 place-items-center rounded-full text-text-mute transition-colors hover:bg-tint/8 hover:text-text"
-      >
-        <Icon icon={XIcon} />
-      </button>
-    </header>
+    <div
+      role="presentation"
+      class="shrink-0 select-none"
+      style:touch-action="none"
+      onpointerdown={onPullStart}
+      onpointermove={(e) => pull?.id === e.pointerId && (pullY = Math.max(0, e.clientY - pull.y))}
+      onpointerup={onPullEnd}
+      onpointercancel={onPullEnd}
+    >
+      <div aria-hidden="true" class="mx-auto mt-2 h-1 w-10 shrink-0 rounded-full bg-tint/15 md:hidden"></div>
+      <header class="flex shrink-0 items-center gap-2 border-b border-hairline px-4 pb-3 pt-2 md:pt-4">
+        <div class="min-w-0 flex-1">
+          <h2 id={titleId} class="truncate text-[18px] font-bold text-text tabular-nums">
+            Pojazd #{label}
+          </h2>
+          <p class="truncate text-[13px] text-text-mute">
+            {company ? `${company}${model ? ", " : ""}` : null}{model ?? (notFound ? "Nieznany pojazd" : " ")}{#if headYear}<span class="text-text-faint">{` (${headYear})`}</span>{/if}
+          </p>
+        </div>
+        <ShareButton
+          title="Pojazd {brand.short} #{label}"
+          path="/brygady?{city === 'gzm' ? 'city=gzm&' : ''}tabor={encodeURIComponent(side)}"
+        />
+        {#if onStep && (prev || next)}
+          <button
+            type="button"
+            onclick={() => prev && step(prev)}
+            disabled={!prev}
+            aria-label="Poprzedni pojazd na liście"
+            class="grid h-11 w-9 shrink-0 place-items-center rounded-full text-text-mute transition-colors hover:bg-tint/8 hover:text-text disabled:opacity-35 disabled:hover:bg-transparent"
+          >
+            <Svg icon={CHEVRON_LEFT} size={18} />
+          </button>
+          <button
+            type="button"
+            onclick={() => next && step(next)}
+            disabled={!next}
+            aria-label="Następny pojazd na liście"
+            class="grid h-11 w-9 shrink-0 place-items-center rounded-full text-text-mute transition-colors hover:bg-tint/8 hover:text-text disabled:opacity-35 disabled:hover:bg-transparent"
+          >
+            <Svg icon={CHEVRON_RIGHT} size={18} />
+          </button>
+        {/if}
+        <button
+          type="button"
+          onclick={onClose}
+          aria-label="Zamknij kartę pojazdu"
+          class="grid h-11 w-11 shrink-0 place-items-center rounded-full text-text-mute transition-colors hover:bg-tint/8 hover:text-text"
+        >
+          <Icon icon={XIcon} />
+        </button>
+      </header>
+    </div>
 
-    <div class="kb-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-4">
+    <div bind:this={scroller} class="kb-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-4">
       {#if vehicle}
         {#if detail.error && !notFound}
           <p class="mb-3 flex items-center gap-2 rounded-xl bg-surface px-3 py-2 text-[12.5px] text-late">

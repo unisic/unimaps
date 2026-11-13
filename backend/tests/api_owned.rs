@@ -415,7 +415,7 @@ fn bb_routes_answer_with_upstreams_dead_no_file_outside_the_temp_dir() {
     let r = get("/api/fleet");
     assert_eq!((r.status, r.header("cache-control")), (200, no_store));
     let f = json_of(&r);
-    assert_eq!((&f["stats"]["totalFleet"], &f["count"]), (&json!(147), &json!(147)));
+    assert_eq!((&f["stats"]["totalFleet"], &f["count"]), (&json!(152), &json!(152)));
 
     let r = get("/api/fleet/230");
     assert_eq!((r.status, r.header("cache-control")), (200, Some("no-cache")));

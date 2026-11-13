@@ -50,5 +50,8 @@ describe("shared fleet helpers", () => {
     assert.equal(matchesFleetQuery(v, "zywiec"), true);
     assert.equal(matchesFleetQuery(v, "halcnow"), true);
     assert.equal(matchesFleetQuery(v, "#urbino"), false);
+    const short = { ...v, sideNumber: "95", lines: [], lineName: undefined };
+    assert.equal(matchesFleetQuery(short, "95"), true, "a short side number typed whole");
+    assert.equal(matchesFleetQuery(short, "9"), false, "a bare 9 is line 9, not a prefix of #95");
   });
 });

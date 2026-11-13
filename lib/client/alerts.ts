@@ -199,6 +199,66 @@ export async function setNewsPush(city: City, on: boolean): Promise<boolean> {
   }
 }
 
+/* ---- "Powiadom, gdy wyjedzie" (/brygady): the server pushes once when a vehicle starts a course ---- */
+
+const FLEET_KEY = "kb:fleetWatch";
+/** WATCH_SEC in backend/src/push_fleet.rs */
+const FLEET_WATCH_MS = 24 * 3600 * 1000;
+
+/** side -> epoch ms the server lets the watch lapse, the lapsed ones left out */
+function readFleetWatches(): Record<string, number> {
+  try {
+    const all = JSON.parse(window.localStorage.getItem(FLEET_KEY) ?? "{}") as Record<string, unknown>;
+    const now = Date.now();
+    return Object.fromEntries(
+      Object.entries(all).filter((e): e is [string, number] => typeof e[1] === "number" && e[1] > now),
+    );
+  } catch {
+    return {};
+  }
+}
+
+/** The sides this browser watches; the server holds the watches themselves. */
+export function fleetWatches(): ReadonlySet<string> {
+  return new Set(Object.keys(readFleetWatches()));
+}
+
+function writeFleetWatch(side: string, on: boolean): void {
+  const all = readFleetWatches();
+  delete all[side];
+  if (on) all[side] = Date.now() + FLEET_WATCH_MS;
+  try {
+    window.localStorage.setItem(FLEET_KEY, JSON.stringify(all));
+  } catch {
+    /* storage blocked: the push still comes, the button forgets it */
+  }
+}
+
+/** Forget a watch here only: the server dropped it when it fired (the vehicle runs). */
+export function forgetFleetWatch(side: string): void {
+  writeFleetWatch(side, false);
+}
+
+/** Watch (or stop watching) `side`; false = no push in this browser, or the server holds too many watches. */
+export async function setFleetWatch(side: string, on: boolean): Promise<boolean> {
+  try {
+    const sub = await pushSubscription(on);
+    const ok =
+      !!sub &&
+      (
+        await fetch("/api/push/fleet", {
+          method: on ? "POST" : "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ subscription: sub.toJSON(), side }),
+        })
+      ).ok;
+    writeFleetWatch(side, on && ok);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
 /** A system notification through the SW (it survives the tab), else a page one; `tag` replaces an earlier one. */
 export async function notify(title: string, body: string, tag: string, url: string): Promise<void> {
   const opts = { body, tag, icon: "/icon-192.png", data: { url } };

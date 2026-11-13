@@ -66,6 +66,8 @@ pub const POLAND: FeedArea = FeedArea {
 };
 // ponytail: a record older than 10 min is a vehicle zbiorkom forgot to drop, not a live one
 const RECORD_MAX_AGE_MS: f64 = 600_000.0;
+/// Torun sends 32767 s (int16 max) for a vehicle without a delay (N94, 2026-11-09)
+const UNKNOWN_DELAY_MS: f64 = 32_767_000.0;
 
 /// `finite`: a JSON number (serde_json never holds NaN or an infinity).
 fn finite(v: Option<&Value>) -> Option<f64> {
@@ -201,7 +203,7 @@ pub fn parse_zbiorkom(body: &Value, now_ms: i64, area: &FeedArea, generic: bool)
             lon,
             ts,
             bearing: finite(r.get("bearing")).map(|b| ((b % 360.0) + 360.0) % 360.0),
-            delay_ms: finite(r.get("delay")),
+            delay_ms: finite(r.get("delay")).filter(|d| d.abs() < UNKNOWN_DELAY_MS),
             headsign: js_str(r.get("headsign")),
             upcoming,
             key: key.clone(),
@@ -314,6 +316,86 @@ pub fn match_trip(feed: &GzmFeed, rec: &ZbRecord, days: &[(String, i64)]) -> Opt
         return if hits.len() == 1 { hits.pop() } else { None };
     }
     None
+}
+
+/// zbiorkom keeps a night bus on its brigade's last run of the previous service day while the bus already serves the
+/// next day's runs (GZM 297N, 657N on 2026-11-09; 27 GZM lines have a brigade crossing midnight that way): the delay
+/// then reads a lap, an hour, too high. A delay this large on an earlier day's run is checked against the brigade's
+/// runs of a later service day.
+pub const RERUN_MIN_SEC: f64 = 1800.0;
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Rerun {
+    /// the same stops at the record's seqs `.1` secs later: the bus serves that run and is that much less late
+    Shift(GzmMatch, f64),
+    /// another run of the brigade is due by its timetable and none fits the record: trip and delay unknown
+    Stale,
+}
+
+/// The later-day run of the matched trip's brigade that explains the record's `delay` (secs) better, or `Stale`,
+/// or None when zbiorkom's run stands. `ts` = the record's epoch secs.
+pub fn rerun(
+    feed: &GzmFeed,
+    rec: &ZbRecord,
+    m: &GzmMatch,
+    delay: f64,
+    days: &[(String, i64)],
+    ts: f64,
+) -> Option<Rerun> {
+    let first = rec.upcoming.first().filter(|_| delay >= RERUN_MIN_SEC)?;
+    let mt = feed.trip_at(m.trip);
+    let cands = feed.trips_by_line.get(&rec.line).filter(|_| !mt.x.brigade.is_empty())?;
+    let mut best: Option<(GzmMatch, f64)> = None;
+    let mut due = false;
+    for (date, base) in days.iter().filter(|(d, _)| *d > m.date) {
+        let at = |s: i32| (*base + i64::from(s)) as f64;
+        for &i in cands {
+            let t = feed.trip_at(i);
+            if t.x.brigade != mt.x.brigade || !t.runs_on(date) {
+                continue;
+            }
+            let (Some(&d0), Some(&a1)) = (t.t.dep.first(), t.t.arr.last()) else {
+                continue;
+            };
+            due |= at(d0) <= ts && ts <= at(a1);
+            let Some(&d) = t.t.dep.get(first.seq) else {
+                continue;
+            };
+            let shift = at(d) - first.dep;
+            let left = (delay - shift).abs();
+            let same_stops = rec.upcoming.iter().all(|c| {
+                t.t.stop_ids
+                    .get(c.seq)
+                    .is_some_and(|s| mt.t.stop_ids.get(c.seq) == Some(s))
+            });
+            if left < RERUN_MIN_SEC
+                && same_stops
+                && best.as_ref().is_none_or(|(_, s)| left < (delay - s).abs())
+                && fits(
+                    t,
+                    *base,
+                    &rec.upcoming
+                        .iter()
+                        .map(|c| ZbCall {
+                            seq: c.seq,
+                            dep: c.dep + shift,
+                        })
+                        .collect::<Vec<_>>(),
+                    MATCH_SLACK_SEC,
+                )
+            {
+                best = Some((
+                    GzmMatch {
+                        trip: i,
+                        date: date.clone(),
+                        base: *base,
+                    },
+                    shift,
+                ));
+            }
+        }
+    }
+    best.map(|(m, s)| Rerun::Shift(m, s)).or(due.then_some(Rerun::Stale))
 }
 
 /// zbiorkom names the first stop as next while the bus drives there from the depot: off the trip's shape = not begun

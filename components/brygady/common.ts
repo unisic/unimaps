@@ -130,6 +130,21 @@ export function pluralPl(n: number, one: string, few: string, many: string): str
   return d >= 2 && d <= 4 && (h < 12 || h > 14) ? few : many;
 }
 
+/* GZM has no static fleet list: its totalFleet counts the vehicles seen since the day's rollover */
+
+/** "152 pojazdy MZK", "838 pojazdów GZM widzianych dziś" */
+export function fleetCount(city: FleetCity, n: number): string {
+  const seen = city === "gzm" ? ` ${pluralPl(n, "widziany", "widziane", "widzianych")} dziś` : "";
+  return `${fmtInt(n)} ${pluralPl(n, "pojazd", "pojazdy", "pojazdów")} ${FLEET_CITY[city].short}${seen}`;
+}
+
+/** the genitive after "z": "151 pojazdów", "838 pojazdów widzianych dziś" */
+export function fleetOf(city: FleetCity, n: number): string {
+  const one = n === 1;
+  const seen = city === "gzm" ? (one ? " widzianego dziś" : " widzianych dziś") : "";
+  return `${fmtInt(n)} ${one ? "pojazdu" : "pojazdów"}${seen}`;
+}
+
 export const FUEL_LABEL: Record<FleetFuelType, string> = {
   diesel: "Diesel",
   electric: "Elektryczny",

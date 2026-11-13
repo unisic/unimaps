@@ -10,8 +10,8 @@ use sha1::{Digest, Sha1};
 use tokio::task::JoinHandle;
 
 use super::parse::{
-    AT_STOP_M, Fix, GzmFleetSource, GzmMatch, HttpZb, LAYOVER_GRACE_SEC, MATCH_SLACK_SEC, NOT_STARTED_M,
-    SCHED_ROUTE_TYPE, STUCK_SEC, SchedAt, SdipSample, Track, ZbRecord, ZbTransport, fits, match_trip, off_route,
+    AT_STOP_M, Fix, GzmFleetSource, GzmMatch, HttpZb, LAYOVER_GRACE_SEC, MATCH_SLACK_SEC, NOT_STARTED_M, Rerun,
+    SCHED_ROUTE_TYPE, STUCK_SEC, SchedAt, SdipSample, Track, ZbRecord, ZbTransport, fits, match_trip, off_route, rerun,
     schedule_position,
 };
 use crate::config;
@@ -168,7 +168,8 @@ impl<T: ZbTransport> GzmLive<T> {
         fix: Fix,
         zb_fix_at: f64,
     ) -> Track {
-        let matched = feed.and_then(|feed| {
+        let mut rec = rec;
+        let mut matched = feed.and_then(|feed| {
             let cached = prev
                 .filter(|p| p.feed.as_ref().is_some_and(|pf| Arc::ptr_eq(pf, feed)))
                 .and_then(|p| p.matched.as_ref());
@@ -182,6 +183,22 @@ impl<T: ZbTransport> GzmLive<T> {
                 _ => match_trip(feed, &rec, days),
             }
         });
+        // a record on the previous day's run of a brigade now on its next day's runs: moved onto the run it serves
+        let rerun_to = match (&matched, feed, rec.delay_ms) {
+            (Some(m), Some(feed), Some(d)) => rerun(feed, &rec, m, d / 1000.0, days, rec.ts / 1000.0),
+            _ => None,
+        };
+        match rerun_to {
+            Some(Rerun::Shift(run, shift)) => {
+                for c in &mut rec.upcoming {
+                    c.dep += shift;
+                }
+                rec.delay_ms = rec.delay_ms.map(|d| d - shift * 1000.0);
+                matched = Some(run);
+            }
+            Some(Rerun::Stale) => matched = None,
+            None => {}
+        }
         let ts_s = rec.ts / 1000.0;
         let delay_s = rec.delay_ms.map(|d| round(d / 1000.0));
         let Fix { lat, lon, .. } = fix;
@@ -578,8 +595,12 @@ mod tests {
             ("shapes.txt", format!("shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence\nshA,{LAT},19.0,1\nshA,{LAT},19.01,2\nshA,{LAT},19.02,3")),
             ("calendar.txt", "service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\ns1,1,1,1,1,1,1,1,20261020,20261110".to_owned()),
         ];
+        feed_from(&files)
+    }
+
+    fn feed_from(files: &[(&str, String)]) -> Arc<GzmFeed> {
         let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-        for (name, body) in &files {
+        for (name, body) in files {
             w.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
             w.write_all(body.as_bytes()).unwrap();
         }
@@ -656,6 +677,65 @@ mod tests {
         let t2 = live.track(rec2, Some(&t1), Some(&feed), &days, at(29_401), fix2, fix2.fix_at);
         assert_eq!((t2.pos.trip_id.as_str(), t2.pos.headsign.as_str()), ("x:tB", "Alfa"));
         assert_eq!((t2.next, t2.not_started, t2.pos.delay), (0, true, None));
+    }
+
+    /// 297N on 2026-11-09: zbiorkom kept brigade 9 on the previous day's 23:40 lap while it drove the 00:40 one
+    #[test]
+    fn track_moves_a_previous_days_lap_onto_the_brigades_current_run() {
+        let files = [
+            ("routes.txt", "route_id,agency_id,route_short_name,route_long_name,route_type\nrN,1,297N,N,3".to_owned()),
+            ("stops.txt", format!("stop_id,stop_name,stop_lat,stop_lon,location_type\na,Alfa 01,{LAT},19.0,0\nb,Beta 01,{LAT},19.01,0\nc,Gamma 01,{LAT},19.02,0")),
+            ("trips.txt", "route_id,service_id,trip_id,trip_headsign,direction_id,shape_id,brigade\nrN,s1,n1,Gamma,0,,9\nrN,s1,n2,Gamma,0,,9\nrN,s1,n3,Alfa,1,,9".to_owned()),
+            ("stop_times.txt", ["trip_id,arrival_time,departure_time,stop_id,stop_sequence", "n1,23:40:00,23:40:00,a,0", "n1,24:14:00,24:14:00,b,1", "n1,24:20:00,24:20:00,c,2", "n2,00:40:00,00:40:00,a,0", "n2,01:14:00,01:14:00,b,1", "n2,01:20:00,01:20:00,c,2", "n3,01:40:00,01:40:00,c,0", "n3,01:50:00,01:50:00,b,1", "n3,02:20:00,02:20:00,a,2"].join("\n")),
+            ("calendar.txt", "service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\ns1,1,1,1,1,1,1,1,20261020,20261110".to_owned()),
+        ];
+        let (feed, live) = (feed_from(&files), GzmLive::new("x", HttpZb));
+        let next_day = "2026-10-29";
+        let base1 = crate::time::service_day_base(next_day.parse().unwrap());
+        let days = [(next_day.to_owned(), base1), (DATE.to_owned(), at(0) as i64)];
+        let on = |t: f64, delay: f64| {
+            let rec = ZbRecord {
+                key: "108_908".into(),
+                label: "908".into(),
+                kind: "3".into(),
+                model: None,
+                agency: None,
+                line: "297N".into(),
+                brigade: Some("9".into()),
+                lat: LAT,
+                lon: 19.009,
+                ts: t * 1000.0,
+                bearing: None,
+                delay_ms: Some(delay * 1000.0),
+                headsign: "Gamma".into(),
+                upcoming: vec![
+                    ZbCall {
+                        seq: 1,
+                        dep: at(87_240),
+                    },
+                    ZbCall {
+                        seq: 2,
+                        dep: at(87_600),
+                    },
+                ],
+            };
+            let fix = Fix {
+                lat: LAT,
+                lon: 19.009,
+                bearing: None,
+                fix_at: t,
+            };
+            live.track(rec, None, Some(&feed), &days, t, fix, t)
+        };
+        // 01:15, zbiorkom: 63 min late at 00:14's stop = 3 min late on the 00:40 lap
+        let t = on((base1 + 4_500) as f64, 3_773.0);
+        assert_eq!(
+            (t.pos.trip_id.as_str(), t.date.as_str(), t.pos.delay),
+            ("x:n2", next_day, Some(173.0))
+        );
+        // 01:54, 100 min late: no lap fits, the brigade's reverse run is due: trip and delay unknown
+        let t = on((base1 + 6_840) as f64, 6_000.0);
+        assert_eq!((t.pos.trip_id.as_str(), t.pos.delay), ("", None));
     }
 
     #[test]

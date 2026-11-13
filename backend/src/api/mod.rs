@@ -29,6 +29,7 @@ pub mod health;
 pub mod line;
 pub mod lines;
 pub mod push;
+pub mod push_fleet;
 pub mod push_news;
 pub mod shapes;
 pub mod status;
@@ -56,6 +57,7 @@ pub enum Route {
     Lines,
     Push,
     PushNews,
+    PushFleet,
     Shapes,
     Status,
     StopDepartures,
@@ -88,6 +90,7 @@ pub fn match_route(path: &str) -> Option<(Route, &str)> {
         ["lines"] => (Lines, ""),
         ["push"] => (Push, ""),
         ["push", "news"] => (PushNews, ""),
+        ["push", "fleet"] => (PushFleet, ""),
         ["shapes"] => (Shapes, ""),
         ["status"] => (Status, ""),
         ["stop", id, "departures"] if !id.is_empty() => (StopDepartures, *id),
@@ -105,7 +108,7 @@ pub fn match_route(path: &str) -> Option<(Route, &str)> {
 pub fn methods(route: Route) -> &'static [&'static str] {
     match route {
         Route::Push => &["GET", "POST", "DELETE"],
-        Route::PushNews => &["POST", "DELETE"],
+        Route::PushNews | Route::PushFleet => &["POST", "DELETE"],
         _ => &["GET"],
     }
 }
@@ -114,7 +117,7 @@ pub fn methods(route: Route) -> &'static [&'static str] {
 pub fn allow(route: Route) -> &'static str {
     match route {
         Route::Push => "GET, POST, DELETE, HEAD, OPTIONS",
-        Route::PushNews => "POST, DELETE, HEAD, OPTIONS",
+        Route::PushNews | Route::PushFleet => "POST, DELETE, HEAD, OPTIONS",
         _ => "GET, HEAD, OPTIONS",
     }
 }
@@ -222,6 +225,7 @@ async fn run_owned(route: Route, req: ApiRequest) -> Response<Body> {
         },
         Route::Push => push::handle(&req),
         Route::PushNews => push_news::handle(&req),
+        Route::PushFleet => push_fleet::handle(&req),
         Route::Shapes => shapes::get_owned(&req, bb).await,
         Route::Status => status::get(bb).await,
         Route::StopDepartures => match stop_departures::get(&req) {
@@ -298,6 +302,7 @@ mod tests {
             ("/api/lines", Lines, get_only),
             ("/api/push", Push, "GET, POST, DELETE, HEAD, OPTIONS"),
             ("/api/push/news", PushNews, "POST, DELETE, HEAD, OPTIONS"),
+            ("/api/push/fleet", PushFleet, "POST, DELETE, HEAD, OPTIONS"),
             ("/api/shapes", Shapes, get_only),
             ("/api/status", Status, get_only),
             ("/api/stop/1/departures", StopDepartures, get_only),

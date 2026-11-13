@@ -111,6 +111,13 @@ pub fn pt_vehicle(city: &str, side: &str) -> Option<PtLookup> {
     })
 }
 
+/// The production year and the newest thumbnail path ("<dir>/<photo id>") of one vehicle, for the fleet list.
+pub fn pt_brief(city: &str, side: &str) -> Option<(Option<i64>, Option<&'static str>)> {
+    let index: &'static PtIndex = &INDEX;
+    let v = index.vehicles.get(&pt_key(city, side))?;
+    Some((v.b, v.p.first().map(|p| p.0.as_str())))
+}
+
 /// JS regex `[\w.,]` without the u flag.
 fn word_dot_comma(c: char) -> bool {
     c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ',')
