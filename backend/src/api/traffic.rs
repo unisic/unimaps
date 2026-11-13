@@ -1,6 +1,7 @@
 //! GET /api/traffic?lat=&lon=: the live speed of the road at one point, from TomTom's Flow Segment Data
 //! (`KB_TOMTOM_KEY`; unset = 404, the feature off). Only the bus a trip view tracks asks for it, so the dead
 //! reckoning (`lib/client/vehicleMotion.ts`) slows down in a jam instead of driving ahead of the bus.
+//! Experiment: never run against live TomTom data; whether the slowed marker tracks real buses in jams is unchecked.
 
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
