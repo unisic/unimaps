@@ -29,7 +29,7 @@
   import LineBadge from "@/components/ui/LineBadge.svelte";
   import ModeIcon from "@/components/ui/ModeIcon.svelte";
   import RequestStopTag from "@/components/ui/RequestStopTag.svelte";
-  import ShareButton from "@/components/ui/ShareButton.svelte";
+  import ShareLink from "@/components/ui/ShareLink.svelte";
   import {
     ALERT_LEADS,
     MAX_ALERTS,
@@ -587,7 +587,7 @@
             <span class="flex-1 text-[12px] font-medium text-text-faint">
               {isGzmTrip ? CITY[zbCity].name : isMzkTrip ? "MZK Bielsko-Biała" : "Komunikacja Beskidzka"}
             </span>
-            <ShareButton title={`Linia ${trip.line}${direction ? ` → ${displayStopName(direction)}` : ""}`} />
+            <ShareLink title={`Linia ${trip.line}${direction ? ` → ${displayStopName(direction)}` : ""}`} />
           </div>
           {#if cardSide}
             {@const side = cardSide}

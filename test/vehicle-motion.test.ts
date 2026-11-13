@@ -105,6 +105,22 @@ describe("prediction", () => {
     assert.ok(Math.abs(m.inspect("bus")!.vPred - (0.5 * 0.95 * 8 + 0.5 * 12)) < 1e-9);
   });
 
+  it("a live road speed caps the pace from the next fix on, never raises it, and expires", () => {
+    const m = createMotionStore({ trafficMaxAgeMs: 60_000 });
+    m.setShape(road());
+    m.ingest([V(200, { speed: 10, fix_at: 0 })], 0, 0);
+    m.setTraffic("bus", 3, 1_000);
+    assert.equal(m.inspect("bus")!.vPred, 9.5);
+    m.ingest([V(290, { speed: 10, fix_at: 10 })], 10_000, 10_000);
+    assert.equal(m.inspect("bus")!.vPred, 3);
+    m.setTraffic("bus", 30, 11_000);
+    m.ingest([V(380, { speed: 10, fix_at: 20 })], 20_000, 20_000);
+    assert.equal(m.inspect("bus")!.vPred, 9.5);
+    m.setTraffic("bus", 3, 21_000);
+    m.ingest([V(470, { speed: 10, fix_at: 90 })], 90_000, 90_000);
+    assert.equal(m.inspect("bus")!.vPred, 9.5);
+  });
+
   it("without a speed it never extrapolates", () => {
     const m = createMotionStore();
     m.setShape(road());

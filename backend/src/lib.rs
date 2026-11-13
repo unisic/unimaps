@@ -10,6 +10,7 @@ pub mod departures_board_cache;
 pub mod fetch;
 pub mod fleet_history;
 pub mod fleet_tracker;
+pub mod footpaths;
 pub mod geo;
 pub mod gtfs_builder;
 pub mod gtfs_csv;

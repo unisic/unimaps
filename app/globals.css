@@ -188,6 +188,14 @@ body {
 .stagger > *:nth-child(5) { animation-delay: 0.14s; }
 .stagger > *:nth-child(6) { animation-delay: 0.17s; }
 
+/* a journey's strip (JourneySummary) draws in left to right, the way the journey goes, in step with the route
+   drawing in on the map (JourneyLayer, 450 ms); the delay lets a staggered card start to rise first */
+.journey-strip { animation: strip-in 0.45s var(--ease-out-soft) 0.08s backwards; }
+@keyframes strip-in {
+  from { clip-path: inset(0 100% 0 0); }
+  to { clip-path: inset(0 0 0 0); }
+}
+
 /* ---------- vehicle markers: [heading arrow] + operator logo + line number ---------- */
 
 .veh-marker { background: none; border: 0; }
@@ -389,6 +397,8 @@ body {
 .leaflet-overlay-pane .route-casing { stroke: var(--color-bg); }
 .leaflet-overlay-pane .route-walk { stroke: var(--color-text); }
 .leaflet-overlay-pane .route-stop { fill: var(--color-bg); }
+/* the other routes of a search under the chosen one: muted, in the map's text colour */
+.leaflet-overlay-pane .journey-alt { stroke: var(--color-text-mute); }
 
 /* stop names under an opened trip's stops: text in the route's colour (--route-c, set on the label pane) on a halo in
    the map's contrast colour; the dark theme lifts the colour toward white, a dark line colour would sink into the halo */
@@ -431,6 +441,30 @@ body {
   border-radius: 14px;
   padding: 6px 12px 6px 6px;
 }
+/* the map's long-press / right-click menu ("Trasa stąd / dotąd") */
+.leaflet-popup.kb-popup .leaflet-popup-content-wrapper {
+  background: var(--color-surface);
+  color: var(--color-text);
+  border: 1px solid var(--color-hairline);
+  border-radius: 14px;
+  box-shadow: var(--shadow-float);
+  padding: 4px;
+}
+.leaflet-popup.kb-popup .leaflet-popup-content { margin: 0; }
+.leaflet-popup.kb-popup .leaflet-popup-tip { background: var(--color-surface); box-shadow: none; }
+.kb-popup .point-menu { display: flex; flex-direction: column; }
+.kb-popup .point-menu button {
+  min-height: 40px;
+  padding: 0 14px;
+  border-radius: 10px;
+  font: 500 13px/1 var(--font-sans);
+  text-align: left;
+  color: var(--color-text);
+  transition: background-color 0.15s ease-out;
+}
+.kb-popup .point-menu button:hover,
+.kb-popup .point-menu button:focus-visible { background: color-mix(in srgb, var(--color-tint) 8%, transparent); }
+
 .leaflet-tooltip-top.kb-tooltip::before { border-top-color: var(--color-surface); }
 .leaflet-tooltip-bottom.kb-tooltip::before { border-bottom-color: var(--color-surface); }
 .leaflet-tooltip-left.kb-tooltip::before { border-left-color: var(--color-surface); }
@@ -588,6 +622,28 @@ body {
 
 @media (hover: hover) and (pointer: fine) {
   .journey-trans-pill:hover { transform: translate(-50%, -50%) scale(1.08); }
+}
+
+/* the line's number in the middle of its leg */
+.journey-line-pill {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 7px;
+  border-radius: 8px;
+  border: 1.5px solid var(--color-surface);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4), 0 3px 10px rgba(0, 0, 0, 0.5);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  box-sizing: border-box;
 }
 
 .journey-trans-icon {

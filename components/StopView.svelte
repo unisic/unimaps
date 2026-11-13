@@ -126,7 +126,7 @@
   import LineBadge from "@/components/ui/LineBadge.svelte";
   import LiveMark from "@/components/ui/LiveMark.svelte";
   import RequestStopTag from "@/components/ui/RequestStopTag.svelte";
-  import ShareButton from "@/components/ui/ShareButton.svelte";
+  import ShareLink from "@/components/ui/ShareLink.svelte";
   import SkeletonRows from "@/components/ui/SkeletonRows.svelte";
   import StarIcon from "@/components/ui/StarIcon.svelte";
   import { alerts, removeAlert } from "@/lib/client/alerts";
@@ -677,7 +677,7 @@
             <Icon icon={PathIcon} />
           </IconButton>
         {/if}
-        <ShareButton title={`Przystanek ${displayStopName(stop.name)}`} />
+        <ShareLink title={`Przystanek ${displayStopName(stop.name)}`} />
         <IconButton
           label={fav ? "Usuń z ulubionych" : "Dodaj do ulubionych"}
           onClick={() => favorites.toggle(stop.designator)}

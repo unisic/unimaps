@@ -75,6 +75,8 @@ export interface MotionConfig {
   /** share of the timetable pace in the predicted pace while a cruise speed is known (0 = cruise only);
    *  without a cruise speed the timetable pace stands in alone */
   schedW: number;
+  /** a live road speed (setTraffic) older than this at a fix no longer caps the pace (ms) */
+  trafficMaxAgeMs: number;
   catchupTauS: number;
   catchupMaxMult: number;
   catchupMaxAdd: number;
@@ -116,6 +118,7 @@ export const DEFAULT_MOTION_CONFIG: MotionConfig = {
   hExtraMs: 12_000,
   rampFrac: 0.6,
   schedW: 0.5,
+  trafficMaxAgeMs: 180_000,
   catchupTauS: 2,
   catchupMaxMult: 2,
   catchupMaxAdd: 8,
@@ -158,6 +161,9 @@ interface Track {
   bearing: number | null;
   speed: number | null;
   sched: number | null;
+  /** live road speed (m/s) at the bus and when it came (local ms), setTraffic */
+  traffic: number | null;
+  trafficAt: number;
   /** displacement (m) between the last two distinct fixes; null = unknown */
   lastDisp: number | null;
   /** unit vector (east, north) of the last ≥20 m displacement */
@@ -235,6 +241,9 @@ export interface MotionStore {
   /** force a track onto another shape (TripLayer's drawn route); null clears. A track not
    *  ingested yet takes it when it appears (TripLayer's effect runs before the poll's ingest). */
   overrideShape(trackId: string, key: string | null): void;
+  /** live road speed (m/s) at a track from /api/traffic, local ms; caps its pace from the next fix on while
+   *  fresh, null forgets it */
+  setTraffic(id: string, speed: number | null, nowMs: number): void;
   /** feed one /api/vehicles poll; recvMs on the local clock, serverNowMs = server epoch ms at send */
   ingest(vehicles: readonly MotionInput[], recvMs: number, serverNowMs?: number | null): void;
   /** displayed state at local time nowMs; false = unknown id */
@@ -374,6 +383,8 @@ export function createMotionStore(cfgIn: Partial<MotionConfig> = {}): MotionStor
     const sched = tr.sched !== null && tr.sched >= cfg.vMin ? tr.sched : null;
     const cruise = tr.speed !== null && tr.speed >= cfg.vMin ? cfg.vBias * tr.speed : null;
     tr.vPred = cruise === null ? (sched ?? 0) : sched === null ? cruise : (1 - cfg.schedW) * cruise + cfg.schedW * sched;
+    // a bus is no faster than the cars around it: a jam lowers the pace, free flow never raises it
+    if (tr.traffic !== null && tr.fixT - tr.trafficAt <= cfg.trafficMaxAgeMs) tr.vPred = Math.min(tr.vPred, tr.traffic);
     tr.horizonMs = Math.min(cfg.hMaxMs, Math.max(cfg.hMinMs, tr.gapEma + cfg.hExtraMs));
     if (tr.mode === "route" && tr.shape && tr.fixS !== null) {
       tr.hold = standing(tr, holdM);
@@ -467,6 +478,8 @@ export function createMotionStore(cfgIn: Partial<MotionConfig> = {}): MotionStor
         bearing: v.bearing,
         speed: null,
         sched: null,
+        traffic: null,
+        trafficAt: 0,
         lastDisp: null,
         moveE: 0,
         moveN: 0,
@@ -732,6 +745,12 @@ export function createMotionStore(cfgIn: Partial<MotionConfig> = {}): MotionStor
         return;
       }
       for (const tr of tracks.values()) tr.snapNext = true;
+    },
+    setTraffic(id, speed, nowMs) {
+      const tr = tracks.get(id);
+      if (!tr) return;
+      tr.traffic = speed !== null && Number.isFinite(speed) && speed >= 0 ? speed : null;
+      tr.trafficAt = nowMs;
     },
     pin(id, on) {
       const tr = tracks.get(id);
