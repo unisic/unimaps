@@ -2,6 +2,7 @@
   import CityCard from "@/components/city/CityCard.svelte";
   import OtherCities from "@/components/city/OtherCities.svelte";
   import OthersCard from "@/components/city/OthersCard.svelte";
+  import ErrorState from "@/components/ui/ErrorState.svelte";
   import { vehiclesFetcher } from "@/lib/client/api";
   import { preload } from "@/lib/client/swr.svelte";
   import { CITY, cityUrl, loadCity, resolveCity, saveCity, setPageCity, type City } from "@/lib/client/city";
@@ -86,5 +87,10 @@
     {@render splash()}
   {:then { default: MapApp }}
     <MapApp />
+  {:catch}
+    <!-- a chunk that never arrives (offline, a deploy replaced it, an ad blocker) would leave a blank page -->
+    <div class="flex h-dvh w-full items-center justify-center bg-bg">
+      <ErrorState message="Nie udało się wczytać mapy." onRetry={() => location.reload()} />
+    </div>
   {/await}
 {/if}
