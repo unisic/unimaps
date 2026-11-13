@@ -13,8 +13,8 @@
   type="button"
   onclick={onClick}
   aria-label="Wyszukaj połączenie"
-  title="Wyszukaj połączenie"
-  class="surface tap absolute top-[calc(4.5rem+env(safe-area-inset-top,0px)+52px)] right-3 z-[1000] grid h-11 w-11 place-items-center rounded-full text-[20px] text-text-mute hover:text-text md:top-auto md:bottom-[154px]"
+  class="surface tap absolute top-[calc(4.5rem+env(safe-area-inset-top,0px)+52px)] right-3 z-[1000] flex h-11 items-center gap-1.5 rounded-full pr-3.5 pl-3 text-[20px] text-text-mute hover:text-text md:top-auto md:bottom-[154px]"
 >
   <Icon icon={PathIcon} />
+  <span class="text-[13px] font-medium">Połączenie</span>
 </button>

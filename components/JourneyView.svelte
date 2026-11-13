@@ -28,6 +28,7 @@
   import { untrack, type Snippet } from "svelte";
 
   import BottomSheet from "@/components/BottomSheet.svelte";
+  import JourneySummary from "@/components/connections/JourneySummary.svelte";
   import Icon from "@/components/Icon.svelte";
   import {
     ArrowsLeftRightIcon,
@@ -40,7 +41,9 @@
   import IconButton from "@/components/ui/IconButton.svelte";
   import LineBadge from "@/components/ui/LineBadge.svelte";
   import { notify } from "@/lib/client/alerts";
-  import { displayStopName, przystanekPlural } from "@/lib/client/format";
+  import { useNow } from "@/components/hooks.svelte";
+  import { addMinutesToHHMM, delayClass, displayStopName, przystanekPlural, todayISO } from "@/lib/client/format";
+  import { delayMinutes } from "@/lib/shared/departures";
   import type { ConnectionLegStop, JourneyView as JourneyViewState, Vehicle } from "@/lib/client/types";
   import { alightSoon, indexVehicles, legVehicle, transferAtRisk } from "@/lib/client/vehicleIndex";
 
@@ -70,9 +73,9 @@
      (iOS suspends it in the background); server push of the same check if riders need it pocketed */
   let alarm = $state(false);
   const fired = new Set<number>();
-  const vix = $derived(alarm ? indexVehicles(vehicles) : null);
+  const vix = $derived(indexVehicles(vehicles));
   $effect(() => {
-    const ix = vix;
+    const ix = alarm ? vix : null;
     if (!ix) return;
     const { legs, date } = journey.itinerary;
     const gen = journey.gen;
@@ -110,18 +113,12 @@
   const fromTitle = $derived(legs[0]?.fromStopName || "Początek");
   const toTitle = $derived(legs[legs.length - 1]?.toStopName || "Koniec");
   const selectedLegIdx = $derived(journey.selectedLegIdx);
+  /* each leg's bus delay now, else the one the search boarded it with (s, null = no live data) */
+  const delays = $derived(legs.map((l) => legVehicle(l, itinerary.date, vix)?.delay ?? l.delaySec ?? null));
+  const clock = useNow();
   const dimmed = (...legIdx: number[]) =>
     selectedLegIdx !== null && !legIdx.includes(selectedLegIdx) ? "opacity-50" : "";
 
-  const facts = $derived.by(() => {
-    const n = itinerary.transfersCount;
-    return [
-      `${itinerary.totalDurationMins} min`,
-      n ? `${n} ${n === 1 ? "przesiadka" : "przesiadki"}` : "bez przesiadek",
-      itinerary.walkMinutes ? `${itinerary.walkMinutes} min pieszo` : "",
-      itinerary.dayLabel ?? "",
-    ].filter(Boolean);
-  });
 </script>
 
 {#snippet half(seg: Seg, bottom: boolean)}
@@ -155,14 +152,29 @@
   </span>
 {/snippet}
 
-{#snippet stopRow(st: ConnectionLegStop | undefined, name: string, time: string, r: RailArgs, major: boolean)}
+{#snippet stopRow(
+  st: ConnectionLegStop | undefined,
+  name: string,
+  time: string,
+  r: RailArgs,
+  major: boolean,
+  delay: number | null = null,
+)}
   <button
     type="button"
     disabled={!st?.lat || !st.lon}
     onclick={() => st?.lat && st.lon && onFocusStop(st.lat, st.lon)}
     class={ROW}
   >
-    <span class="{TIME} {major ? 'text-[13px] font-semibold text-text' : 'text-[12px] text-text-faint'}">{time}</span>
+    <!-- the plan struck through above the live time when the bus runs off it, as in TripView -->
+    <span class="{TIME} {major ? 'text-[13px] font-semibold text-text' : 'text-[12px] text-text-faint'}">
+      {#if delay != null && Math.abs(delay) > 60}
+        <s class="block text-[11px] font-normal leading-tight text-text-faint">{time}</s>
+        <span class="block {delayClass(delay)}">{addMinutesToHHMM(time, delayMinutes(delay))}</span>
+      {:else}
+        {time}
+      {/if}
+    </span>
     {@render rail(r.top, r.bottom, r.node, undefined)}
     <span
       class="min-w-0 flex-1 self-center truncate pr-2 {major
@@ -181,25 +193,24 @@
         <IconButton onClick={onBackToSearch} label="Wróć do wyników wyszukiwania">
           <Icon icon={CaretLeftIcon} />
         </IconButton>
-        <div class="min-w-0 flex-1 pl-0.5">
-          <h2 class="truncate text-[16px] font-semibold leading-tight tracking-tight text-text">
-            {displayStopName(fromTitle)} → {displayStopName(toTitle)}
-          </h2>
-          <!-- a line break falls between facts, never inside "5 min pieszo" -->
-          <p class="mt-1 text-[12px] leading-snug text-text-mute">
-            <span class="whitespace-nowrap font-semibold tabular-nums text-text">
-              {itinerary.departureTime} – {itinerary.arrivalTime}
-            </span>{#if itinerary.arrivesNextDay}<span class="font-medium text-late" title="Przyjazd następnego dnia"
-                >{" "}+1 d.</span
-              >{/if}{#each facts as f (f)}{"\u00a0· "}<span class="whitespace-nowrap tabular-nums">{f}</span>{/each}
-          </p>
-        </div>
+        <h2 class="min-w-0 flex-1 truncate pl-0.5 text-[16px] font-semibold leading-tight tracking-tight text-text">
+          {displayStopName(fromTitle)} → {displayStopName(toTitle)}
+        </h2>
         <IconButton onClick={() => void toggleAlarm()} label="Budzik: powiadom przed wysiadaniem" pressed={alarm}>
           <Icon icon={BellIcon} weight={alarm ? "fill" : "bold"} />
         </IconButton>
         <IconButton onClick={onClose} label="Zamknij widok trasy">
           <Icon icon={XIcon} />
         </IconButton>
+      </div>
+      <div class="mt-2">
+        <JourneySummary
+          it={itinerary}
+          {delays}
+          now={clock.current}
+          live={itinerary.date === todayISO()}
+          dayLabel={itinerary.dayLabel}
+        />
       </div>
 
       {#if legs.length > 1}
@@ -269,7 +280,7 @@
         {/if}
 
         <li class={fade}>
-          {@render stopRow(stops[0], leg.fromStopName, leg.departureTime, { top: join, bottom: ride, node }, true)}
+          {@render stopRow(stops[0], leg.fromStopName, leg.departureTime, { top: join, bottom: ride, node }, true, delays[lIdx])}
         </li>
 
         <li class={fade}>
@@ -324,6 +335,7 @@
             leg.arrivalTime,
             { top: ride, bottom: joinOf(legs, lIdx + 1), node },
             true,
+            delays[lIdx],
           )}
         </li>
       {/each}

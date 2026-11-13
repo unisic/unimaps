@@ -181,6 +181,7 @@ fn search(q: &Query, idx: &RouterIndex, live: &LiveFn) -> Vec<ConnectionItinerar
         arrive_by: q.arrive_by,
         limit: q.limit,
         direct_only: q.direct_only,
+        max_transfers: None,
         min_transfer_secs: q.min_transfer_secs,
         max_transfer_secs: q.max_transfer_secs,
         date: q.date.as_deref(),
@@ -405,6 +406,26 @@ fn direct_only_keeps_direct_itineraries_and_finds_none_without_one() {
             .all(|i| i.kind == "direct" && i.transfers_count == 0 && i.legs.len() == 1)
     );
     assert!(direct("BIELSKO-BIAŁA WAPIENICA CENTRUM").is_empty());
+}
+
+#[test]
+fn max_transfers_caps_the_changes_of_every_itinerary() {
+    let capped = |max| {
+        let q = RouteQuery {
+            from: "BIELSKO-BIAŁA WAPIENICA CENTRUM",
+            to: "SZCZYRK SKALITE",
+            date: Some(DATE),
+            after_secs: Some(14 * 3600),
+            max_transfers: Some(max),
+            limit: Some(5),
+            ..Default::default()
+        };
+        find_connections(&q, Some(&KB))
+    };
+    assert!(capped(0).is_empty());
+    let one = capped(1);
+    assert!(!one.is_empty());
+    assert!(one.iter().all(|i| i.transfers_count <= 1 && i.legs.len() <= 2));
 }
 
 #[test]

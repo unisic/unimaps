@@ -3,10 +3,11 @@
   import { onDestroy, untrack } from "svelte";
 
   import { el, KeyedLayers, ROUTE_CASING, routeLine, routeStop } from "@/components/leafletLayers";
+  import { getTrafficSpeed } from "@/lib/client/api";
   import { displayStopName, formatPlatform, isBusStation, isMzk, operatorColor, transitMode, withoutRequestTail } from "@/lib/client/format";
   import { makeVehicleIcon } from "@/lib/client/leafletIcons";
   import { prefersReducedMotion } from "@/lib/client/motion";
-  import { smoothRoute, snapStopsOnto } from "@/lib/shared/polyline";
+  import { segMeters, smoothRoute, snapStopsOnto } from "@/lib/shared/polyline";
   import { smoothMotion } from "@/lib/client/smoothMotion";
   import type { LatLng, Stop, TripView, Vehicle } from "@/lib/client/types";
   import { acquireVehicleAnimator, releaseVehicleAnimator, type VehicleAnimator } from "@/lib/client/vehicleAnimator";
@@ -181,6 +182,34 @@
     anim.setTripShape(key, routed, refs);
     anim.overrideShape(id, key);
     return () => anim.overrideShape(id, null);
+  });
+
+  /* the live road speed at the tracked bus (TomTom via /api/traffic) caps its dead reckoning in a jam: asked for this
+     one bus only, again after 500 m or 2 min, so the free tier lasts; a tram's or metro's track has no car traffic */
+  $effect(() => {
+    const anim = animator;
+    const id = trackId;
+    if (!anim || id === null || sched || (mode !== "bus" && mode !== "trolleybus") || !smoothMotion.current) return;
+    const ctl = new AbortController();
+    let last: { lat: number; lon: number; at: number } | null = null;
+    let busy = false;
+    const tick = async () => {
+      const p = anim.displayed(id);
+      const now = performance.now();
+      if (busy || !p || document.hidden) return;
+      if (last && now - last.at < 120_000 && segMeters(last.lat, last.lon, p.lat, p.lon) < 500) return;
+      busy = true;
+      last = { lat: p.lat, lon: p.lon, at: now };
+      const speed = await getTrafficSpeed(p.lat, p.lon, ctl.signal);
+      busy = false;
+      if (!ctl.signal.aborted) anim.store.setTraffic(id, speed, performance.now());
+    };
+    void tick();
+    const timer = setInterval(tick, 10_000);
+    return () => {
+      clearInterval(timer);
+      ctl.abort();
+    };
   });
 
   // Fit bounds once per drawn trip, after routing settles: padded so the

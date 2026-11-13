@@ -29,7 +29,7 @@
   import Icon from "@/components/Icon.svelte";
   import { XIcon } from "@/components/icon-paths";
   import LineBadge from "@/components/ui/LineBadge.svelte";
-  import ShareButton from "@/components/ui/ShareButton.svelte";
+  import ShareLink from "@/components/ui/ShareLink.svelte";
   import { cityOfSide, isNotFound, type FleetSummaryItem } from "@/lib/client/fleet";
   import { fleetWatches, forgetFleetWatch, setFleetWatch } from "@/lib/client/alerts";
   import { useVehicleDetail, useVehicleHistory } from "@/lib/client/fleet.svelte";
@@ -797,7 +797,7 @@
             {company ? `${company}${model ? ", " : ""}` : null}{model ?? (notFound ? "Nieznany pojazd" : " ")}{#if headYear}<span class="text-text-faint">{` (${headYear})`}</span>{/if}
           </p>
         </div>
-        <ShareButton
+        <ShareLink
           title="Pojazd {brand.short} #{label}"
           path="/brygady?{city === 'gzm' ? 'city=gzm&' : ''}tabor={encodeURIComponent(side)}"
         />

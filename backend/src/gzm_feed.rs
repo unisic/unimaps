@@ -1552,6 +1552,11 @@ pub fn get_gzm_feed(slug: &str) -> Option<Arc<GzmFeed>> {
     states().get(slug)?.feed.clone()
 }
 
+/// The feeds of every city loaded now.
+pub fn loaded_feeds() -> Vec<Arc<GzmFeed>> {
+    states().values().filter_map(|s| s.feed.clone()).collect()
+}
+
 fn mtime(file: &Path) -> Option<Timestamp> {
     let t = std::fs::metadata(file).ok()?.modified().ok()?;
     Timestamp::try_from(t).ok()
