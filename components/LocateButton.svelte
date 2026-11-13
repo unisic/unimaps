@@ -28,7 +28,6 @@
 <button
   type="button"
   onclick={onLocate}
-  aria-label="Śledź moją lokalizację"
   aria-pressed={following}
   title={denied
     ? "Brak zgody na lokalizację. Włącz ją w ustawieniach przeglądarki"
@@ -37,17 +36,20 @@
       : following
         ? "Wyłącz lokalizację"
         : "Śledź moją lokalizację"}
-  class="surface tap absolute top-[calc(4.5rem+env(safe-area-inset-top,0px))] right-3 z-[1000] grid h-11 w-11 place-items-center rounded-full text-[20px] md:top-auto md:bottom-[102px] {active
+  class="surface tap absolute top-[calc(4.5rem+env(safe-area-inset-top,0px))] right-3 z-[1000] flex h-11 items-center gap-1.5 rounded-full pr-3.5 pl-3 text-[20px] md:top-auto md:bottom-[102px] {active
     ? 'text-primary'
     : denied || error
       ? 'text-danger'
       : 'text-text-mute hover:text-text'}"
 >
   {#if status === "locating"}
-    <span class="h-4 w-4 animate-spin rounded-full border-2 border-surface-3 border-t-primary" aria-hidden="true"></span>
+    <span class="grid h-5 w-5 place-items-center" aria-hidden="true">
+      <span class="h-4 w-4 animate-spin rounded-full border-2 border-surface-3 border-t-primary"></span>
+    </span>
   {:else if denied || error}
     <Icon icon={GpsSlashIcon} />
   {:else}
     <Icon icon={GpsFixIcon} weight={following ? "fill" : "bold"} />
   {/if}
+  <span class="text-[13px] font-medium">Lokalizacja</span>
 </button>
