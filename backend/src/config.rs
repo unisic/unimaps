@@ -186,6 +186,13 @@ pub static GZM_NEWS_URL: LazyLock<Option<String>> = LazyLock::new(|| {
 });
 pub static FLEET_HISTORY_DAYS: LazyLock<i64> = LazyLock::new(|| env_int("KB_FLEET_HISTORY_DAYS", 365, 1));
 pub static GZM_DIR: LazyLock<String> = LazyLock::new(|| env_str("KB_GZM_DIR", &in_output("gzm")));
+/// Pre-recorded stop announcements, `<name>.mp3` (/api/announce).
+pub static GZM_ANNOUNCE_DIR: LazyLock<String> = LazyLock::new(|| {
+    env_str(
+        "KB_GZM_ANNOUNCE_DIR",
+        &std::path::Path::new(&*GZM_DIR).join("announce").to_string_lossy(),
+    )
+});
 pub static GZM_FLEET_HISTORY_DAYS: LazyLock<i64> = LazyLock::new(|| env_int("KB_GZM_FLEET_HISTORY_DAYS", 30, 1));
 pub static ZB_API_URL: LazyLock<String> = LazyLock::new(|| {
     env_str("KB_ZB_API_URL", "https://api.zbiorkom.live/api6-open")

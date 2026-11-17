@@ -452,6 +452,7 @@ fn line_timetable_groups_the_days_trips_by_stop_pattern_busiest_first() {
     assert_eq!(names, [["Alfa 01", "Beta 01"], ["Beta 01", "Gamma 1t"]]);
     assert_eq!(v[0].times, [[480, 484], [540, 545]]);
     assert_eq!(v[1].times, [[510, 515], [1438, 1443]]);
+    assert_eq!(v[0].trips, ["gzm:early", "gzm:late"]);
     assert_eq!(v[0].headsign, "Koniec");
     assert!(line_timetable("7", "MZK", DATE, Some(&idx)).unwrap().is_empty());
     assert!(

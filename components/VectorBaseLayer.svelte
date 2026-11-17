@@ -53,12 +53,15 @@
     map,
     style,
     filter,
+    paint,
     onStatus,
   }: {
     map: L.Map;
     style: string;
     /** CSS filter applied to the basemap canvas only (e.g. "brightness(.8)") */
     filter?: string;
+    /** paint overrides by layer id (BaseLayer.paint), applied when the style loads */
+    paint?: Record<string, Record<string, string>>;
     /** basemap readiness for the caller's loading veil / raster fallback; an effect dependency */
     onStatus?: (s: BasemapStatus) => void;
   } = $props();
@@ -75,8 +78,11 @@
       updateInterval: 16,
       // no cross-fade: freshly loaded tiles snap in instead of ghosting for 300ms
       fadeDuration: 0,
-      // keep lots of already-rendered tiles so zoom-out/in & back-pan are instant
-      maxTileCacheSize: 1024,
+      /* a phone's DPR 3 canvas is 2.25x the pixels of a DPR 2 one, repainted on every pan frame: panning at 4x CPU
+         throttle left the main thread 66 % idle (2026-11-13), so the cost on a phone is the GPU's fill rate */
+      pixelRatio: Math.min(window.devicePixelRatio, 2),
+      // keep lots of already-rendered tiles so zoom-out/in & back-pan are instant; a phone has no memory for 1024
+      maxTileCacheSize: window.matchMedia("(pointer: coarse)").matches ? 128 : 1024,
       // don't re-download still-valid tiles mid-session
       refreshExpiredTiles: false,
     };
@@ -117,8 +123,10 @@
     };
 
     type Filter = Parameters<typeof gl.setFilter>[1];
+    type PaintProp = Parameters<typeof gl.setPaintProperty>[1];
     const onStyleLoad = () => {
       for (const l of gl.getStyle().layers) {
+        for (const [prop, value] of Object.entries(paint?.[l.id] ?? {})) gl.setPaintProperty(l.id, prop as PaintProp, value);
         // text-field is a symbol layer's layout property
         const f = l.type === "symbol" ? l.layout?.["text-field"] : undefined;
         if (JSON.stringify(f ?? null).includes('"name_en"')) gl.setLayoutProperty(l.id, "text-field", polishLabel(f) as typeof f);

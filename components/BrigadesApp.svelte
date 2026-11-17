@@ -1,8 +1,11 @@
 <script module lang="ts">
+  import type { FleetCity } from "@/lib/client/fleet";
+
   /*
    * /brygady: the MZK Bielsko-Biała fleet (or Metropolia GZM with `?city=gzm` or a saved
-   * `kb:city`), live. View state lives in the URL
-   * (`?tabor=<side>` opens a vehicle, `?widok=statystyki` the charts) and is written with
+   * `kb:city`; the header's switch links `?city=bb` / `?city=gzm`), live. View state lives in the URL
+   * (`?tabor=<side>` opens a vehicle, `?widok=statystyki` the charts, the gallery's filters as
+   * `status=`, `naped=`, ...: fleetFilters.ts) and is written with
    * the plain History API; `search` mirrors location.search after each write and on popstate.
    * Opening a vehicle pushes an entry (Android back closes the sheet); a deep-linked sheet
    * closes with replaceState instead, so "close" never navigates away from the page.
@@ -17,6 +20,19 @@
 
   /** Data older than this is called out in the header (the poller writes every ~5 s). */
   const STALE_AFTER_SEC = 90;
+  /** the KPI tiles (and their skeleton): a grid from sm up */
+  const KPI_GRID = "gap-3 sm:grid sm:grid-cols-[repeat(auto-fit,minmax(160px,1fr))]";
+  /** on a phone: one swipeable row bleeding to the screen edges */
+  const KPI_SWIPE = "-mx-4 flex snap-x scroll-px-4 overflow-x-auto px-4 [scrollbar-width:none] sm:mx-0 sm:overflow-visible sm:px-0";
+  const KPI_TILE = "w-40 shrink-0 snap-start rounded-2xl border px-3.5 py-3 text-left sm:w-auto";
+
+  const CITIES: { key: FleetCity; short: string; name: string }[] = [
+    { key: "bb", short: "BB", name: "Bielsko-Biała" },
+    { key: "gzm", short: "GZM", name: "Metropolia GZM" },
+  ];
+
+  /** "niedziela, 8 listopada" */
+  const DAY_FMT = new Intl.DateTimeFormat("pl-PL", { weekday: "long", day: "numeric", month: "long", timeZone: "Europe/Warsaw" });
 
   function cleanSide(raw: string | null): string | null {
     const s = raw?.replace(/^#/, "").trim();
@@ -41,11 +57,14 @@
   import { CaretLeftIcon, HeartIcon } from "@/components/icon-paths";
   import { localUpdatedAt, readBrygadyCity, type FleetStats } from "@/lib/client/fleet";
   import { useFleet } from "@/lib/client/fleet.svelte";
+  import { VERY_LATE_SEC, type FleetSummaryItem } from "@/lib/shared/fleet";
 
+  import { delayClass } from "@/lib/client/format";
   import { clockFromEpoch, FLEET_CITY, fleetOf, fmtDelayMin, fmtInt, fmtKm, pluralPl } from "./brygady/common";
-  import { CLEARED, DEFAULT_FILTERS, type FleetFilters } from "./brygady/fleetFilters";
+  import { DEFAULT_FILTERS, filtersFromParams, filtersToParams, type FleetFilters, type StatusFilter } from "./brygady/fleetFilters";
   import FleetList from "./brygady/FleetList.svelte";
   import FleetStatsView from "./brygady/FleetStatsView.svelte";
+  import { isLate } from "./brygady/gallery";
   import { useEpochNow } from "./brygady/hooks.svelte";
   import { ALERT, ARROW_UP } from "./brygady/icons";
   import Svg from "./brygady/Svg.svelte";
@@ -59,17 +78,26 @@
   const side = $derived(cleanSide(params.get("tabor")));
   const tab: Tab = $derived(params.get("widok") === "statystyki" ? "statystyki" : "pojazdy");
   const fleet = useFleet(() => side !== null, city);
-  let filters = $state.raw<FleetFilters>(DEFAULT_FILTERS);
-  const nowEpoch = useEpochNow(30_000);
+  let filters = $state.raw<FleetFilters>(filtersFromParams(new URLSearchParams(location.search)));
   const clockNow = useEpochNow(1000);
+  const brand = FLEET_CITY[city];
   let tabsEl: HTMLDivElement | undefined = $state();
   const inert = $derived(side !== null);
 
   const syncSearch = () => (search = window.location.search);
 
-  function patchFilters(patch: Partial<FleetFilters>) {
-    filters = { ...filters, ...patch };
+  function setFilters(next: FleetFilters) {
+    filters = next;
+    // a filter is no history step; the entry's state stays (an open vehicle's kbTabor)
+    window.history.replaceState(
+      window.history.state,
+      "",
+      urlWith((p) => filtersToParams(next, p)),
+    );
+    syncSearch();
   }
+
+  const patchFilters = (patch: Partial<FleetFilters>) => setFilters({ ...filters, ...patch });
 
   /** the list the card was opened from, for its prev/next buttons (a deep link or a chart opens without one) */
   let order = $state.raw<readonly string[]>([]);
@@ -99,10 +127,23 @@
   }
 
   function pickLine(line: string) {
-    filters = { ...filters, ...CLEARED, line, view: "list" };
+    setFilters({ ...DEFAULT_FILTERS, line });
     setTab("pojazdy");
     requestAnimationFrame(() => tabsEl?.scrollIntoView({ block: "start" }));
   }
+
+  /** a KPI tile as a filter switch: a second click takes the filter off */
+  function showInGallery(patch: Partial<FleetFilters>) {
+    patchFilters(patch);
+    if (tab !== "pojazdy") setTab("pojazdy");
+  }
+
+  const statusPick = (s: StatusFilter) => ({ on: filters.status === s, patch: { status: filters.status === s ? "all" : s } as Partial<FleetFilters> });
+
+  const updatedAt = $derived(fleet.data ? localUpdatedAt(fleet.data) : 0);
+  const age = $derived(updatedAt > 0 ? clockNow.current - updatedAt : null);
+  const stale = $derived(age !== null && age > STALE_AFTER_SEC);
+  const freshness = $derived(age === null ? "czekam na dane" : stale ? `dane sprzed ${Math.max(2, Math.round(age / 60))} min` : "");
 
   const seed = $derived(side ? fleet.data?.vehicles.find((v) => v.sideNumber === side) : undefined);
 
@@ -141,17 +182,12 @@
 
 <svelte:window onpopstate={syncSearch} />
 
-{#snippet liveClock(updatedAt: number)}
-  {@const now = clockNow.current}
-  {@const age = updatedAt > 0 ? now - updatedAt : null}
-  {@const stale = age !== null && age > STALE_AFTER_SEC}
-  <div class="shrink-0 pr-2 text-right">
-    <p class="text-[15px] font-semibold leading-tight text-text tabular-nums">{clockFromEpoch(now, true)}</p>
+{#snippet liveClock()}
+  <div class="hidden shrink-0 pl-1 pr-2 text-right sm:block">
+    <p class="text-[15px] font-semibold leading-tight text-text tabular-nums">{clockFromEpoch(clockNow.current, true)}</p>
     <p class="flex items-center justify-end gap-1.5 text-[11.5px] {stale ? 'text-late' : 'text-text-faint'}">
-      {#if age === null}
-        czekam na dane
-      {:else if stale}
-        {`dane sprzed ${Math.max(2, Math.round(age / 60))} min`}
+      {#if freshness}
+        {freshness}
       {:else}
         <span aria-hidden="true" class="h-1.5 w-1.5 animate-pulse-dot rounded-full bg-good"></span>
         dane aktualne
@@ -160,49 +196,98 @@
   </div>
 {/snippet}
 
-{#snippet tile(label: string, value: string, note: string | Snippet)}
-  <div class="h-full rounded-2xl border border-hairline bg-surface px-4 py-3">
-    <dt class="text-[12px] font-medium text-text-mute">{label}</dt>
-    <dd class="mt-0.5 text-[22px] font-bold leading-tight text-text tabular-nums">{value}</dd>
-    <dd class="mt-0.5 text-[12px] leading-snug text-text-faint">
+{#snippet tile(
+  label: string,
+  value: string,
+  note: string | Snippet,
+  tone = "text-text",
+  pick?: { on: boolean; patch: Partial<FleetFilters> },
+)}
+  {#snippet body()}
+    <span class="block text-[12.5px] text-text-mute">{label}</span>
+    <span class="mt-0.5 block text-[24px] font-semibold leading-tight tracking-[-0.02em] tabular-nums {tone}">{value}</span>
+    <span class="mt-0.5 block text-[12px] leading-snug text-text-faint">
       {#if typeof note === "string"}{note}{:else}{@render note()}{/if}
-    </dd>
-  </div>
+    </span>
+  {/snippet}
+  {#if pick}
+    <button
+      type="button"
+      aria-pressed={pick.on}
+      onclick={() => showInGallery(pick.patch)}
+      class="{KPI_TILE} transition-colors {pick.on ? 'border-primary/50 bg-primary-dim' : 'border-hairline bg-surface hover:bg-surface-2'}"
+    >
+      {@render body()}
+      <span class="mt-1 block text-[12px] font-medium text-primary">{pick.on ? "Wyłącz filtr" : "Pokaż w galerii"}</span>
+    </button>
+  {:else}
+    <div class="{KPI_TILE} border-hairline bg-surface">{@render body()}</div>
+  {/if}
 {/snippet}
 
-{#snippet kpiStrip(stats: FleetStats)}
+{#snippet kpiStrip(stats: FleetStats, vehicles: FleetSummaryItem[])}
   {@const running = stats.activeCount - stats.waitingCount}
   {@const measured = stats.measuredCount > 0}
-  <dl class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+  {@const late = vehicles.filter(isLate)}
+  {@const veryLate = late.filter((v) => (v.delaySec ?? 0) > VERY_LATE_SEC).length}
+  <!-- the phone's catalogue starts at the search box (its status chips carry the counts); there the tiles
+       are one swipeable row on the Statystyki tab -->
+  <section aria-label="Dziś: {brand.name}" class="{KPI_GRID} {tab === 'pojazdy' ? 'hidden' : KPI_SWIPE}">
     {@render tile(
       "W trasie",
       fmtInt(running),
       `z ${fleetOf(city, stats.totalFleet)}${stats.waitingCount > 0 ? `, ${stats.waitingCount} ${pluralPl(stats.waitingCount, "czeka", "czekają", "czeka")}` : ""}`,
+      undefined,
+      statusPick("active"),
+    )}
+    {@render tile(
+      "Spóźnione",
+      fmtInt(late.length),
+      `ponad +3 min${veryLate > 0 ? `, ${fmtInt(veryLate)} ponad +10 min` : ""}`,
+      late.length > 0 ? "text-late" : undefined,
+      statusPick("late"),
     )}
     {@render tile(
       "Punktualność",
       measured ? `${stats.onTimePercentage}%` : "–",
       measured ? `od −1 do +3 min, ${stats.measuredCount} ${pluralPl(stats.measuredCount, "pojazd", "pojazdy", "pojazdów")}` : "brak pomiarów",
+      !measured ? undefined : stats.onTimePercentage >= 80 ? "text-good" : "text-late",
     )}
     {@render tile(
       "Mediana opóźnienia",
       stats.medianDelaySec !== null ? fmtDelayMin(stats.medianDelaySec) : "–",
       measured ? `średnio ${fmtDelayMin(stats.averageDelaySec)}` : "brak pomiarów",
+      stats.medianDelaySec !== null ? delayClass(stats.medianDelaySec) : undefined,
+    )}
+    {#snippet cancelledNote()}
+      {#if stats.coursesCancelledToday > 0}
+        <span class="text-danger">
+          {fmtInt(stats.coursesCancelledToday)}
+          {pluralPl(stats.coursesCancelledToday, "przerwany", "przerwane", "przerwanych")}
+        </span>
+      {:else}
+        żaden nie przerwany
+      {/if}
+    {/snippet}
+    {@render tile("Kursy dziś", fmtInt(stats.coursesCompletedToday), cancelledNote)}
+    {@render tile(
+      "Km dziś",
+      fmtKm(stats.kmToday),
+      `${fmtInt(stats.activeLines.length)} ${pluralPl(stats.activeLines.length, "linia", "linie", "linii")} w ruchu`,
     )}
     {@render tile(
-      "Linie w ruchu",
-      fmtInt(stats.activeLines.length),
-      `${fmtInt(stats.seenTodayCount)} ${pluralPl(stats.seenTodayCount, "pojazd wyjechał", "pojazdy wyjechały", "pojazdów wyjechało")} dziś`,
+      "Elektryczne",
+      fmtInt(stats.electricCount),
+      [
+        stats.hybridCount > 0 ? `${fmtInt(stats.hybridCount)} ${pluralPl(stats.hybridCount, "hybrydowy", "hybrydowe", "hybrydowych")}` : "",
+        stats.hydrogenCount > 0 ? `${fmtInt(stats.hydrogenCount)} ${pluralPl(stats.hydrogenCount, "wodorowy", "wodorowe", "wodorowych")}` : "",
+      ]
+        .filter(Boolean)
+        .join(", ") || "w taborze",
+      undefined,
+      { on: filters.fuel === "electric", patch: { fuel: filters.fuel === "electric" ? "all" : "electric" } },
     )}
-    {#snippet todayNote()}
-      {fmtInt(stats.coursesCompletedToday)} {pluralPl(stats.coursesCompletedToday, "kurs", "kursy", "kursów")}{#if stats.coursesCancelledToday > 0}<span
-          class="text-danger">, {fmtInt(stats.coursesCancelledToday)} {pluralPl(stats.coursesCancelledToday, "przerwany", "przerwane", "przerwanych")}</span
-        >{/if}
-    {/snippet}
-    <div class="col-span-2 sm:col-span-1">
-      {@render tile("Dziś", fmtKm(stats.kmToday), todayNote)}
-    </div>
-  </dl>
+  </section>
 {/snippet}
 
 {#snippet tabs()}
@@ -231,16 +316,16 @@
 
 {#snippet loadingBody()}
   <div aria-label="Ładowanie floty" role="status">
-    <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-      {#each [0, 1, 2, 3, 4] as i (i)}
-        <div class="skeleton h-[5.75rem] rounded-2xl {i === 4 ? 'col-span-2 sm:col-span-1' : ''}"></div>
+    <div class="{KPI_GRID} hidden">
+      {#each [0, 1, 2, 3, 4, 5, 6] as i (i)}
+        <div class="skeleton h-[6.75rem] rounded-2xl"></div>
       {/each}
     </div>
-    <div class="skeleton mt-5 h-11 w-56 rounded-lg"></div>
-    <div class="skeleton mt-4 h-11 w-full rounded-xl"></div>
-    <div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-      {#each [0, 1, 2, 3, 4, 5] as i (i)}
-        <div class="skeleton h-40 rounded-2xl"></div>
+    <div class="skeleton h-11 w-56 rounded-lg sm:mt-5"></div>
+    <div class="skeleton mt-4 h-11 w-full max-w-[560px] rounded-xl"></div>
+    <div class="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+      {#each [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] as i (i)}
+        <div class="skeleton aspect-[4/5] rounded-2xl"></div>
       {/each}
     </div>
   </div>
@@ -248,7 +333,7 @@
 
 <div inert={inert} class="min-h-dvh bg-bg text-text">
   <header class="sticky top-0 z-30 border-b border-hairline bg-bg pt-[env(safe-area-inset-top)]">
-    <div class="mx-auto flex h-16 w-full max-w-6xl items-center gap-2 px-2 sm:px-4">
+    <div class="mx-auto flex h-16 w-full max-w-[1440px] items-center gap-2 px-2 sm:px-4 lg:px-6">
       <a
         href="/"
         aria-label="Wróć do mapy"
@@ -258,10 +343,30 @@
       </a>
       <div class="min-w-0 flex-1">
         <h1 class="truncate text-[17px] font-bold leading-tight text-text">Brygady i tabor</h1>
-        <p class="truncate text-[12.5px] text-text-mute">{`${FLEET_CITY[city].name}, na żywo`}</p>
+        <p class="flex min-w-0 items-center gap-1.5 text-[12.5px] text-text-mute">
+          <!-- a phone has no room for the clock: its time rides here -->
+          <span aria-hidden="true" class="h-1.5 w-1.5 shrink-0 rounded-full sm:hidden {stale ? 'bg-late' : 'bg-good'}"></span>
+          <span class="truncate sm:hidden">{`${brand.name} · ${freshness || clockFromEpoch(clockNow.current)}`}</span>
+          <span class="hidden truncate sm:inline">{`${brand.name} · ${DAY_FMT.format(clockNow.current * 1000)} · katalog taboru`}</span>
+        </p>
       </div>
+      <nav aria-label="Miasto" class="flex shrink-0 gap-0.5 rounded-full border border-hairline bg-surface p-0.5 sm:p-1">
+        {#each CITIES as c (c.key)}
+          <a
+            href="/brygady?city={c.key}"
+            aria-current={c.key === city ? "page" : undefined}
+            class="grid min-h-11 min-w-12 place-items-center rounded-full px-3 text-[13px] font-semibold transition-colors sm:min-h-9 sm:font-medium {c.key ===
+            city
+              ? 'bg-primary-dim text-text'
+              : 'text-text-mute hover:text-text'}"
+          >
+            <span aria-hidden="true" class="sm:hidden">{c.short}</span>
+            <span class="sr-only sm:not-sr-only">{c.name}</span>
+          </a>
+        {/each}
+      </nav>
       {#if fleet.data}
-        {@render liveClock(localUpdatedAt(fleet.data))}
+        {@render liveClock()}
       {/if}
       <a
         href="https://ko-fi.com/unisic"
@@ -269,13 +374,13 @@
         rel="noopener noreferrer"
         aria-label="Wesprzyj nas"
         title="Wesprzyj nas"
-        class="grid h-11 w-11 shrink-0 place-items-center rounded-full text-primary transition-colors hover:bg-tint/8"
+        class="hidden h-11 w-11 shrink-0 place-items-center rounded-full text-primary transition-colors hover:bg-tint/8 sm:grid"
       >
         <Icon icon={HeartIcon} weight="fill" />
       </a>
     </div>
   </header>
-  <main class="mx-auto w-full max-w-6xl px-4 pb-[max(2.5rem,env(safe-area-inset-bottom))] pt-4">
+  <main class="mx-auto w-full max-w-[1440px] px-4 pb-[max(2.5rem,env(safe-area-inset-bottom))] pt-4 lg:px-8">
     {#if fleet.data}
       {@const data = fleet.data}
       {#if fleet.error}
@@ -296,20 +401,13 @@
           </button>
         </div>
       {/if}
-      {@render kpiStrip(data.stats)}
+      {@render kpiStrip(data.stats, data.vehicles)}
       <div bind:this={tabsEl} class="scroll-mt-[calc(env(safe-area-inset-top)+4.5rem)]">
         {@render tabs()}
       </div>
       <div role="tabpanel" id="panel-{tab}" aria-labelledby="tab-{tab}" class="mt-4 animate-fade">
         {#if tab === "pojazdy"}
-          <FleetList
-            vehicles={data.vehicles}
-            {filters}
-            onFiltersChange={patchFilters}
-            onOpen={openVehicle}
-            nowEpoch={nowEpoch.current}
-            {city}
-          />
+          <FleetList vehicles={data.vehicles} {filters} onFiltersChange={patchFilters} onOpen={openVehicle} {city} />
         {:else}
           <FleetStatsView {data} onPickLine={pickLine} onOpenVehicle={openVehicle} {city} />
         {/if}
@@ -340,6 +438,10 @@
         MZK nie publikuje numerów brygad ani rozkładów pracy pojazdów, więc następny kurs jest tylko szacunkiem.
       </footer>
     {/if}
+    <!-- the header's heart has no room on a phone -->
+    <a href="https://ko-fi.com/unisic" target="_blank" rel="noopener noreferrer" class="mt-3 inline-flex min-h-11 items-center gap-1.5 text-[13px] font-medium text-primary sm:hidden">
+      <Icon icon={HeartIcon} weight="fill" />Wesprzyj nas
+    </a>
   </main>
 </div>
 {#if side}

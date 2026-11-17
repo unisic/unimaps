@@ -18,9 +18,9 @@
   import { distinctRoutes } from "@/lib/client/journey";
   import { gzmStopKey } from "@/lib/shared/gzm-stop-key";
   import { startAlertWatchers } from "@/lib/client/alerts";
-  import { CITY, GZM_LOADING, getPageCity, withCity } from "@/lib/client/city";
+  import { CITY, GZM_LOADING, cityToOffer, declineOffer, getPageCity, offerDeclined, switchCity, withCity, type City } from "@/lib/client/city";
   import { prefetchFavoriteTimetables } from "@/lib/client/timetable";
-  import { buildSearch, loadSavedLines, parseUrlState, saveLines, type UrlState } from "@/lib/client/urlState";
+  import { buildSearch, parseUrlState, type UrlState } from "@/lib/client/urlState";
   import { schedTripKey, vehicleTripKey } from "@/lib/shared/departures";
   import type {
     ConnectionItinerary,
@@ -45,10 +45,8 @@
   import CitySheet from "@/components/CitySheet.svelte";
   import ConnectionsModal from "@/components/ConnectionsModal.svelte";
   import type { ConnectionsModalProps } from "@/components/ConnectionsModal.svelte";
-  import RustNotice from "@/components/RustNotice.svelte";
   import Toast from "@/components/Toast.svelte";
-  import LineFilterChip from "@/components/LineFilterChip.svelte";
-  import LocateButton from "@/components/LocateButton.svelte";
+    import LocateButton from "@/components/LocateButton.svelte";
   import NearbyButton from "@/components/NearbyButton.svelte";
   import LineLayer from "@/components/LineLayer.svelte";
   import LineView from "@/components/LineView.svelte";
@@ -260,14 +258,6 @@
   let cardOpen: string | null = null;
   /* deep link parsed exactly once, before any state settles */
   const initialUrl: UrlState = parseUrlState(window.location.search);
-  /* line names shown on the map; null = no filter (all vehicles), seeded from
-     the ?lines= deep link, else from the filter remembered in this browser */
-  let lineFilter = $state.raw<ReadonlySet<string> | null>(
-    (() => {
-      const lines = initialUrl.lines ?? loadSavedLines(city);
-      return lines ? new Set(lines) : null;
-    })(),
-  );
   let operatorFilter = $state<"all" | "kb" | "mzk">("all");
   /* generation counter: every async trip step re-checks it, so a newer open (or a close) cancels an older one */
   let tripSeq = 0;
@@ -375,6 +365,34 @@
     if (!toast) return;
     const t = setTimeout(() => (toast = null), 6000);
     return () => clearTimeout(t);
+  });
+
+  /* the rider is in another city than the open one: offer the switch, once per page load and never a declined pair */
+  let cityOffer = $state<City | null>(null);
+  let offerMade = false;
+  function offerCityAt(lat: number, lon: number) {
+    const c = offerMade ? null : cityToOffer(lat, lon, city);
+    if (!c) return;
+    offerMade = true;
+    if (!offerDeclined(city, c)) cityOffer = c;
+  }
+  $effect(() => {
+    const p = geo.pos;
+    if (p) untrack(() => offerCityAt(p.lat, p.lon));
+  });
+  onMount(() => {
+    // location already allowed: one coarse fix just for this check, no watch (the blue dot stays the rider's tap)
+    void navigator.permissions
+      ?.query({ name: "geolocation" })
+      .then((perm) => {
+        if (perm.state !== "granted") return;
+        navigator.geolocation.getCurrentPosition(
+          (p) => offerCityAt(p.coords.latitude, p.coords.longitude),
+          () => {},
+          { maximumAge: 600_000, timeout: 10_000 },
+        );
+      })
+      .catch(() => {});
   });
 
   function closeTrip() {
@@ -735,11 +753,6 @@
     handleSelectStop(s, { fly: true });
   }
 
-  /* search bar focus handle */
-  function handleFocusSearch() {
-    searchRef.current?.focus();
-  }
-
   /* connections modal ("Wyszukaj połączenie") */
   function openConnModal() {
     connModalOpen = true;
@@ -942,31 +955,6 @@
     operatorFilter = f;
   }
 
-  /* line filter: toggling a line on also frames its live vehicles */
-  function toggleLineFilter(line: string) {
-    const adding = !lineFilter?.has(line);
-    const next = new Set(lineFilter ?? []);
-    if (next.has(line)) next.delete(line);
-    else next.add(line);
-    lineFilter = next.size ? next : null;
-    if (adding && map) {
-      const vs = vehicles.filter((v) => v.line === line);
-      if (vs.length) {
-        map.fitBounds(L.latLngBounds(vs.map((v): [number, number] => [v.lat, v.lon])), {
-          padding: [60, 60],
-          maxZoom: 14,
-          ...panMotion(0.8),
-        });
-      }
-    }
-  }
-  function clearLineFilter() {
-    lineFilter = null;
-  }
-  const filterLines = $derived(lineFilter ? [...lineFilter] : null);
-  $effect(() => {
-    saveLines(filterLines, city);
-  });
 
   /* ---- deep links: URL -> state (hydration) and state -> URL (sync) ----
      Plain History API: all URL work below runs in effects/listeners over plain
@@ -1036,7 +1024,6 @@
     const stopDesig = selectedStop?.designator ?? null;
     const execId = tripExecId;
     const isStatic = tripIsStatic;
-    const lines = filterLines;
     const prev = st.prevDepth;
     const prevOverlays = st.prevOverlays;
     st.prevDepth = depth;
@@ -1059,7 +1046,6 @@
       stop: stopDesig,
       exec: execId,
       trip: staticId,
-      lines,
       map: m && c ? { lat: c.lat, lon: c.lng, zoom: m.getZoom() } : urlState.map,
     };
     const search = withCity(buildSearch(urlState), city);
@@ -1170,14 +1156,13 @@
     }
   }
 
-  /* "Wyczyść widok": close every sheet and drop the line filter */
+  /* "Wyczyść widok": close every sheet */
   function handleClearView() {
     closeTrip();
     closeJourney();
     selectedStop = null;
     nearbyOpen = false;
     openLine = null;
-    lineFilter = null;
   }
 
   function handleCloseAll() {
@@ -1568,17 +1553,6 @@
     };
   });
 
-  const lineFilterCount = $derived.by(() => {
-    const f = lineFilter;
-    return f
-      ? vehicles.filter(
-          (v) =>
-            !v.agency &&
-            f.has(v.line) &&
-            (operatorFilter === "all" || (v.operator ?? "KB").toLowerCase() === operatorFilter),
-        ).length
-      : 0;
-  });
 </script>
 
 <div class="fixed inset-0 h-full w-full overflow-hidden bg-bg">
@@ -1586,14 +1560,14 @@
   {#if map}
     {#if !raster && tiles.kind === "vector"}
       {#key `${baseLayer}-${basemap.attempt}`}
-        <VectorBaseLayer {map} style={tiles.style} filter={tiles.filter} onStatus={handleBasemapStatus} />
+        <VectorBaseLayer {map} style={tiles.style} filter={tiles.filter} paint={tiles.paint} onStatus={handleBasemapStatus} />
       {/key}
     {/if}
-    <!-- an open trip shows only its own stops (TripLayer's circles open them) -->
+    <!-- an open trip or line shows only its own stops (TripLayer's / LineLayer's circles open them) -->
     <StopsLayer
       {map}
       stops={filteredStops}
-      visible={stopsVisible && trip == null}
+      visible={stopsVisible && trip == null && openLine == null}
       onSelect={handleSelectStop}
       minZoom={cityCfg.stopMinZoom}
     />
@@ -1621,7 +1595,7 @@
       {vehicles}
       onVehicleClick={handleVehicleClick}
       hidden={trip != null || journey != null || preview != null}
-      {lineFilter}
+      line={openLine}
       {operatorFilter}
     />
   {/if}
@@ -1648,9 +1622,7 @@
     onLocate={paletteLocate}
     onPickStop={pickStopFly}
     onPickVehicle={handleVehicleClick}
-    {lineFilter}
     onOpenLine={openLineView}
-    onClearLineFilter={clearLineFilter}
     onClearView={handleClearView}
     onOpenNearby={openNearby}
     onPickPlace={openPlace}
@@ -1660,15 +1632,6 @@
     onOperatorFilter={setOperatorFilter}
     onShowToast={showToast}
   />
-
-  {#if filterLines}
-    <LineFilterChip
-      lines={filterLines}
-      visibleCount={lineFilterCount}
-      onClear={clearLineFilter}
-      onOpenPalette={handleFocusSearch}
-    />
-  {/if}
 
   <LocateButton status={geo.status} following={geoFollowing} onLocate={handleLocate} />
   <RouteButton onClick={openConnModal} />
@@ -1695,9 +1658,18 @@
 
   {#if toast}
     <Toast text={toast} onClose={closeToast} />
+  {:else if cityOffer}
+    {@const offered = cityOffer}
+    <Toast
+      text={`Jesteś w okolicy: ${CITY[offered].name}.`}
+      actionLabel="Przełącz"
+      onAction={() => switchCity(offered)}
+      onClose={() => {
+        declineOffer(city, offered);
+        cityOffer = null;
+      }}
+    />
   {/if}
-
-  <RustNotice />
 
   <!-- the fleet card (charts and all) loads only when a vehicle card is first opened -->
   {#if cardSide}
@@ -1776,10 +1748,10 @@
         {desktop}
         line={openLine}
         {city}
-        filterActive={!!lineFilter?.has(openLine.name)}
-        onToggleFilter={toggleLineFilter}
+        {vehicles}
         {resolveStop}
         onSelectStop={pickStopFly}
+        onPickVehicle={handleVehicleClick}
         onVariant={setLineVariant}
         onClose={closeLine}
       />

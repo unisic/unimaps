@@ -21,6 +21,7 @@ struct Variant {
     headsign: String,
     stops: Vec<LineStop>,
     times: Vec<Vec<i32>>,
+    trips: Vec<String>,
     shape: Option<String>,
 }
 
@@ -78,6 +79,7 @@ pub fn handle<T: ZbTransport>(
                 headsign: v.headsign,
                 stops: v.stops,
                 times: v.times,
+                trips: v.trips,
                 shape,
             }
         })
@@ -126,6 +128,7 @@ pub async fn get_bb<T: BbKinds>(req: &ApiRequest, bb: &'static Bb<T>) -> Respons
                 headsign: v.headsign,
                 stops: v.stops,
                 times: v.times,
+                trips: v.trips,
             }
         })
         .collect();

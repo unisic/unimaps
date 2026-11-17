@@ -333,6 +333,21 @@ body {
 }
 .stop-mk-sign.stop-mk-station svg { width: 14px; height: 14px; }
 
+/* a zbiorkom pole's post number over its marker: clear of a caret pointing north */
+.stop-mk-pole {
+  position: absolute; bottom: calc(100% - 2px); left: 50%;
+  transform: translateX(-50%);
+  padding: 1.5px 4px;
+  border-radius: 5px;
+  background: var(--color-gzm);
+  color: #fff;
+  box-shadow: 0 0 0 1.5px #fff, 0 1px 4px rgba(0, 0, 0, 0.4);
+  font: 700 10px/1 var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  z-index: 4;
+}
+
 /* one wrapper per bearing, rotating about the icon centre (17px = half of 34) */
 .stop-dir {
   position: absolute; inset: 0;
@@ -436,10 +451,10 @@ body {
   font-size: 12px;
   padding: 5px 10px;
 }
-/* vehicle card: 6 px around the 8 px line badge, so the corners stay concentric */
+/* vehicle card: 8 px around the 6 px line badge, so the corners stay concentric */
 .leaflet-tooltip.kb-tooltip.veh-tooltip {
   border-radius: 14px;
-  padding: 6px 12px 6px 6px;
+  padding: 8px 10px 8px 8px;
 }
 /* the map's long-press / right-click menu ("Trasa stąd / dotąd") */
 .leaflet-popup.kb-popup .leaflet-popup-content-wrapper {
@@ -513,7 +528,6 @@ body {
   color: var(--color-text-faint) !important;
   font-size: 10px !important;
   padding: 2px 8px !important;
-  backdrop-filter: blur(4px);
   border-radius: 0 8px 0 0;
 }
 .leaflet-control-attribution a { color: var(--color-text-mute) !important; }

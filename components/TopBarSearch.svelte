@@ -13,9 +13,7 @@
     onLocate: () => void;
     onPickStop: (s: Stop) => void;
     onPickVehicle: (v: Vehicle) => void;
-    lineFilter: ReadonlySet<string> | null;
     onOpenLine: (l: LineInfo) => void;
-    onClearLineFilter: () => void;
     onToggleStops: () => void;
     stopsVisible: boolean;
     baseLayer: BaseLayerId;
@@ -44,7 +42,7 @@
   }
 
   type Item =
-    | { kind: "line"; l: LineInfo; live: number; active: boolean }
+    | { kind: "line"; l: LineInfo; live: number }
     | { kind: "veh"; v: Vehicle }
     | { kind: "fleet"; f: FleetVehicleSummary; liveVeh?: Vehicle }
     | { kind: "stop"; s: Stop; fav: boolean; dist: number | null }
@@ -150,11 +148,9 @@
   import {
     BugIcon,
     BusIcon,
-    CheckIcon,
     DropIcon,
     EyeIcon,
     EyeSlashIcon,
-    FunnelSimpleXIcon,
     GpsFixIcon,
     HeartIcon,
     LeafIcon,
@@ -183,9 +179,7 @@
     onLocate,
     onPickStop,
     onPickVehicle,
-    lineFilter,
     onOpenLine,
-    onClearLineFilter,
     onToggleStops,
     stopsVisible,
     baseLayer,
@@ -398,15 +392,6 @@
         },
       },
     ];
-    if (lineFilter && lineFilter.size > 0) {
-      list.push({
-        id: "clear-filter",
-        label: "Wyczyść filtr linii",
-        keywords: "wyczysc filtr linie pokaz wszystkie",
-        icon: FunnelSimpleXIcon,
-        run: onClearLineFilter,
-      });
-    }
     return list;
   });
 
@@ -432,7 +417,7 @@
       else if (nt && nt.includes(q)) rank = 4.2;
       if (rank < 0) continue;
       lineHits.push({
-        item: { kind: "line", l, live: liveByLine.get(l.name) ?? 0, active: !!lineFilter?.has(l.name) },
+        item: { kind: "line", l, live: liveByLine.get(l.name) ?? 0 },
         rank,
         label: l.name,
         dist: Infinity,
@@ -465,15 +450,15 @@
 
       if (rank < 0) continue;
 
-      const isTaborHit = isExactSide || isSidePrefix || isModelMatch || isFeatureMatch;
-      const key = isTaborHit ? (v.side_number ? `side-${v.side_number}` : `veh-${v.id}`) : `${v.line} ${v.headsign}`;
+      /* one row per vehicle: every running course of a line can be picked, not one per direction */
+      const key = v.side_number ? `side-${v.side_number}` : `veh-${v.id}`;
       if (seenVehKeys.has(key)) continue;
       seenVehKeys.add(key);
 
       vehHits.push({
         item: { kind: "veh", v },
         rank,
-        label: v.side_number ? `#${v.side_number} ${v.line} ${v.headsign}` : `${v.line} ${v.headsign}`,
+        label: `${v.line} ${v.headsign} ${v.side_number ?? ""}`,
         dist: Infinity,
       });
     }
@@ -560,7 +545,8 @@
 
     const groups: Section[] = [
       { title: "Linie", ...finish(lineHits, CAP.lines) },
-      { title: "Pojazdy na żywo", ...finish(vehHits, CAP.vehs) },
+      /* a line typed in full lists all of its courses (GZM's busiest ran 16 at once, measured) */
+      { title: "Pojazdy na żywo", ...finish(vehHits, Math.max(CAP.vehs, vehHits.filter((h) => h.rank === 0.5).length)) },
       { title: "Tabor MZK", ...finish(fleetHits, CAP.fleet) },
       { title: "Przystanki", ...finish(stopHits, CAP.stops, true) },
       { title: "Adresy i miejsca", items: addrItems, best: 3.5 },
@@ -801,12 +787,9 @@
                         <span class="mt-0.5 block truncate text-[11.5px] tabular-nums text-text-faint">
                           {opLabel(it.l.operator || "KB")} · {it.live > 0
                             ? `${it.live} ${wozPlural(it.live)} na trasie`
-                            : "brak wozów na trasie"}{it.active ? " · filtr aktywny" : ""}
+                            : "brak wozów na trasie"}
                         </span>
                       </span>
-                      {#if it.active}
-                        <Icon icon={CheckIcon} class="shrink-0 text-[15px] text-primary" />
-                      {/if}
                     {:else if it.kind === "veh"}
                       <LineBadge line={it.v.line || "?"} operator={it.v.operator} />
                       <span class="min-w-0 flex-1">

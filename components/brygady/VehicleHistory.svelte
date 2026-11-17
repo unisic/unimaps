@@ -1,23 +1,40 @@
 <script lang="ts">
+  import type { Snippet } from "svelte";
+
   import LineBadge from "@/components/ui/LineBadge.svelte";
   import { cityOfSide, isNotFound } from "@/lib/client/fleet";
   import { useVehicleHistory } from "@/lib/client/fleet.svelte";
   import { compareLineNames, type FleetHistoryDay, type FleetVehicleDetail } from "@/lib/shared/fleet";
 
   import Block from "./Block.svelte";
-  import { clockFromSecs, fmtDay, fmtDelayMin, fmtKm, pluralPl } from "./common";
+  import { clockFromSecs, fmtDay, fmtDelayMin, fmtKm, MORE_BUTTON, pluralPl, SERIES_FILL } from "./common";
   import DelayBadge from "./DelayBadge.svelte";
   import { CHEVRON_DOWN } from "./icons";
   import Svg from "./Svg.svelte";
 
-  /** The vehicle's past days from /api/fleet/<side>/history: which courses it ran, day by day. */
-  let { side, operator }: { side: string; operator: FleetVehicleDetail["operator"] } = $props();
+  /** "Dzień po dniu" lists this many days, the newest, until asked for the rest: MZK keeps 28 */
+  const DAYS_HEAD = 7;
+  /** "Linie w ostatnich dniach" draws this many lines and names this many more in one sentence */
+  const LINES_HEAD = 8;
+  const LINES_NAMED = 12;
+
+  /** The vehicle's past days from /api/fleet/<side>/history: which courses it ran, day by day.
+   *  `tile` is the card's own figure tile (label, value, note). */
+  let {
+    side,
+    operator,
+    tile,
+  }: { side: string; operator: FleetVehicleDetail["operator"]; tile: Snippet<[label: string, value: string, note: string]> } = $props();
 
   const uid = $props.id();
   // svelte-ignore state_referenced_locally
   const history = useVehicleHistory(() => side, cityOfSide(side));
   const days = $derived(history.data?.days ?? []);
   let open = $state.raw<ReadonlySet<string>>(new Set());
+  let allDays = $state(false);
+  const courses = $derived(days.reduce((n, d) => n + d.courses.length, 0));
+  /** "07.11" of "2026-11-07" */
+  const shortDay = (date: string) => `${date.slice(8)}.${date.slice(5, 7)}`;
 
   function toggle(date: string) {
     const next = new Set(open);
@@ -31,6 +48,11 @@
     const m = new Map<string, number>();
     for (const d of days) for (const c of d.courses) m.set(c.lineName, (m.get(c.lineName) ?? 0) + 1);
     return [...m].sort((a, b) => b[1] - a[1] || compareLineNames(a[0], b[0]));
+  });
+  const restLines = $derived.by(() => {
+    const rest = lineCounts.slice(LINES_HEAD);
+    const named = rest.slice(0, LINES_NAMED).map(([line, n]) => `${line} (${n})`);
+    return rest.length > LINES_NAMED ? `${named.join(", ")} i ${rest.length - LINES_NAMED} innych` : named.join(", ");
   });
 
   function daySummary(d: FleetHistoryDay) {
@@ -52,12 +74,37 @@
   }
 </script>
 
-<Block title="Historia kursów">
+{#if days.length > 0}
+  <dl class="grid grid-cols-2 gap-2">
+    {@render tile("Dni z kursami", String(days.length), `od ${shortDay(days[days.length - 1].date)} do ${shortDay(days[0].date)}`)}
+    {@render tile("Kursy", String(courses), `na ${lineCounts.length} ${lineCounts.length === 1 ? "linii" : "liniach"}`)}
+  </dl>
+
+  <Block title="Linie w ostatnich dniach">
+    {#snippet aside()}
+      <span class="text-[12px] text-text-mute">kursy</span>
+    {/snippet}
+    <ul class="flex flex-col gap-2">
+      {#each lineCounts.slice(0, LINES_HEAD) as [line, n] (line)}
+        <li class="grid grid-cols-[3.25rem_minmax(0,1fr)_4.75rem] items-center gap-2.5">
+          <span><LineBadge {line} {operator} /></span>
+          <span aria-hidden="true" class="h-2.5 overflow-hidden rounded-full bg-surface-3">
+            <span class="block h-full rounded-full" style:width="{(n / lineCounts[0][1]) * 100}%" style:background={SERIES_FILL}></span>
+          </span>
+          <span class="text-right text-[12.5px] text-text-mute tabular-nums">{n} {pluralPl(n, "kurs", "kursy", "kursów")}</span>
+        </li>
+      {/each}
+    </ul>
+    {#if restLines}
+      <p class="mt-3 text-[12.5px] leading-[1.45] text-text-mute tabular-nums">Pozostałe: {restLines}.</p>
+    {/if}
+  </Block>
+{/if}
+
+<Block title="Dzień po dniu">
   {#snippet aside()}
-    {#if days.length > 0}
-      <span class="text-[12px] text-text-mute tabular-nums">
-        {days.length} {pluralPl(days.length, "dzień", "dni", "dni")}
-      </span>
+    {#if days.length > 1}
+      <span class="text-[12px] text-text-mute">najnowsze na górze</span>
     {/if}
   {/snippet}
   {#if history.error && !isNotFound(history.error) && !history.data}
@@ -69,19 +116,8 @@
       {history.data.complete ? "Brak zapisanych kursów z poprzednich dni." : "Wczytywanie zapisanych dni…"}
     </p>
   {:else}
-    <ul class="mb-3 flex flex-wrap gap-x-3 gap-y-2" aria-label="Linie w zapisanych dniach">
-      {#each lineCounts.slice(0, 10) as [line, n] (line)}
-        <li class="flex items-center gap-1.5">
-          <LineBadge {line} {operator} />
-          <span class="text-[12px] text-text-mute tabular-nums">{n}×</span>
-        </li>
-      {/each}
-      {#if lineCounts.length > 10}
-        <li class="self-center text-[12px] text-text-faint">i {lineCounts.length - 10} innych</li>
-      {/if}
-    </ul>
     <ul class="-mx-1 divide-y divide-hairline">
-      {#each days as d (d.date)}
+      {#each allDays ? days : days.slice(0, DAYS_HEAD) as d (d.date)}
         {@const s = daySummary(d)}
         {@const isOpen = open.has(d.date)}
         <li>
@@ -143,6 +179,11 @@
         </li>
       {/each}
     </ul>
+    {#if days.length > DAYS_HEAD}
+      <button type="button" aria-expanded={allDays} onclick={() => (allDays = !allDays)} class={MORE_BUTTON}>
+        {allDays ? `Pokaż tylko ${DAYS_HEAD} ostatnich dni` : `Pokaż wszystkie dni (${days.length})`}
+      </button>
+    {/if}
     {#if !history.data.complete}
       <p class="mt-2 text-[12px] text-text-faint">Wczytywanie starszych dni…</p>
     {/if}

@@ -123,6 +123,8 @@ export interface LineVariant {
   stops: Array<{ id: string; name: string; lat?: number; lon?: number }>;
   /** per trip, by first departure: the departure at each stop in minutes from midnight (past 1440 after midnight) */
   times: number[][];
+  /** router trip id of each `times` row (KB GTFS trip id, `mzk:<course>:<variant>`, `<city>:<trip>`) */
+  trips: string[];
 }
 
 export interface LineResponse {

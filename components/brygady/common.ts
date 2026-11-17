@@ -65,6 +65,10 @@ export const DELAY_TEXT: Record<DelayClass, string> = {
 };
 
 /** One-series bars (magnitude) and their track. */
+/** the full-width toggle under a list cut to its head ("Pokaż wcześniejsze kursy (12)") */
+export const MORE_BUTTON =
+  "mt-3 min-h-12 w-full rounded-[14px] border border-hairline bg-surface-2 text-center text-[13.5px] font-semibold text-primary transition-colors hover:bg-tint/5";
+
 export const SERIES_FILL = "#7a6be8";
 export const TRACK_FILL = "var(--color-surface-3)";
 export const SURFACE = "var(--color-surface)";

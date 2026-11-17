@@ -8,6 +8,7 @@
   let {
     big = false,
     current = false,
+    expanded,
     icon,
     name,
     sub,
@@ -16,6 +17,8 @@
   }: {
     big?: boolean;
     current?: boolean;
+    /** set on a card that opens rows below it */
+    expanded?: boolean;
     icon: Snippet;
     name: string;
     sub: string;
@@ -28,6 +31,7 @@
   type="button"
   onclick={onClick}
   aria-current={current ? "true" : undefined}
+  aria-expanded={expanded}
   class={big
     ? "flex w-full items-center gap-4 rounded-2xl border border-hairline bg-surface p-4 text-left transition-colors hover:bg-surface-2"
     : `tap flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left transition-colors hover:bg-tint/5 ${current ? "bg-tint/5" : ""}`}

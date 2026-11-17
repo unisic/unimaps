@@ -1241,6 +1241,10 @@ pub struct LineVariant {
     /// per trip, by first departure: the departure at each stop in minutes from the date's midnight (past 1440
     /// after midnight)
     pub times: Vec<Vec<i32>>,
+    /// router trip id of each `times` row, so the line view can place a live vehicle on its pattern; on the wire
+    /// only through the route's own body (skipped here: the Node-parity vectors pin this struct's JSON)
+    #[serde(skip)]
+    pub trips: Vec<String>,
 }
 
 /// The line view: each stop pattern `line` of `operator` ("KB" | "MZK" | "GZM") runs on `date` (most trips first)
@@ -1293,6 +1297,7 @@ pub fn line_timetable(line: &str, operator: &str, date: &str, idx: Option<&Route
                         })
                         .collect(),
                     times: trips.iter().map(|t| t.dep.iter().map(|&d| mins(d)).collect()).collect(),
+                    trips: trips.iter().map(|t| t.trip_id.clone()).collect(),
                 }
             })
             .collect(),

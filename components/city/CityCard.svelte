@@ -9,12 +9,14 @@
     id,
     big,
     current,
+    expanded,
     trailing,
     onClick,
   }: {
     id: City;
     big?: boolean;
     current?: boolean;
+    expanded?: boolean;
     trailing?: Snippet;
     onClick: () => void;
   } = $props();
@@ -22,7 +24,7 @@
   const c = $derived(CITY[id]);
 </script>
 
-<Card {big} {current} name={c.name} sub={c.agency} {trailing} {onClick}>
+<Card {big} {current} {expanded} name={c.name} sub={c.agency} {trailing} {onClick}>
   {#snippet icon()}
     {#if c.logo}
       <img

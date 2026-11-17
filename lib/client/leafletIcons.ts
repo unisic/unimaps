@@ -105,13 +105,17 @@ const STOP_ARROW_SVG = `<svg class="stop-arrow-svg" viewBox="32 60 192 116" aria
  * - Regular stops: an operator-coloured disc with a bus glyph and one caret
  *   per road direction, rotated about the disc centre.
  * - Bus stations (D.A.): a larger rounded square, no carets (multi-directional hub).
+ * - A zbiorkom pole carries its post number over the marker.
  */
 export function makeStopIcon(
   dirs: number[] = [],
   isStation = false,
   operator?: "KB" | "MZK" | "GZM" | "BOTH",
+  /** the pole's post number ("02"), drawn over the marker */
+  pole = "",
 ): L.DivIcon {
   const opClass = stopOpClass(operator);
+  const poleTag = pole ? `<span class="stop-mk-pole">${escapeHtml(pole)}</span>` : "";
   const stnTitle =
     operator === "BOTH"
       ? "Komunikacja Beskidzka / MZK"
@@ -123,7 +127,7 @@ export function makeStopIcon(
   if (isStation) {
     return L.divIcon({
       className: `stop-mk-icon${opClass}`,
-      html: `<div class="stop-mk is-station${opClass}"><span class="stop-mk-sign stop-mk-station" title="${stnTitle}">${BUS_SVG}</span></div>`,
+      html: `<div class="stop-mk is-station${opClass}"><span class="stop-mk-sign stop-mk-station" title="${stnTitle}">${BUS_SVG}</span>${poleTag}</div>`,
       iconSize: [34, 34],
       iconAnchor: [17, 17],
     });
@@ -138,7 +142,7 @@ export function makeStopIcon(
 
   return L.divIcon({
     className: `stop-mk-icon${opClass}`,
-    html: `<div class="stop-mk${opClass}">${arrows}<span class="stop-mk-sign">${BUS_SVG}</span></div>`,
+    html: `<div class="stop-mk${opClass}">${arrows}<span class="stop-mk-sign">${BUS_SVG}</span>${poleTag}</div>`,
     iconSize: [34, 34],
     iconAnchor: [17, 17],
   });

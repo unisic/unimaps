@@ -17,6 +17,7 @@ use crate::http::{Body, full, json};
 use crate::js;
 use crate::rate_limit::client_ip;
 
+pub mod announce;
 pub mod announcements;
 pub mod connections;
 pub mod fleet;
@@ -45,6 +46,7 @@ pub mod vehicles;
 /// The API routes, one per server/api module.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Route {
+    Announce,
     Announcements,
     Connections,
     Fleet,
@@ -79,6 +81,7 @@ pub fn match_route(path: &str) -> Option<(Route, &str)> {
     // no route has more than 3 segments: a 4th only has to make the slice match nothing
     let segs: Vec<&str> = rest.split('/').take(4).collect();
     Some(match segs.as_slice() {
+        ["announce", name] if !name.is_empty() => (Announce, *name),
         ["announcements"] => (Announcements, ""),
         ["connections"] => (Connections, ""),
         ["fleet"] => (Fleet, ""),
@@ -191,6 +194,7 @@ pub async fn dispatch_owned(route: Route, path: &str, req: ApiRequest) -> Respon
 async fn run_owned(route: Route, req: ApiRequest) -> Response<Body> {
     let bb = crate::poller_singleton::bb();
     match route {
+        Route::Announce => announce::get_owned(&req).await,
         Route::Announcements => match announcements::get(&req).await {
             Some(res) => res,
             None => announcements::get_bb(&req, bb).await,
@@ -293,6 +297,7 @@ mod tests {
         use Route::*;
         let get_only = "GET, HEAD, OPTIONS";
         for (path, route, allow_text) in [
+            ("/api/announce/p-next", Announce, get_only),
             ("/api/announcements", Announcements, get_only),
             ("/api/connections", Connections, get_only),
             ("/api/fleet", Fleet, get_only),
@@ -334,6 +339,8 @@ mod tests {
             "/api/push/news/x",
             "/api/status/1",
             "/api/nope",
+            "/api/announce",
+            "/api/announce/a/b",
             "/api/stop//departures",
             "/api/fleet/1/history/x",
             "/api/trip/a/b",
