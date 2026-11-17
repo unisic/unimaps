@@ -2,9 +2,12 @@
   import CityCard from "@/components/city/CityCard.svelte";
   import OtherCities from "@/components/city/OtherCities.svelte";
   import OthersCard from "@/components/city/OthersCard.svelte";
+  import ErrorState from "@/components/ui/ErrorState.svelte";
   import { vehiclesFetcher } from "@/lib/client/api";
   import { preload } from "@/lib/client/swr.svelte";
-  import { CITY, cityUrl, loadCity, resolveCity, saveCity, setPageCity, type City } from "@/lib/client/city";
+  import Icon from "@/components/Icon.svelte";
+  import { GpsFixIcon } from "@/components/icon-paths";
+  import { CITY, cityAt, cityUrl, loadCity, resolveCity, saveCity, setPageCity, type City } from "@/lib/client/city";
 
   /** The first vehicles request leaves with the city choice, alongside MapApp's chunk (Leaflet + MapLibre), not after
    *  it; useVehicles takes the request over. A failure is the poll's to report then. */
@@ -32,6 +35,22 @@
     setPageCity(city);
     warm(city);
     choice = city;
+  }
+
+  /* "Znajdź moje miasto": one coarse fix, asked for by the tap (never on load), picks the city */
+  let detect = $state<"idle" | "locating" | "none" | "failed">("idle");
+  function detectCity(): void {
+    if (!navigator.geolocation) return void (detect = "failed");
+    detect = "locating";
+    navigator.geolocation.getCurrentPosition(
+      (p) => {
+        const c = cityAt(p.coords.latitude, p.coords.longitude);
+        if (c) choose(c);
+        else detect = "none";
+      },
+      () => (detect = "failed"),
+      { maximumAge: 600_000, timeout: 10_000 },
+    );
   }
 
   const title = $derived(
@@ -65,6 +84,22 @@
         <p class="mt-1 text-sm text-text-mute">Mapa pojazdów na żywo. Miasto zmienisz później w menu.</p>
       </div>
       <div class="flex flex-col gap-3">
+        <button
+          type="button"
+          onclick={detectCity}
+          disabled={detect === "locating"}
+          class="tap flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl bg-brand px-4 text-[15px] font-semibold text-on-brand hover:bg-brand-hi disabled:opacity-60"
+        >
+          <Icon icon={GpsFixIcon} class="text-[18px]" />
+          {detect === "locating" ? "Szukam…" : "Znajdź moje miasto"}
+        </button>
+        {#if detect === "none" || detect === "failed"}
+          <p role="status" class="-mt-1 text-center text-[13px] text-text-mute">
+            {detect === "none"
+              ? "W Twojej okolicy nie mamy jeszcze żadnego miasta. Wybierz z listy."
+              : "Nie udało się ustalić lokalizacji. Wybierz miasto z listy."}
+          </p>
+        {/if}
         <CityCard id="bb" big onClick={() => choose("bb")} />
         <CityCard id="gzm" big onClick={() => choose("gzm")} />
         {#if others}
@@ -86,5 +121,10 @@
     {@render splash()}
   {:then { default: MapApp }}
     <MapApp />
+  {:catch}
+    <!-- a chunk that never arrives (offline, a deploy replaced it, an ad blocker) would leave a blank page -->
+    <div class="flex h-dvh w-full items-center justify-center bg-bg">
+      <ErrorState message="Nie udało się wczytać mapy." onRetry={() => location.reload()} />
+    </div>
   {/await}
 {/if}

@@ -65,6 +65,10 @@ export const DELAY_TEXT: Record<DelayClass, string> = {
 };
 
 /** One-series bars (magnitude) and their track. */
+/** the full-width toggle under a list cut to its head ("Pokaż wcześniejsze kursy (12)") */
+export const MORE_BUTTON =
+  "mt-3 min-h-12 w-full rounded-[14px] border border-hairline bg-surface-2 text-center text-[13.5px] font-semibold text-primary transition-colors hover:bg-tint/5";
+
 export const SERIES_FILL = "#7a6be8";
 export const TRACK_FILL = "var(--color-surface-3)";
 export const SURFACE = "var(--color-surface)";
@@ -128,6 +132,21 @@ export function pluralPl(n: number, one: string, few: string, many: string): str
   const d = n % 10;
   const h = n % 100;
   return d >= 2 && d <= 4 && (h < 12 || h > 14) ? few : many;
+}
+
+/* GZM has no static fleet list: its totalFleet counts the vehicles seen since the day's rollover */
+
+/** "152 pojazdy MZK", "838 pojazdów GZM widzianych dziś" */
+export function fleetCount(city: FleetCity, n: number): string {
+  const seen = city === "gzm" ? ` ${pluralPl(n, "widziany", "widziane", "widzianych")} dziś` : "";
+  return `${fmtInt(n)} ${pluralPl(n, "pojazd", "pojazdy", "pojazdów")} ${FLEET_CITY[city].short}${seen}`;
+}
+
+/** the genitive after "z": "151 pojazdów", "838 pojazdów widzianych dziś" */
+export function fleetOf(city: FleetCity, n: number): string {
+  const one = n === 1;
+  const seen = city === "gzm" ? (one ? " widzianego dziś" : " widzianych dziś") : "";
+  return `${fmtInt(n)} ${one ? "pojazdu" : "pojazdów"}${seen}`;
 }
 
 export const FUEL_LABEL: Record<FleetFuelType, string> = {

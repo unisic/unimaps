@@ -10,11 +10,25 @@ Live public transport map for Bielsko-Biała, Metropolia GZM and 53 other Polish
 
 </div>
 
-<img width="1280" height="800" alt="Unimaps: live buses in Bielsko-Biała" src="docs/screenshot.png" />
+<img width="1600" height="1000" alt="Unimaps: live buses in Bielsko-Biała" src="docs/screenshot.png" />
 
-Every running vehicle with its delay, stop departure boards, trip timelines on road geometry and a journey
-planner. One Rust process (`backend/`, binary `unimaps`) serves the map (a static Svelte 5 build), the JSON API
-and a GTFS-Realtime feed, and runs the pollers. No database.
+One Rust process (`backend/`, binary `unimaps`) serves the map (a static Svelte 5 build), the JSON API and a
+GTFS-Realtime feed, and runs the pollers. No database.
+
+## What it does
+
+- **Live map.** Every running vehicle with its delay, moving along the road between two position fixes.
+- **Stops and trips.** Departure boards, day timetables, and a trip's timeline with its route on road geometry.
+- **Connection search.** From a stop, an address or a point on the map, with transfers, live delays, walking
+  times along footpaths and the alternative routes drawn on the map.
+- **Line view.** A line's two directions as a stop diagram with its vehicles on it.
+- **Fleet (`/brygady`).** Vehicles of MZK Bielsko-Biała and Metropolia GZM by model, punctuality through the
+  day, each vehicle's past courses.
+
+| | |
+|---|---|
+| <img alt="A trip: timeline and route with stop names" src="docs/trip.png" /> | <img alt="Connection search with the routes on the map" src="docs/connections.png" /> |
+| <img alt="Line view: stop diagram and the line on the map" src="docs/line.png" /> | <img alt="Fleet page: punctuality through the day" src="docs/fleet.png" /> |
 
 ## Run
 
@@ -46,7 +60,9 @@ feeds, road shapes, fleet history) lives in `output/`.
 | `/api/gtfs-rt.pb` | GTFS-Realtime VehiclePositions (Bielsko-Biała) |
 | `/api/stops` | stop list |
 | `/api/stop/:id/departures`, `/api/stop/:id/timetable` | departures, day timetable |
-| `/api/connections?from=&to=` | journey planner |
+| `/api/line?name=` | a line's stop patterns and departures |
+| `/api/connections?from=&to=` | connection search |
+| `/api/fleet`, `/api/fleet/:side` | fleet list, one vehicle's card |
 | `/api/health` | status and scan counters |
 
 List endpoints take `?city=<slug>` (`gzm`, `warsaw`, …, see `lib/shared/cities.json`); without it they answer
@@ -60,7 +76,7 @@ Independent project, not affiliated with any operator.
 - MZK Bielsko-Biała: [rozklady.bielsko.pl](https://rozklady.bielsko.pl)
 - Metropolia GZM: ZTM / Metropolia GZM (CC BY), plus SDIP
 - Other cities: each operator's GTFS and vehicle positions, via zbiorkom
-- Map: © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors, tiles by [OpenFreeMap](https://openfreemap.org); routing: [OSRM](https://project-osrm.org)
+- Map: © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors, tiles by [OpenFreeMap](https://openfreemap.org); routing: [OSRM](https://project-osrm.org); address search: [Photon](https://photon.komoot.io)
 - Vehicle photos: [phototrans.eu](https://phototrans.eu), each credited to its author
 
 What the app keeps about you: `/prywatnosc` (Polish).

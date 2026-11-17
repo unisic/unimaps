@@ -30,12 +30,6 @@ describe("Site Performance & Optimization Invariants", () => {
         "TopBar must include clearance below safe-area to prevent entering topbar blur",
       );
 
-      const filterSrc = fs.readFileSync(path.resolve(process.cwd(), "components/LineFilterChip.svelte"), "utf-8");
-      assert.ok(
-        filterSrc.includes("calc(env(safe-area-inset-top,0px)+0.75rem+56px)"),
-        "LineFilterChip must stay aligned with TopBar",
-      );
-
       const toastSrc = fs.readFileSync(path.resolve(process.cwd(), "components/Toast.svelte"), "utf-8");
       assert.ok(
         toastSrc.includes("calc(env(safe-area-inset-top,0px)+0.75rem+60px)"),

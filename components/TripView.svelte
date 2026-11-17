@@ -19,6 +19,8 @@
     LeafIcon,
     LightningIcon,
     SnowflakeIcon,
+    SpeakerHighIcon,
+    SpeakerSlashIcon,
     TicketIcon,
     WheelchairIcon,
     XIcon,
@@ -29,7 +31,7 @@
   import LineBadge from "@/components/ui/LineBadge.svelte";
   import ModeIcon from "@/components/ui/ModeIcon.svelte";
   import RequestStopTag from "@/components/ui/RequestStopTag.svelte";
-  import ShareButton from "@/components/ui/ShareButton.svelte";
+  import ShareLink from "@/components/ui/ShareLink.svelte";
   import {
     ALERT_LEADS,
     MAX_ALERTS,
@@ -63,8 +65,9 @@
     withoutRequestTail,
   } from "@/lib/client/format";
   import { serverNowSec } from "@/lib/client/api";
-  import { CITY, cityOfId } from "@/lib/client/city";
-  import { findActiveStop, type ActiveStopResult } from "@/lib/client/geo";
+  import { announceStop, announcer, setAnnouncer } from "@/lib/client/announcer";
+  import { CITY, cityOfId, getPageCity } from "@/lib/client/city";
+  import { findActiveStop, haversineMeters, type ActiveStopResult } from "@/lib/client/geo";
   import type {
     LatLng,
     Stop,
@@ -73,6 +76,7 @@
     Vehicle,
     VehicleFeatures,
   } from "@/lib/client/types";
+  import { stopToAnnounce, type Announced } from "@/lib/shared/announce";
   import { progressFromVehicle, stopAlongFor } from "@/lib/shared/trip-progress";
 
   let {
@@ -305,6 +309,32 @@
 
   const vti = $derived(activeStop.index);
   const isAtStop = $derived(activeStop.isAtStop);
+
+  /* Stop announcements, GZM only (the recordings are ZTM's): `vti` is the stop being served while `isAtStop`, else
+     the one being approached. Leaving the previous stop says "Następny przystanek" + `vti`; pulling into it (within
+     ANNOUNCE_NEAR_M of the pole) or standing at it repeats its name alone (`stopToAnnounce`: each once per stop, so a
+     poll that leaves `vti` alone or a fix jittering across the radius stays silent). Switching on applies the same
+     rule at once (the tap is also the browser's audio unlock). Off on unmount (the sheet is keyed by trip.gen), so
+     the next trip never starts announcing on its own */
+  const ANNOUNCE_NEAR_M = 50;
+  const canAnnounce = $derived(getPageCity() === "gzm" && isLiveWithLoc && !notStarted);
+  // shortcut: straight-line metres, so a stop beside an earlier part of a loop is repeated early; use stopAlong - dist_m if that bites
+  const nearStop = $derived.by(() => {
+    if (!canAnnounce || isAtStop) return isAtStop;
+    const v = liveVeh ?? trip.vehicle;
+    const s = stopByIndex.get(rawTimes[vti]?.index ?? -1);
+    return !!v && !!s && haversineMeters(v.lat, v.lon, s.lat, s.lon) <= ANNOUNCE_NEAR_M;
+  });
+  let announced: Announced = { next: -1, name: -1 };
+  $effect(() => {
+    if (!announcer.current) return void (announced = { next: -1, name: -1 });
+    const say = canAnnounce ? stopToAnnounce(announced, vti, isAtStop, nearStop) : null;
+    if (!say) return;
+    announced = say === "next" ? { ...announced, next: vti } : { next: Math.max(announced.next, vti), name: vti };
+    const name = rawTimes[vti]?.stop_name;
+    if (name) untrack(() => announceStop(name, say === "next"));
+  });
+  $effect(() => () => setAnnouncer(false));
 
   /* "Wysiadam tu": one notification when the bus stands at the stop before the chosen one or has left it.
      Page-only (needs the poll), so the screen stays on while armed; the sheet is keyed by trip.gen, a new
@@ -548,6 +578,15 @@
             <Icon icon={CrosshairIcon} weight={following ? "fill" : "bold"} />
           </IconButton>
         {/if}
+        {#if canAnnounce}
+          <IconButton
+            label={announcer.current ? "Wyłącz zapowiedzi przystanków" : "Włącz zapowiedzi przystanków"}
+            pressed={announcer.current}
+            onClick={() => setAnnouncer(!announcer.current)}
+          >
+            <Icon icon={announcer.current ? SpeakerHighIcon : SpeakerSlashIcon} weight={announcer.current ? "fill" : "bold"} />
+          </IconButton>
+        {/if}
         {#if hasDetails}
           <button
             bind:this={menuBtn}
@@ -587,7 +626,7 @@
             <span class="flex-1 text-[12px] font-medium text-text-faint">
               {isGzmTrip ? CITY[zbCity].name : isMzkTrip ? "MZK Bielsko-Biała" : "Komunikacja Beskidzka"}
             </span>
-            <ShareButton title={`Linia ${trip.line}${direction ? ` → ${displayStopName(direction)}` : ""}`} />
+            <ShareLink title={`Linia ${trip.line}${direction ? ` → ${displayStopName(direction)}` : ""}`} />
           </div>
           {#if cardSide}
             {@const side = cardSide}

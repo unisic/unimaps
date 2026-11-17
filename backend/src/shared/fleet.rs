@@ -474,6 +474,12 @@ pub struct FleetSummaryItem {
     /// line of the latest course, for a vehicle that is not running now
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_line_name: Option<String>,
+    /// production year, from the phototrans index
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub built: Option<i64>,
+    /// the newest phototrans thumbnail, "<dir>/<photo id>" (the client's `ptThumbUrl` builds the URL)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thumb: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -584,8 +590,8 @@ pub fn compare_line_names(a: &str, b: &str) -> Ordering {
     js::compare_pl(a, b)
 }
 
-/// Free-text vehicle search: a side number ("#23..." by prefix, or 3+ digits; GZM: the printed label, or the whole
-/// "<company>_<fleet>" key), a line number (exact, current or served today: "1" must not list side numbers 100-199),
+/// Free-text vehicle search: a side number ("#23..." by prefix, 3+ digits by prefix, or a shorter one typed whole: "95"
+/// finds #95; GZM: the printed label, or the whole "<company>_<fleet>" key), a line number (exact, current or served today: "1" must not list side numbers 100-199),
 /// a GZM brigade as printed ("69/1", "69/" for all of line 69), or a folded substring of model, producer, company,
 /// direction, stop. A bare number is never a text substring: "1" means line 1, not every "Urbino 12".
 pub fn matches_fleet_query(v: &FleetSummaryItem, query: &str) -> bool {
@@ -602,7 +608,8 @@ pub fn matches_fleet_query(v: &FleetSummaryItem, query: &str) -> bool {
         return true;
     }
     let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
-    if digits(bare) && (hash || bare.len() >= 3) && v.label.as_deref().unwrap_or(&v.side_number).starts_with(bare) {
+    let side = v.label.as_deref().unwrap_or(&v.side_number);
+    if digits(bare) && (hash || bare.len() >= 3 || side == bare) && side.starts_with(bare) {
         return true;
     }
     // MZK side numbers are digits only: a "_" query can only be a GZM key

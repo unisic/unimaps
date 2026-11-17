@@ -9,16 +9,18 @@
   import { peekVehicleAnimator } from "@/lib/client/vehicleAnimator";
   import { holdWakeLock } from "@/lib/client/wakeLock";
   import { adjustStopRoutePoint, injectDetourPoints } from "@/lib/client/detours";
-  import { arrivedSecs, operatorColor, tripTimeMatchesStop } from "@/lib/client/format";
+  import { arrivedSecs, displayStopName, operatorColor, tripTimeMatchesStop } from "@/lib/client/format";
   import { makeJourneyPinIcon, makeStopPingIcon, makeUserLocationIcon } from "@/lib/client/leafletIcons";
   import { panMotion } from "@/lib/client/motion";
   import { focusPoint, glideTo, installSmoothZoom, isCovered, isLockMove, lockOn } from "@/lib/client/mapGlide";
   import { getSmoothMotion } from "@/lib/client/smoothMotion";
-  import { haversineMeters } from "@/lib/client/geo";
+  import { haversineMeters, nearestStops } from "@/lib/client/geo";
+  import { distinctRoutes } from "@/lib/client/journey";
+  import { gzmStopKey } from "@/lib/shared/gzm-stop-key";
   import { startAlertWatchers } from "@/lib/client/alerts";
-  import { CITY, GZM_LOADING, getPageCity, withCity } from "@/lib/client/city";
+  import { CITY, GZM_LOADING, cityToOffer, declineOffer, getPageCity, offerDeclined, switchCity, withCity, type City } from "@/lib/client/city";
   import { prefetchFavoriteTimetables } from "@/lib/client/timetable";
-  import { buildSearch, loadSavedLines, parseUrlState, saveLines, type UrlState } from "@/lib/client/urlState";
+  import { buildSearch, parseUrlState, type UrlState } from "@/lib/client/urlState";
   import { schedTripKey, vehicleTripKey } from "@/lib/shared/departures";
   import type {
     ConnectionItinerary,
@@ -42,10 +44,9 @@
   import AnnouncementsSheet from "@/components/AnnouncementsSheet.svelte";
   import CitySheet from "@/components/CitySheet.svelte";
   import ConnectionsModal from "@/components/ConnectionsModal.svelte";
-  import RustNotice from "@/components/RustNotice.svelte";
+  import type { ConnectionsModalProps } from "@/components/ConnectionsModal.svelte";
   import Toast from "@/components/Toast.svelte";
-  import LineFilterChip from "@/components/LineFilterChip.svelte";
-  import LocateButton from "@/components/LocateButton.svelte";
+    import LocateButton from "@/components/LocateButton.svelte";
   import NearbyButton from "@/components/NearbyButton.svelte";
   import LineLayer from "@/components/LineLayer.svelte";
   import LineView from "@/components/LineView.svelte";
@@ -59,6 +60,7 @@
   import StopsLayer from "@/components/StopsLayer.svelte";
   import TripLayer from "@/components/TripLayer.svelte";
   import JourneyLayer from "@/components/JourneyLayer.svelte";
+  import JourneyAltLayer from "@/components/JourneyAltLayer.svelte";
   import VectorBaseLayer from "@/components/VectorBaseLayer.svelte";
 
   const NOT_STARTED = "Pojazd jeszcze nie wyruszył";
@@ -74,7 +76,8 @@
   /** the CSS glide of a vehicle marker to its next fix (globals.css .veh-marker) */
   const MARKER_GLIDE_MS = 900;
   /* road geometry is routed server-side with OSRM: its usage policy asks for credit */
-  const OSRM_CREDIT = 'Trasy: <a href="https://project-osrm.org/" target="_blank" rel="noopener noreferrer">OSRM</a>';
+  const OSRM_CREDIT =
+    'Trasy: <a href="https://project-osrm.org/" target="_blank" rel="noopener noreferrer">OSRM</a>, piesze: <a href="https://routing.openstreetmap.de/about.html" target="_blank" rel="noopener noreferrer">FOSSGIS</a> (<a href="https://www.openstreetmap.org/fixthemap" target="_blank" rel="noopener noreferrer">popraw mapę</a>)';
 
   type LastRequest =
     | { kind: "live"; execId: string; tripId: string | number | null; stop: Stop | null }
@@ -205,6 +208,14 @@
   let trip = $state.raw<TripView | null>(null);
   let journey = $state.raw<JourneyViewState | null>(null);
   let journeySeq = 0;
+  /* desktop search results: the hovered (else first) card's route drawn under the panel */
+  let preview = $state.raw<JourneyViewState | null>(null);
+  let previewTimer: ReturnType<typeof setTimeout> | undefined;
+  /* the last search's results: every distinct route is drawn muted under the chosen one (desktop search panel, an
+     opened journey), a click on one opens it */
+  let results = $state.raw<ConnectionItinerary[]>([]);
+  /* the list the first preview was drawn for: that preview draws in, the hovered ones after it swap at once */
+  let previewedFor: ConnectionItinerary[] | null = null;
   let vehMeta = $state.raw<Vehicle | null>(null);
   /* no style picked yet: the basemap follows the app theme (set by the pre-paint script in the page head) */
   const themeLayer = (): BaseLayerId => (document.documentElement.dataset.theme === "light" ? "kb" : "dark");
@@ -229,6 +240,7 @@
   const searchRef: { current: TopBarSearchHandle | null } = { current: null };
   let connModalOpen = $state(false);
   let connInitialFrom = $state.raw<Stop | null>(null);
+  let connInitialPoint = $state.raw<ConnectionsModalProps["initialPoint"]>(null);
   let annOpen = $state(false);
   let cityOpen = $state(false);
   /* "W pobliżu": the bottom of the sheet stack. A stop, trip or journey opened from it covers it
@@ -246,14 +258,6 @@
   let cardOpen: string | null = null;
   /* deep link parsed exactly once, before any state settles */
   const initialUrl: UrlState = parseUrlState(window.location.search);
-  /* line names shown on the map; null = no filter (all vehicles), seeded from
-     the ?lines= deep link, else from the filter remembered in this browser */
-  let lineFilter = $state.raw<ReadonlySet<string> | null>(
-    (() => {
-      const lines = initialUrl.lines ?? loadSavedLines(city);
-      return lines ? new Set(lines) : null;
-    })(),
-  );
   let operatorFilter = $state<"all" | "kb" | "mzk">("all");
   /* generation counter: every async trip step re-checks it, so a newer open (or a close) cancels an older one */
   let tripSeq = 0;
@@ -361,6 +365,34 @@
     if (!toast) return;
     const t = setTimeout(() => (toast = null), 6000);
     return () => clearTimeout(t);
+  });
+
+  /* the rider is in another city than the open one: offer the switch, once per page load and never a declined pair */
+  let cityOffer = $state<City | null>(null);
+  let offerMade = false;
+  function offerCityAt(lat: number, lon: number) {
+    const c = offerMade ? null : cityToOffer(lat, lon, city);
+    if (!c) return;
+    offerMade = true;
+    if (!offerDeclined(city, c)) cityOffer = c;
+  }
+  $effect(() => {
+    const p = geo.pos;
+    if (p) untrack(() => offerCityAt(p.lat, p.lon));
+  });
+  onMount(() => {
+    // location already allowed: one coarse fix just for this check, no watch (the blue dot stays the rider's tap)
+    void navigator.permissions
+      ?.query({ name: "geolocation" })
+      .then((perm) => {
+        if (perm.state !== "granted") return;
+        navigator.geolocation.getCurrentPosition(
+          (p) => offerCityAt(p.coords.latitude, p.coords.longitude),
+          () => {},
+          { maximumAge: 600_000, timeout: 10_000 },
+        );
+      })
+      .catch(() => {});
   });
 
   function closeTrip() {
@@ -701,6 +733,8 @@
        stop sheet actually shows */
     closeTrip();
     closeJourney();
+    // desktop: the search panel leaves the map usable, and what is opened there takes its place
+    closeConnModal();
     selectedStop = s;
     const m = map;
     if (!m) return;
@@ -719,11 +753,6 @@
     handleSelectStop(s, { fly: true });
   }
 
-  /* search bar focus handle */
-  function handleFocusSearch() {
-    searchRef.current?.focus();
-  }
-
   /* connections modal ("Wyszukaj połączenie") */
   function openConnModal() {
     connModalOpen = true;
@@ -731,6 +760,17 @@
   function closeConnModal() {
     connModalOpen = false;
     connInitialFrom = null;
+    connInitialPoint = null;
+  }
+
+  /* "Trasa stąd / dotąd" from a point on the map, named after the stop next to it */
+  function planFromPoint(at: L.LatLng, end: "from" | "to") {
+    const near = nearestStops(stops, { lat: at.lat, lon: at.lng }, 1)[0];
+    // a GTFS city's pole number ("Katowice Rynek 2T") says nothing to a rider: the stop's name, as the search lists it
+    const name = near && (city === "bb" ? near.s.name : gzmStopKey(near.s.name));
+    const label = near && near.dist <= 300 ? `Punkt przy: ${displayStopName(name)}` : "Punkt na mapie";
+    connInitialPoint = { end, at: { lat: at.lat, lon: at.lng, label } };
+    connModalOpen = true;
   }
 
   function handlePlanRoute(s: Stop) {
@@ -738,14 +778,15 @@
     connModalOpen = true;
   }
 
-  async function handleSelectConnection(conn: ConnectionItinerary, selectedLegIdx: number | null = null) {
-    closeTrip();
-    selectedStop = null;
+  /* road geometry per itinerary, shared by the hover preview and the opened journey; the WeakMap
+     lets it go with the result list */
+  const routedLegs = new WeakMap<ConnectionItinerary, Promise<JourneyLegResolved[]>>();
+  /* the settled ones, readable at once: a hovered card whose route is drawn already shows it without a straight-line frame */
+  const routedNow = new WeakMap<ConnectionItinerary, JourneyLegResolved[]>();
 
-    const gen = ++journeySeq;
+  function resolveLegs(conn: ConnectionItinerary): JourneyLegResolved[] {
     const { byId, byDesig } = untrack(() => stopsMaps);
-
-    const legsResolved: JourneyLegResolved[] = conn.legs.map((leg) => {
+    return conn.legs.map((leg) => {
       const color = operatorColor(leg.operator, leg.line);
       if (leg.stops) {
         leg.stops.forEach((st) => {
@@ -764,25 +805,14 @@
         lineColor: color,
       };
     });
+  }
 
-    const firstLeg = conn.legs[0];
-    const lastLeg = conn.legs[conn.legs.length - 1];
-    const fromStop = firstLeg ? (byId.get(firstLeg.fromStopId) ?? byDesig.get(firstLeg.fromStopId) ?? null) : null;
-    const toStop = lastLeg ? (byId.get(lastLeg.toStopId) ?? byDesig.get(lastLeg.toStopId) ?? null) : null;
-
-    journey = {
-      gen,
-      itinerary: conn,
-      fromStop,
-      toStop,
-      legs: legsResolved,
-      selectedLegIdx,
-      status: "routing",
-    };
-
+  function routeLegs(conn: ConnectionItinerary, legsResolved: JourneyLegResolved[]): Promise<JourneyLegResolved[]> {
+    const hit = routedLegs.get(conn);
+    if (hit) return hit;
     // Road geometry for all legs in parallel: the server-stored trip shape
     // sliced between the leg's first and last stop, browser OSRM otherwise
-    const routedLegs = await Promise.all(
+    const p = Promise.all(
       legsResolved.map(async (lr) => {
         const legStops = lr.leg.stops ?? [];
         const pts: LatLng[] = legStops.filter((s) => s.lat && s.lon).map((s) => [s.lat!, s.lon!] as LatLng);
@@ -801,9 +831,97 @@
         };
       }),
     );
+    routedLegs.set(conn, p);
+    void p.then((r) => routedNow.set(conn, r));
+    return p;
+  }
 
-    if (gen !== journeySeq) return;
-    if (journey?.gen === gen) journey = { ...journey, legs: routedLegs, status: "ready" };
+  /* hovering down the list fires a preview per card: draw only where the pointer settles */
+  function handlePreviewConnection(conn: ConnectionItinerary | null) {
+    clearTimeout(previewTimer);
+    if (!conn) {
+      preview = null;
+      return;
+    }
+    previewTimer = setTimeout(async () => {
+      const done = routedNow.get(conn);
+      const legs = done ?? resolveLegs(conn);
+      const gen = ++journeySeq;
+      const enter = previewedFor !== results;
+      previewedFor = results;
+      const base: JourneyViewState = {
+        gen,
+        itinerary: conn,
+        fromStop: null,
+        toStop: null,
+        legs,
+        selectedLegIdx: null,
+        status: done ? "ready" : "routing",
+        enter,
+      };
+      preview = base;
+      if (done) return;
+      const routed = await routeLegs(conn, legs);
+      if (preview === base) preview = { ...base, legs: routed, status: "ready" };
+    }, 120);
+  }
+
+  const MAX_ALT_ROUTES = 6;
+  const altVisible = $derived(journey != null || (desktop && connModalOpen));
+  const altList = $derived(altVisible ? distinctRoutes(results, MAX_ALT_ROUTES) : []);
+  let alts = $state.raw<{ it: ConnectionItinerary; legs: JourneyLegResolved[] }[]>([]);
+  $effect(() => {
+    const next = altList.map((it) => ({ it, legs: routedNow.get(it) ?? resolveLegs(it) }));
+    alts = next;
+    let live = true;
+    for (const { it, legs } of next) {
+      if (legs.some((l) => l.routed)) continue;
+      void routeLegs(it, legs).then((r) => {
+        if (live) alts = alts.map((a) => (a.it === it ? { it, legs: r } : a));
+      });
+    }
+    return () => {
+      live = false;
+    };
+  });
+
+  function handlePickAlt(it: ConnectionItinerary) {
+    if (journey?.itinerary === it) return;
+    closeConnModal();
+    void handleSelectConnection(it, null);
+  }
+
+  async function handleSelectConnection(conn: ConnectionItinerary, selectedLegIdx: number | null = null) {
+    closeTrip();
+    selectedStop = null;
+    // the search's preview drew this route already: it stays, no second entrance
+    const shown = preview?.itinerary === conn;
+    handlePreviewConnection(null);
+
+    const gen = ++journeySeq;
+    const { byId, byDesig } = untrack(() => stopsMaps);
+    const legsResolved = resolveLegs(conn);
+
+    const firstLeg = conn.legs[0];
+    const lastLeg = conn.legs[conn.legs.length - 1];
+    const fromStop = firstLeg ? (byId.get(firstLeg.fromStopId) ?? byDesig.get(firstLeg.fromStopId) ?? null) : null;
+    const toStop = lastLeg ? (byId.get(lastLeg.toStopId) ?? byDesig.get(lastLeg.toStopId) ?? null) : null;
+
+    const done = routedNow.get(conn);
+    journey = {
+      gen,
+      itinerary: conn,
+      fromStop,
+      toStop,
+      legs: done ?? legsResolved,
+      selectedLegIdx,
+      status: done ? "ready" : "routing",
+      enter: !shown,
+    };
+    if (done) return;
+
+    const routed = await routeLegs(conn, legsResolved);
+    if (journey?.gen === gen) journey = { ...journey, legs: routed, status: "ready" };
   }
 
   /* announcements sheet ("Utrudnienia") */
@@ -837,31 +955,6 @@
     operatorFilter = f;
   }
 
-  /* line filter: toggling a line on also frames its live vehicles */
-  function toggleLineFilter(line: string) {
-    const adding = !lineFilter?.has(line);
-    const next = new Set(lineFilter ?? []);
-    if (next.has(line)) next.delete(line);
-    else next.add(line);
-    lineFilter = next.size ? next : null;
-    if (adding && map) {
-      const vs = vehicles.filter((v) => v.line === line);
-      if (vs.length) {
-        map.fitBounds(L.latLngBounds(vs.map((v): [number, number] => [v.lat, v.lon])), {
-          padding: [60, 60],
-          maxZoom: 14,
-          ...panMotion(0.8),
-        });
-      }
-    }
-  }
-  function clearLineFilter() {
-    lineFilter = null;
-  }
-  const filterLines = $derived(lineFilter ? [...lineFilter] : null);
-  $effect(() => {
-    saveLines(filterLines, city);
-  });
 
   /* ---- deep links: URL -> state (hydration) and state -> URL (sync) ----
      Plain History API: all URL work below runs in effects/listeners over plain
@@ -931,7 +1024,6 @@
     const stopDesig = selectedStop?.designator ?? null;
     const execId = tripExecId;
     const isStatic = tripIsStatic;
-    const lines = filterLines;
     const prev = st.prevDepth;
     const prevOverlays = st.prevOverlays;
     st.prevDepth = depth;
@@ -954,7 +1046,6 @@
       stop: stopDesig,
       exec: execId,
       trip: staticId,
-      lines,
       map: m && c ? { lat: c.lat, lon: c.lng, zoom: m.getZoom() } : urlState.map,
     };
     const search = withCity(buildSearch(urlState), city);
@@ -1065,14 +1156,13 @@
     }
   }
 
-  /* "Wyczyść widok": close every sheet and drop the line filter */
+  /* "Wyczyść widok": close every sheet */
   function handleClearView() {
     closeTrip();
     closeJourney();
     selectedStop = null;
     nearbyOpen = false;
     openLine = null;
-    lineFilter = null;
   }
 
   function handleCloseAll() {
@@ -1103,6 +1193,7 @@
        would take the nearby sheet's entry with it */
     nearbyOpen = false;
     openLine = null;
+    closeConnModal();
     vehMeta = v;
     if (Number.isFinite(v.lat) && Number.isFinite(v.lon)) zoomToVehicle(v, false);
     void openTripLive(v.id, null, null);
@@ -1203,6 +1294,33 @@
       expandAttribution();
       map = null;
       m.remove();
+    };
+  });
+
+  /* long-press (touch) or right-click on the map: a connection from or to that point */
+  $effect(() => {
+    const m = map;
+    if (!m) return;
+    const popup = L.popup({ className: "kb-popup", closeButton: false, offset: [0, -2], autoPanPadding: [16, 16] });
+    const onMenu = (e: L.LeafletMouseEvent) => {
+      const el = document.createElement("div");
+      el.className = "point-menu";
+      for (const [text, end] of [["Trasa stąd", "from"], ["Trasa dotąd", "to"]] as const) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.textContent = text;
+        b.onclick = () => {
+          m.closePopup(popup);
+          planFromPoint(e.latlng, end);
+        };
+        el.append(b);
+      }
+      popup.setLatLng(e.latlng).setContent(el).openOn(m);
+    };
+    m.on("contextmenu", onMenu);
+    return () => {
+      m.off("contextmenu", onMenu);
+      popup.remove();
     };
   });
 
@@ -1323,6 +1441,7 @@
     closeJourney();
     selectedStop = null;
     openLine = null;
+    closeConnModal();
     nearbyPlace = null;
     nearbyOpen = true;
     if (!geo.pos && geo.status !== "locating") geo.locate();
@@ -1334,6 +1453,7 @@
     closeJourney();
     selectedStop = null;
     openLine = null;
+    closeConnModal();
     nearbyPlace = g;
     nearbyOpen = true;
     flyToUser(g);
@@ -1345,6 +1465,7 @@
     closeJourney();
     selectedStop = null;
     nearbyOpen = false;
+    closeConnModal();
     lineVariant = null;
     openLine = l;
   }
@@ -1432,17 +1553,6 @@
     };
   });
 
-  const lineFilterCount = $derived.by(() => {
-    const f = lineFilter;
-    return f
-      ? vehicles.filter(
-          (v) =>
-            !v.agency &&
-            f.has(v.line) &&
-            (operatorFilter === "all" || (v.operator ?? "KB").toLowerCase() === operatorFilter),
-        ).length
-      : 0;
-  });
 </script>
 
 <div class="fixed inset-0 h-full w-full overflow-hidden bg-bg">
@@ -1450,19 +1560,27 @@
   {#if map}
     {#if !raster && tiles.kind === "vector"}
       {#key `${baseLayer}-${basemap.attempt}`}
-        <VectorBaseLayer {map} style={tiles.style} filter={tiles.filter} onStatus={handleBasemapStatus} />
+        <VectorBaseLayer {map} style={tiles.style} filter={tiles.filter} paint={tiles.paint} onStatus={handleBasemapStatus} />
       {/key}
     {/if}
-    <!-- an open trip shows only its own stops (TripLayer's circles open them) -->
+    <!-- an open trip or line shows only its own stops (TripLayer's / LineLayer's circles open them) -->
     <StopsLayer
       {map}
       stops={filteredStops}
-      visible={stopsVisible && trip == null}
+      visible={stopsVisible && trip == null && openLine == null}
       onSelect={handleSelectStop}
       minZoom={cityCfg.stopMinZoom}
     />
     <TripLayer {map} {trip} {desktop} {vehMeta} liveVehicle={liveTripVeh} onSelectStop={handleSelectStop} />
+    <JourneyAltLayer
+      {map}
+      routes={alts}
+      active={journey?.itinerary ?? preview?.itinerary ?? null}
+      fit={desktop && journey == null}
+      onPick={handlePickAlt}
+    />
     <JourneyLayer {map} {journey} {desktop} />
+    <JourneyLayer {map} journey={preview} {desktop} fit={false} />
     <LineLayer
       {map}
       line={openLine}
@@ -1476,8 +1594,8 @@
       {map}
       {vehicles}
       onVehicleClick={handleVehicleClick}
-      hidden={trip != null || journey != null}
-      {lineFilter}
+      hidden={trip != null || journey != null || preview != null}
+      line={openLine}
       {operatorFilter}
     />
   {/if}
@@ -1504,9 +1622,7 @@
     onLocate={paletteLocate}
     onPickStop={pickStopFly}
     onPickVehicle={handleVehicleClick}
-    {lineFilter}
     onOpenLine={openLineView}
-    onClearLineFilter={clearLineFilter}
     onClearView={handleClearView}
     onOpenNearby={openNearby}
     onPickPlace={openPlace}
@@ -1516,15 +1632,6 @@
     onOperatorFilter={setOperatorFilter}
     onShowToast={showToast}
   />
-
-  {#if filterLines}
-    <LineFilterChip
-      lines={filterLines}
-      visibleCount={lineFilterCount}
-      onClear={clearLineFilter}
-      onOpenPalette={handleFocusSearch}
-    />
-  {/if}
 
   <LocateButton status={geo.status} following={geoFollowing} onLocate={handleLocate} />
   <RouteButton onClick={openConnModal} />
@@ -1540,16 +1647,29 @@
     geoStatus={geo.status}
     onLocate={geo.locate}
     initialFrom={connInitialFrom}
+    initialPoint={connInitialPoint}
     onSelectStop={pickStopFly}
     onSelectConnection={handleSelectConnection}
+    onPreviewConnection={handlePreviewConnection}
+    onResults={(list) => (results = list)}
+    {desktop}
     {vehicles}
   />
 
   {#if toast}
     <Toast text={toast} onClose={closeToast} />
+  {:else if cityOffer}
+    {@const offered = cityOffer}
+    <Toast
+      text={`Jesteś w okolicy: ${CITY[offered].name}.`}
+      actionLabel="Przełącz"
+      onAction={() => switchCity(offered)}
+      onClose={() => {
+        declineOffer(city, offered);
+        cityOffer = null;
+      }}
+    />
   {/if}
-
-  <RustNotice />
 
   <!-- the fleet card (charts and all) loads only when a vehicle card is first opened -->
   {#if cardSide}
@@ -1628,10 +1748,10 @@
         {desktop}
         line={openLine}
         {city}
-        filterActive={!!lineFilter?.has(openLine.name)}
-        onToggleFilter={toggleLineFilter}
+        {vehicles}
         {resolveStop}
         onSelectStop={pickStopFly}
+        onPickVehicle={handleVehicleClick}
         onVariant={setLineVariant}
         onClose={closeLine}
       />

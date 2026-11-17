@@ -269,4 +269,15 @@ fn matches_side_numbers_lines_and_folded_text_without_line_side_confusion() {
     assert!(matches_fleet_query(&v, "zywiec"));
     assert!(matches_fleet_query(&v, "halcnow"));
     assert!(!matches_fleet_query(&v, "#urbino"));
+    let short = FleetSummaryItem {
+        side_number: "95".into(),
+        lines: vec![],
+        line_name: None,
+        ..v
+    };
+    assert!(matches_fleet_query(&short, "95"), "a short side number typed whole");
+    assert!(
+        !matches_fleet_query(&short, "9"),
+        "a bare 9 is line 9, not a prefix of #95"
+    );
 }

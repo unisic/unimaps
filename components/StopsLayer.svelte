@@ -12,6 +12,7 @@
   import { displayStopName, isBusStation } from "@/lib/client/format";
   import { makeStopIcon } from "@/lib/client/leafletIcons";
   import type { Stop } from "@/lib/client/types";
+  import { gzmStopKey } from "@/lib/shared/gzm-stop-key";
 
   /**
    * Bus-stop markers with GTFS-derived direction arrows. Shown only at
@@ -46,10 +47,12 @@
       const isStation = isBusStation(s.name, s);
       const dirs = isStation ? [] : (s.dirs ?? []);
       const op = s.operator ?? "KB";
-      const key = `${isStation ? "stn" : "stop"}-${op}-${dirs.length ? dirs.join(",") : "-"}`;
+      // a zbiorkom name ends in the pole's post number ("Katowice Dworzec 02"); BB names never carry one
+      const pole = op === "GZM" ? s.name.slice(gzmStopKey(s.name).length).trim() : "";
+      const key = `${isStation ? "stn" : "stop"}-${op}-${dirs.length ? dirs.join(",") : "-"}-${pole}`;
       let ic = iconCache.get(key);
       if (!ic) {
-        ic = makeStopIcon(dirs, isStation, op);
+        ic = makeStopIcon(dirs, isStation, op, pole);
         iconCache.set(key, ic);
       }
       return ic;

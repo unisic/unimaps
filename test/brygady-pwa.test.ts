@@ -61,9 +61,9 @@ describe("Brygady section: PWA & mobile UX", () => {
     assert.ok(!/router\.(push|replace|back)/.test(app), "plain History API, never the Next router");
   });
 
-  it("shares a vehicle with the native share sheet (clipboard fallback lives in ShareButton)", () => {
-    assert.ok(sheet.includes("<ShareButton"));
-    const ui = read("components/ui/ShareButton.svelte");
+  it("shares a vehicle with the native share sheet (clipboard fallback lives in ShareLink)", () => {
+    assert.ok(sheet.includes("<ShareLink"));
+    const ui = read("components/ui/ShareLink.svelte");
     assert.ok(ui.includes("navigator.share") && ui.includes("navigator.clipboard.writeText"));
   });
 

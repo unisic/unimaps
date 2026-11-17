@@ -105,13 +105,17 @@ const STOP_ARROW_SVG = `<svg class="stop-arrow-svg" viewBox="32 60 192 116" aria
  * - Regular stops: an operator-coloured disc with a bus glyph and one caret
  *   per road direction, rotated about the disc centre.
  * - Bus stations (D.A.): a larger rounded square, no carets (multi-directional hub).
+ * - A zbiorkom pole carries its post number over the marker.
  */
 export function makeStopIcon(
   dirs: number[] = [],
   isStation = false,
   operator?: "KB" | "MZK" | "GZM" | "BOTH",
+  /** the pole's post number ("02"), drawn over the marker */
+  pole = "",
 ): L.DivIcon {
   const opClass = stopOpClass(operator);
+  const poleTag = pole ? `<span class="stop-mk-pole">${escapeHtml(pole)}</span>` : "";
   const stnTitle =
     operator === "BOTH"
       ? "Komunikacja Beskidzka / MZK"
@@ -123,7 +127,7 @@ export function makeStopIcon(
   if (isStation) {
     return L.divIcon({
       className: `stop-mk-icon${opClass}`,
-      html: `<div class="stop-mk is-station${opClass}"><span class="stop-mk-sign stop-mk-station" title="${stnTitle}">${BUS_SVG}</span></div>`,
+      html: `<div class="stop-mk is-station${opClass}"><span class="stop-mk-sign stop-mk-station" title="${stnTitle}">${BUS_SVG}</span>${poleTag}</div>`,
       iconSize: [34, 34],
       iconAnchor: [17, 17],
     });
@@ -138,7 +142,7 @@ export function makeStopIcon(
 
   return L.divIcon({
     className: `stop-mk-icon${opClass}`,
-    html: `<div class="stop-mk${opClass}">${arrows}<span class="stop-mk-sign">${BUS_SVG}</span></div>`,
+    html: `<div class="stop-mk${opClass}">${arrows}<span class="stop-mk-sign">${BUS_SVG}</span>${poleTag}</div>`,
     iconSize: [34, 34],
     iconAnchor: [17, 17],
   });
@@ -162,6 +166,17 @@ export function makeUserLocationIcon(): L.DivIcon {
     html: '<span class="user-loc"><span class="user-loc-pulse"></span><span class="user-loc-head" hidden></span><span class="user-loc-dot"></span></span>',
     iconSize: [22, 22],
     iconAnchor: [11, 11],
+  });
+}
+
+/** The line's number on its leg of a journey, like LineBadge: one colour per operator, so on a
+ *  route with transfers it tells the legs apart. */
+export function makeJourneyLineIcon(line: string, color: string): L.DivIcon {
+  return L.divIcon({
+    className: "journey-pin-marker",
+    html: `<div class="journey-pin-wrap"><div class="journey-line-pill" style="background:${escapeHtml(color)}">${escapeHtml(line)}</div></div>`,
+    iconSize: [36, 22],
+    iconAnchor: [18, 11],
   });
 }
 

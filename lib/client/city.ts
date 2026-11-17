@@ -5,6 +5,7 @@
  * city marker; every other city adds `city=<slug>` and suffixes its storage keys with `:<slug>`.
  */
 
+import { haversineMeters } from "@/lib/client/geo";
 import {
   isZbSlug,
   ZB_CITIES,
@@ -119,6 +120,48 @@ export function setPageCity(c: City): void {
   if (color) document.documentElement.style.setProperty("--color-gzm", color);
 }
 export const getPageCity = (): City => pageCity;
+
+/* shortcut: a city's reach is guessed from its default zoom (a wider first view = a wider network: 13 = 7.5 km,
+   11 = 30 km, at most 40); read the feeds' stop extents instead once the client has them */
+const reachM = (c: City): number => Math.min(40_000, 15_000 * 2 ** (12 - CITY[c].zoom));
+const reachRatio = (lat: number, lon: number, c: City): number =>
+  haversineMeters(lat, lon, CITY[c].center[0], CITY[c].center[1]) / reachM(c);
+
+/** The city a position lies in: the nearest centre measured in the city's own reach (Jaworzno is closer to Oświęcim
+ *  than to Katowice, and still GZM), null when no city reaches it. */
+export function cityAt(lat: number, lon: number): City | null {
+  let best: City | null = null;
+  let bestRatio = 1;
+  for (const c of Object.keys(CITY) as City[]) {
+    const r = reachRatio(lat, lon, c);
+    if (r <= bestRatio) [best, bestRatio] = [c, r];
+  }
+  return best;
+}
+
+/** The city to offer a rider at this position instead of `current`; none while they are within `current`'s reach
+ *  (in Żywiec with Bielsko-Biała open nothing is offered: Komunikacja Beskidzka runs there too). */
+export function cityToOffer(lat: number, lon: number, current: City): City | null {
+  if (reachRatio(lat, lon, current) <= 1) return null;
+  return cityAt(lat, lon);
+}
+
+/* a declined offer is remembered as "<page city>><offered city>": the same pair is never offered again */
+const OFFER_KEY = "kb:cityOfferOff";
+export function offerDeclined(current: City, offered: City): boolean {
+  try {
+    return window.localStorage.getItem(OFFER_KEY) === `${current}>${offered}`;
+  } catch {
+    return false;
+  }
+}
+export function declineOffer(current: City, offered: City): void {
+  try {
+    window.localStorage.setItem(OFFER_KEY, `${current}>${offered}`);
+  } catch {
+    /* storage blocked: the offer shows again on the next load */
+  }
+}
 
 /** A storage key of the city: BB keeps the bare key, every other city suffixes its slug. */
 export const cityKey = (base: string, city: City): string =>

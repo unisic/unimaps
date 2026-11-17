@@ -7,7 +7,7 @@
 mod fleet;
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use fleet::{Clock, NOON_OCT4_MS, TmpDir, input, opts, stop, with};
 use serde_json::{Value, json};
@@ -324,8 +324,13 @@ fn sorts_by_company_then_fleet_number_numerically() {
     );
 }
 
+/// `fleet_list_body` keeps ONE body for the process: the tests that read it take turns, or another one's tracker
+/// evicts theirs between two calls.
+static LIST_CACHE_TEST: Mutex<()> = Mutex::new(());
+
 #[test]
 fn feeds_only_trips_with_a_course_key_and_caches_the_list_body_per_update() {
+    let _one = LIST_CACHE_TEST.lock().unwrap_or_else(PoisonError::into_inner);
     let clock = Clock::at(NOON_OCT4_MS);
     let t = gzm_tracker(&clock, None);
     feed_fleet(
@@ -640,6 +645,8 @@ fn keeps_its_output_unchanged_for_an_existing_style_input() {
                 "kmToday",
                 "lastSeenAt",
                 "lastLineName",
+                "built",
+                "thumb",
             ],
             &["notStarted", "lastLineName"]
         )
@@ -659,4 +666,69 @@ fn keeps_its_output_unchanged_for_an_existing_style_input() {
             "reason": "Pojazd kursuje dziś wahadłowo na linii 50, postój na pętli ok. 5 min.",
         }))
     );
+}
+
+#[test]
+fn route_gzips_the_whole_list_once_and_answers_a_matching_etag_with_a_bodiless_304() {
+    let _one = LIST_CACHE_TEST.lock().unwrap_or_else(PoisonError::into_inner);
+    use std::io::Read;
+
+    use flate2::read::GzDecoder;
+    use http_body_util::BodyExt;
+    use hyper::header::{HeaderMap, HeaderValue};
+    use unimaps::api::{ApiRequest, fleet as fleet_route};
+
+    let clock = Clock::at(NOON_OCT4_MS);
+    let t = gzm_tracker(&clock, None);
+    feed_fleet(&t, &[src()]);
+    let list = fleet_list_body(&t);
+    let body_of = |res: hyper::Response<unimaps::http::Body>| {
+        block_ready(res.into_body().collect())
+            .map(|b| b.to_bytes())
+            .unwrap_or_default()
+    };
+    let req = |headers: &[(&'static str, &str)]| {
+        let mut h = HeaderMap::new();
+        for (k, v) in headers {
+            h.insert(*k, HeaderValue::from_str(v).unwrap());
+        }
+        ApiRequest {
+            query: "?city=gzm".to_owned(),
+            headers: h,
+            ..Default::default()
+        }
+    };
+
+    let gz = fleet_route::handle(&req(&[("accept-encoding", "gzip, br")]), || &t).unwrap();
+    assert_eq!(gz.status(), 200);
+    assert_eq!(gz.headers()["content-encoding"], "gzip");
+    assert_eq!(gz.headers()["etag"], list.etag.as_str());
+    assert_eq!(gz.headers()["vary"], "Accept-Encoding");
+    assert!(gz.headers().contains_key("x-server-time"));
+    let mut plain = String::new();
+    GzDecoder::new(&body_of(gz)[..]).read_to_string(&mut plain).unwrap();
+    assert_eq!(plain, list.body);
+
+    let raw = fleet_route::handle(&req(&[]), || &t).unwrap();
+    assert!(raw.headers().get("content-encoding").is_none());
+    assert_eq!(body_of(raw), list.body.as_bytes());
+
+    let hit = fleet_route::handle(
+        &req(&[("if-none-match", &list.etag), ("accept-encoding", "gzip")]),
+        || &t,
+    )
+    .unwrap();
+    assert_eq!(hit.status(), 304);
+    assert!(hit.headers().get("content-encoding").is_none());
+    assert!(body_of(hit).is_empty());
+}
+
+/// drives a ready-on-first-poll future (a `Full` body) without a runtime
+fn block_ready<F: std::future::Future>(f: F) -> F::Output {
+    let mut f = std::pin::pin!(f);
+    let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+    match f.as_mut().poll(&mut cx) {
+        std::task::Poll::Ready(v) => v,
+        std::task::Poll::Pending => panic!("body not ready"),
+    }
 }

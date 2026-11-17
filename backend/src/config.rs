@@ -145,6 +145,23 @@ pub static GEOCODER_URL: LazyLock<Option<String>> = LazyLock::new(|| {
     (!v.is_empty() && !v.eq_ignore_ascii_case("off")).then(|| v.to_owned())
 });
 
+/// `KB_FOOT_PBF_URL`: the OSM extract the walking paths come from (`backend/src/footpaths.rs`), None when `off`.
+pub static FOOT_PBF_URL: LazyLock<Option<String>> = LazyLock::new(|| {
+    let v = env_str(
+        "KB_FOOT_PBF_URL",
+        "https://download.geofabrik.de/europe/poland/slaskie-latest.osm.pbf",
+    );
+    let v = v.trim_matches(crate::js::is_space);
+    (!v.is_empty() && !v.eq_ignore_ascii_case("off")).then(|| v.to_owned())
+});
+
+/// `KB_TOMTOM_KEY`: a TomTom API key for /api/traffic, None (route off) when unset or blank.
+pub static TOMTOM_KEY: LazyLock<Option<String>> = LazyLock::new(|| {
+    let v = env_str("KB_TOMTOM_KEY", "");
+    let v = v.trim_matches(crate::js::is_space);
+    (!v.is_empty()).then(|| v.to_owned())
+});
+
 /// Metropolia GZM and the other zbiorkom cities: feeds, positions, SDIP overlay, news.
 pub static GZM_GTFS_URL: LazyLock<String> = LazyLock::new(|| {
     env_str(
@@ -169,6 +186,13 @@ pub static GZM_NEWS_URL: LazyLock<Option<String>> = LazyLock::new(|| {
 });
 pub static FLEET_HISTORY_DAYS: LazyLock<i64> = LazyLock::new(|| env_int("KB_FLEET_HISTORY_DAYS", 365, 1));
 pub static GZM_DIR: LazyLock<String> = LazyLock::new(|| env_str("KB_GZM_DIR", &in_output("gzm")));
+/// Pre-recorded stop announcements, `<name>.mp3` (/api/announce).
+pub static GZM_ANNOUNCE_DIR: LazyLock<String> = LazyLock::new(|| {
+    env_str(
+        "KB_GZM_ANNOUNCE_DIR",
+        &std::path::Path::new(&*GZM_DIR).join("announce").to_string_lossy(),
+    )
+});
 pub static GZM_FLEET_HISTORY_DAYS: LazyLock<i64> = LazyLock::new(|| env_int("KB_GZM_FLEET_HISTORY_DAYS", 30, 1));
 pub static ZB_API_URL: LazyLock<String> = LazyLock::new(|| {
     env_str("KB_ZB_API_URL", "https://api.zbiorkom.live/api6-open")

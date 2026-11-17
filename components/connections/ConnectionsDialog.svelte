@@ -70,6 +70,13 @@
     { id: "arrive", label: "Przyjazd do", title: "Połączenia z przyjazdem najpóźniej o wybranej godzinie" },
   ];
   const WHEN_TODAY: { id: When; label: string; title?: string }[] = [{ id: "now", label: "Teraz" }, ...WHEN_LATER];
+  /** the most transfers a journey may take; the router caps at 4 */
+  const TRANSFER_CAPS = [
+    { id: "0", label: "Bez", title: "Tylko bezpośrednie połączenia" },
+    { id: "1", label: "do 1" },
+    { id: "2", label: "do 2" },
+    { id: "any", label: "Dowolnie" },
+  ] as const;
 
   /** The dialog mounts per opening: its last search stays here for the page's life, so a sheet closed by
    *  mistake reopens on it. Older than RESTORE_MS it opens fresh (the route is in "Ostatnie wyszukiwania");
@@ -89,14 +96,13 @@
     arriveBy: boolean;
     hour: string;
     minute: string;
-    directOnly: boolean;
+    maxTransfers: number | null;
     minTransfer5: boolean;
     sortBy: SortBy;
     avoidTypes: readonly string[];
     avoidLines: readonly string[];
     connections: ConnectionItinerary[] | null;
     answerLines: readonly string[];
-    expandedIdx: number | null;
   } | null = null;
 </script>
 
@@ -105,29 +111,27 @@
 
   import type { ConnectionsModalProps } from "@/components/ConnectionsModal.svelte";
   import TimeInput24H from "@/components/connections/TimeInput24H.svelte";
-  import { useLines } from "@/components/hooks.svelte";
+  import { useLines, useNow } from "@/components/hooks.svelte";
   import Icon from "@/components/Icon.svelte";
   import {
-    ArrowRightIcon,
     ArrowsClockwiseIcon,
     ArrowsDownUpIcon,
     BusIcon,
     CalendarBlankIcon,
     CaretDownIcon,
-    CaretRightIcon,
     CaretUpIcon,
     CheckIcon,
     CrosshairIcon,
     MapPinIcon,
-    MapTrifoldIcon,
     PathIcon,
     ShieldCheckIcon,
+    SlidersHorizontalIcon,
     XIcon,
   } from "@/components/icon-paths";
+  import JourneySummary from "@/components/connections/JourneySummary.svelte";
   import { CHIP, chip, CHIP_OFF } from "@/components/ui";
   import ErrorState from "@/components/ui/ErrorState.svelte";
   import IconButton from "@/components/ui/IconButton.svelte";
-  import LineBadge from "@/components/ui/LineBadge.svelte";
   import ModeIcon from "@/components/ui/ModeIcon.svelte";
   import Segmented from "@/components/ui/Segmented.svelte";
   import StarIcon from "@/components/ui/StarIcon.svelte";
@@ -136,15 +140,12 @@
   import { favorites } from "@/lib/client/favorites";
   import {
     addMinutesToHHMM,
-    delayClass,
-    delayTxt,
     displayStopName,
     formatDayLabel,
     hhmmFromSecs,
     normalizeText,
     nowHHMM,
     offsetDateISO,
-    przystanekPlural,
     todayISO,
   } from "@/lib/client/format";
   import { formatDistance, haversineMeters, nearestStops } from "@/lib/client/geo";
@@ -160,8 +161,12 @@
     onLocate,
     initialFrom,
     initialTo,
+    initialPoint,
     onSelectStop,
     onSelectConnection,
+    onPreviewConnection,
+    onResults,
+    desktop = false,
     vehicles,
   }: Omit<ConnectionsModalProps, "open"> = $props();
 
@@ -198,7 +203,9 @@
   let minute = $state(minute0);
 
   // Filters state
-  let directOnly = $state(false);
+  /** at most this many transfers; null = any, 0 = direct only */
+  let maxTransfers = $state<number | null>(null);
+  const directOnly = $derived(maxTransfers === 0);
   let minTransfer5 = $state(false);
   let sortBy = $state<SortBy>("departure");
   let avoidTypes = $state.raw<readonly string[]>([]);
@@ -206,8 +213,18 @@
   /* lines of the last answer: the "Pomiń" chips stay put while the next search runs */
   let answerLines = $state.raw<readonly string[]>([]);
   let walkM = $state(storedWalk());
+  /* the time or the options panel under their chips; folded, the results start right under the inputs */
+  let panel = $state<"time" | "options" | null>(null);
+  const togglePanel = (p: "time" | "options") => (panel = panel === p ? null : p);
 
   let connections = $state.raw<ConnectionItinerary[] | null>(null);
+  /* desktop: the hovered card's route (else the first one's) is drawn on the map beside the panel */
+  let hovered = $state.raw<ConnectionItinerary | null>(null);
+  const previewConn = $derived(
+    desktop && connections?.length ? (hovered && connections.includes(hovered) ? hovered : connections[0]) : null,
+  );
+  $effect(() => onPreviewConnection?.(previewConn));
+  $effect(() => onResults?.(connections ?? []));
   /* "warming": the server is still loading the GZM data (503) */
   let connErr = $state<false | "error" | "warming" | "busy">(false);
   const city = getPageCity();
@@ -217,17 +234,25 @@
     return MODES.filter((m) => types.has(m.type));
   });
   let searchTick = $state(0);
-  let expandedIdx = $state<number | null>(null);
 
   // svelte-ignore state_referenced_locally
   if (!initialFrom && !initialTo && last && last.day === todayStr && performance.now() - last.at < RESTORE_MS) {
     ({ fromStop, toStop, toGeo, dateMode, selectedDate, timeMode, arriveBy, hour, minute } = last);
-    ({ directOnly, minTransfer5, sortBy, avoidTypes, avoidLines } = last);
+    ({ maxTransfers, minTransfer5, sortBy, avoidTypes, avoidLines } = last);
     // a GPS origin follows the rider
     fromGeo = last.fromGeo && !last.fromGeo.label && geoPos ? { lat: geoPos.lat, lon: geoPos.lon } : last.fromGeo;
-    if (performance.now() - last.at < RESULTS_MS) ({ connections, answerLines, expandedIdx } = last);
+    if (performance.now() - last.at < RESULTS_MS) ({ connections, answerLines } = last);
     activeInput = !last.fromStop && !last.fromGeo ? "from" : !last.toStop && !last.toGeo ? "to" : null;
   }
+  // a point picked on the map fills one end; the other keeps the reopened search, so "stąd" then "dotąd" plans
+  // svelte-ignore state_referenced_locally
+  if (initialPoint) {
+    if (initialPoint.end === "from") [fromStop, fromGeo] = [null, initialPoint.at];
+    else [toStop, toGeo] = [null, initialPoint.at];
+    connections = null;
+    activeInput = !fromStop && !fromGeo ? "from" : !toStop && !toGeo ? "to" : null;
+  }
+  const clock = useNow();
 
   let fromInput: HTMLInputElement | undefined = $state();
   let toInput: HTMLInputElement | undefined = $state();
@@ -265,6 +290,7 @@
     document.addEventListener("keydown", onKey);
     return () => {
       document.removeEventListener("keydown", onKey);
+      onPreviewConnection?.(null);
       last = {
         at: performance.now(),
         day: todayStr,
@@ -278,14 +304,13 @@
         arriveBy,
         hour,
         minute,
-        directOnly,
+        maxTransfers,
         minTransfer5,
         sortBy,
         avoidTypes,
         avoidLines,
         connections,
         answerLines,
-        expandedIdx,
       };
     };
   });
@@ -311,6 +336,14 @@
   const toParam = $derived(toGeo ? geoParam(toGeo) : toStop ? toStop.id || toStop.name : null);
 
   const walkParam = $derived(fromParam?.startsWith("geo:") || toGeo ? walkM : undefined);
+  const activeFilters = $derived(
+    +(maxTransfers != null) +
+      +(minTransfer5 && !directOnly) +
+      +(sortBy !== "departure") +
+      avoidTypes.length +
+      avoidLines.length +
+      +(walkParam !== undefined && walkM !== WALK_DEFAULT),
+  );
 
   // Async connection fetcher
   $effect(() => {
@@ -324,7 +357,7 @@
       time: time ?? undefined,
       date: selectedDate,
       dayLabel: effectiveDayLabel,
-      directOnly,
+      maxTransfers: maxTransfers ?? undefined,
       minTransfer: minTransfer5 ? 5 : undefined,
       sortBy,
       avoid: avoidLines,
@@ -383,7 +416,6 @@
     activeInput = null;
     connections = null;
     connErr = false;
-    expandedIdx = null;
   }
 
   function handlePickStop(s: Stop, target: "from" | "to") {
@@ -468,7 +500,6 @@
     activeInput = null;
     connections = null;
     connErr = false;
-    expandedIdx = null;
   }
   const curFrom = $derived(asPlace(fromStop, fromGeo));
   const curTo = $derived(asPlace(toStop, toGeo));
@@ -606,6 +637,12 @@
   }
 
   const when: When = $derived(arriveBy ? "arrive" : timeMode === "now" && dateMode === "today" ? "now" : "depart");
+  /** the time chip: "Teraz", "Odjazd 19:54", "Jutro, przyjazd 07:30" */
+  const whenLabel = $derived.by(() => {
+    if (when === "now") return "Teraz";
+    const at = `${when === "arrive" ? "przyjazd" : "odjazd"} ${hour.padStart(2, "0")}:${minute.padStart(2, "0")}`;
+    return dateMode === "today" ? at[0].toUpperCase() + at.slice(1) : `${formatDayLabel(selectedDate, todayStr)}, ${at}`;
+  });
   function pickWhen(next: When) {
     // an unchanged search would never refetch, the list must not drop to a skeleton
     if (next === when) return;
@@ -735,15 +772,15 @@
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions, a11y_interactive_supports_focus (Escape closes it, on document; same DOM as the React dialog, which took no focus) -->
 <div
   role="dialog"
-  aria-modal="true"
+  aria-modal={!desktop}
   aria-label="Wyszukiwarka połączeń"
-  class="fixed inset-0 z-[2000] flex items-end justify-center bg-black/55 animate-fade md:items-center md:p-4"
+  class="fixed inset-0 z-[2000] flex items-end justify-center bg-black/55 animate-fade md:pointer-events-none md:bg-transparent"
   onclick={(e) => {
     if (e.target === e.currentTarget) onClose();
   }}
 >
   <div
-    class="surface kb-scroll relative flex max-h-[92dvh] w-full flex-col overflow-y-auto rounded-t-3xl md:max-h-[88vh] md:max-w-xl md:overflow-hidden md:rounded-[20px] animate-rise"
+    class="surface kb-scroll relative flex max-h-[92dvh] w-full flex-col overflow-y-auto rounded-t-3xl animate-rise md:pointer-events-auto md:absolute md:bottom-3 md:left-3 md:top-[116px] md:max-h-none md:w-[400px] md:overflow-hidden md:rounded-3xl xl:top-3"
   >
     <!-- Header; on a phone the whole sheet scrolls (the controls alone outgrow it) and the header stays -->
     <header
@@ -893,227 +930,253 @@
         </button>
       </div>
 
-      <!-- Day, time and filters; on a phone hidden while a stop is being picked, so the
-           suggestions sit under the inputs instead of under the keyboard -->
-      <div class="space-y-3 {activeInput ? 'max-md:hidden' : ''}">
-        <!-- Day selection row -->
-        <div class="flex items-start gap-1.5">
-          <span class="w-[52px] shrink-0 text-[12px] leading-8 text-text-faint">Dzień:</span>
-          <div class="flex min-w-0 flex-1 flex-wrap gap-1.5">
-            <button type="button" onclick={handlePickToday} class={chip(dateMode === "today")}>Dziś</button>
-            <button type="button" onclick={handlePickTomorrow} class={chip(dateMode === "tomorrow")}>Jutro</button>
-
-            <!-- Custom date button & hidden native picker -->
-            <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
-            <label onclick={handleOpenDatePicker} class="{chip(dateMode === 'custom')} relative cursor-pointer select-none">
-              <Icon icon={CalendarBlankIcon} class="text-[14px]" weight={dateMode === "custom" ? "fill" : "bold"} />
-              <span>{dateMode === "custom" ? formatDayLabel(selectedDate, todayStr) : "Inna data"}</span>
-              <input
-                bind:this={dateInput}
-                type="date"
-                min={todayStr}
-                value={selectedDate}
-                oninput={onDateChange}
-                class="absolute inset-0 opacity-0 pointer-events-none"
-                tabindex={-1}
-                aria-label="Wybierz inną datę połączenia"
-              />
-            </label>
-          </div>
+      <!-- Time and options as two chips, each opening its panel, as jakdojade does. On a phone hidden while a
+           stop is being picked, so the suggestions sit under the inputs instead of under the keyboard -->
+      <div class="flex flex-col gap-3 {activeInput ? 'max-md:hidden' : ''}">
+        <div class="flex items-center gap-1.5">
+          <button
+            type="button"
+            onclick={() => togglePanel("time")}
+            aria-expanded={panel === "time"}
+            aria-controls="conn-time"
+            class={chip(panel === "time")}
+          >
+            <Icon icon={ClockIcon} class="text-[14px]" />
+            <span class="tabular-nums">{whenLabel}</span>
+            <Icon
+              icon={CaretDownIcon}
+              class="text-[13px] transition-transform duration-200 {panel === 'time' ? 'rotate-180' : ''}"
+            />
+          </button>
+          <button
+            type="button"
+            onclick={() => togglePanel("options")}
+            aria-expanded={panel === "options"}
+            aria-controls="conn-options"
+            class="{chip(panel === 'options' || activeFilters > 0)} ml-auto"
+          >
+            <span>Opcje{activeFilters ? ` (${activeFilters})` : ""}</span>
+            <Icon icon={SlidersHorizontalIcon} class="text-[14px]" />
+          </button>
         </div>
 
-        <!-- When: now, leave at or arrive by; the time and its nudges only for a set time -->
-        <div class="space-y-2">
-          <div class="flex items-center gap-1.5">
-            <span class="w-[52px] shrink-0 text-[12px] text-text-faint">Czas:</span>
-            <div class="min-w-0 flex-1 md:max-w-sm">
-              <Segmented
-                label="Czas podróży"
-                value={when}
-                options={dateMode === "today" ? WHEN_TODAY : WHEN_LATER}
-                onChange={pickWhen}
-              />
+        {#if panel === "time"}
+          <div id="conn-time" class="animate-fade space-y-3 rounded-xl bg-tint/4 p-3">
+            <!-- Day selection row -->
+            <div class="flex items-start gap-1.5">
+              <span class="w-[66px] shrink-0 text-[12px] leading-8 text-text-faint">Dzień:</span>
+              <div class="flex min-w-0 flex-1 flex-wrap gap-1.5">
+                <button type="button" onclick={handlePickToday} class={chip(dateMode === "today")}>Dziś</button>
+                <button type="button" onclick={handlePickTomorrow} class={chip(dateMode === "tomorrow")}>Jutro</button>
+
+                <!-- Custom date button & hidden native picker -->
+                <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
+                <label onclick={handleOpenDatePicker} class="{chip(dateMode === 'custom')} relative cursor-pointer select-none">
+                  <Icon icon={CalendarBlankIcon} class="text-[14px]" weight={dateMode === "custom" ? "fill" : "bold"} />
+                  <span>{dateMode === "custom" ? formatDayLabel(selectedDate, todayStr) : "Inna data"}</span>
+                  <input
+                    bind:this={dateInput}
+                    type="date"
+                    min={todayStr}
+                    value={selectedDate}
+                    oninput={onDateChange}
+                    class="absolute inset-0 opacity-0 pointer-events-none"
+                    tabindex={-1}
+                    aria-label="Wybierz inną datę połączenia"
+                  />
+                </label>
+              </div>
             </div>
-          </div>
-          {#if when !== "now" || (fromParam && toParam)}
-            <div class="flex flex-wrap items-center gap-1.5 pl-[58px]">
+
+            <!-- When: now, leave at or arrive by; the time and its nudges only for a set time -->
+            <div class="space-y-2">
+              <div class="flex items-center gap-1.5">
+                <span class="w-[66px] shrink-0 text-[12px] text-text-faint">Czas:</span>
+                <div class="min-w-0 flex-1 md:max-w-sm">
+                  <Segmented
+                    label="Czas podróży"
+                    value={when}
+                    options={dateMode === "today" ? WHEN_TODAY : WHEN_LATER}
+                    onChange={pickWhen}
+                  />
+                </div>
+              </div>
               {#if when !== "now"}
-                <TimeInput24H
-                  {hour}
-                  {minute}
-                  onChange={(h, m) => {
-                    hour = h;
-                    minute = m;
-                    timeMode = "custom";
+                <div class="flex flex-wrap items-center gap-1.5 pl-[58px]">
+                  <TimeInput24H
+                    {hour}
+                    {minute}
+                    onChange={(h, m) => {
+                      hour = h;
+                      minute = m;
+                      timeMode = "custom";
+                      connections = null;
+                    }}
+                    onBlur={handleTimeBlur}
+                  />
+                  <button
+                    type="button"
+                    onclick={() => handleAddMinutes(-15)}
+                    class="{CHIP} {CHIP_OFF} px-2.5 tabular-nums"
+                    aria-label="15 minut wcześniej"
+                  >
+                    −15 min
+                  </button>
+                  <button
+                    type="button"
+                    onclick={() => handleAddMinutes(15)}
+                    class="{CHIP} {CHIP_OFF} px-2.5 tabular-nums"
+                    aria-label="15 minut później"
+                  >
+                    +15 min
+                  </button>
+                </div>
+              {/if}
+            </div>
+            {@render done()}
+          </div>
+        {:else if panel === "options"}
+          <div id="conn-options" class="animate-fade space-y-3 rounded-xl bg-tint/4 p-3">
+            <div class="flex items-center gap-1.5">
+              <span class="w-[66px] shrink-0 text-[12px] text-text-faint">Przesiadki:</span>
+              <div class="min-w-0 flex-1 md:max-w-sm">
+                <Segmented
+                  label="Najwięcej przesiadek"
+                  value={maxTransfers == null ? "any" : String(maxTransfers)}
+                  options={TRANSFER_CAPS}
+                  onChange={(id) => {
+                    maxTransfers = id === "any" ? null : Number(id);
                     connections = null;
                   }}
-                  onBlur={handleTimeBlur}
                 />
-                <button
-                  type="button"
-                  onclick={() => handleAddMinutes(-15)}
-                  class="{CHIP} {CHIP_OFF} px-2.5 tabular-nums"
-                  aria-label="15 minut wcześniej"
-                >
-                  −15 min
-                </button>
-                <button
-                  type="button"
-                  onclick={() => handleAddMinutes(15)}
-                  class="{CHIP} {CHIP_OFF} px-2.5 tabular-nums"
-                  aria-label="15 minut później"
-                >
-                  +15 min
-                </button>
-              {/if}
-              {#if fromParam && toParam}
-                <button
-                  type="button"
-                  onclick={handleRefresh}
-                  disabled={loading}
-                  class="{CHIP} ml-auto bg-tint/8 px-3 text-text hover:bg-tint/12 disabled:opacity-50"
-                >
-                  <Icon icon={ArrowsClockwiseIcon} class="text-[14px]" />
-                  {loading ? "Szukanie…" : "Odśwież"}
-                </button>
-              {/if}
+              </div>
             </div>
-          {/if}
-        </div>
 
-        <!-- Filter chips row -->
-        <div class="flex items-start gap-1.5 border-t border-hairline pt-3">
-          <span class="w-[52px] shrink-0 text-[12px] leading-8 text-text-faint">Filtry:</span>
-          <div class="flex min-w-0 flex-1 flex-wrap gap-1.5">
+            <!-- Filter chips row -->
+            <div class="flex items-start gap-1.5">
+              <span class="w-[66px] shrink-0 text-[12px] leading-8 text-text-faint">Filtry:</span>
+              <div class="flex min-w-0 flex-1 flex-wrap gap-1.5">
+                <!-- Min 5 min transfer buffer (when transfers are allowed) -->
+                {#if !directOnly}
+                  <button
+                    type="button"
+                    onclick={() => {
+                      minTransfer5 = !minTransfer5;
+                      connections = null;
+                    }}
+                    class={chip(minTransfer5)}
+                    aria-pressed={minTransfer5}
+                    title="Filtruj połączenia z bezpiecznym czasem na przesiadkę (min. 5 minut)"
+                  >
+                    <Icon icon={ShieldCheckIcon} class="text-[14px]" weight={minTransfer5 ? "fill" : "bold"} />
+                    <span>Bezpieczna przesiadka (5 min)</span>
+                    {#if minTransfer5}<Icon icon={CheckIcon} class="animate-pop text-[13px]" />{/if}
+                  </button>
+                {/if}
 
-            <!-- Direct only filter chip -->
-            <button
-              type="button"
-              onclick={() => {
-                directOnly = !directOnly;
-                connections = null;
-              }}
-              class={chip(directOnly)}
-              aria-pressed={directOnly}
-              title="Pokaż wyłącznie bezpośrednie połączenia bez przesiadek"
-            >
-              <Icon icon={BusIcon} class="text-[14px]" weight={directOnly ? "fill" : "bold"} />
-              <span>Tylko bezpośrednie</span>
-              {#if directOnly}<Icon icon={CheckIcon} class="animate-pop text-[13px]" />{/if}
-            </button>
+                <!-- Sort order chip: each tap steps to the next order -->
+                <button
+                  type="button"
+                  onclick={() => {
+                    sortBy = nextSort.id;
+                    connections = null;
+                  }}
+                  class={chip(sortBy !== "departure")}
+                  title={`${sort.title}. Dotknij: ${nextSort.label.toLowerCase()}`}
+                >
+                  <Icon icon={sort.icon} class="text-[14px]" weight={sortBy !== "departure" ? "fill" : "bold"} />
+                  <span>{sort.label}</span>
+                </button>
+              </div>
+            </div>
 
-            <!-- Min 5 min transfer buffer (when transfers are allowed) -->
-            {#if !directOnly}
-              <button
-                type="button"
-                onclick={() => {
-                  minTransfer5 = !minTransfer5;
-                  connections = null;
-                }}
-                class={chip(minTransfer5)}
-                aria-pressed={minTransfer5}
-                title="Filtruj połączenia z bezpiecznym czasem na przesiadkę (min. 5 minut)"
-              >
-                <Icon icon={ShieldCheckIcon} class="text-[14px]" weight={minTransfer5 ? "fill" : "bold"} />
-                <span>Bezpieczna przesiadka (5 min)</span>
-                {#if minTransfer5}<Icon icon={CheckIcon} class="animate-pop text-[13px]" />{/if}
-              </button>
+            {#if modes.length > 1}
+              <div class="flex items-start gap-1.5" role="group" aria-label="Pomiń środki transportu">
+                <span class="w-[66px] shrink-0 text-[12px] leading-8 text-text-faint">Bez:</span>
+                <div class="flex min-w-0 flex-1 flex-wrap gap-1.5">
+                  {#each modes as m (m.type)}
+                    {@const on = avoidTypes.includes(m.type)}
+                    <button
+                      type="button"
+                      onclick={() => {
+                        avoidTypes = toggled(avoidTypes, m.type);
+                        connections = null;
+                      }}
+                      class={chip(on)}
+                      aria-pressed={on}
+                      title={on ? `Wyszukaj też z: ${m.label}` : `Wyszukaj bez: ${m.label}`}
+                    >
+                      <span class="text-[14px]">
+                        <ModeIcon mode={m.mode} weight={on ? "fill" : "bold"} />
+                      </span>
+                      <span class={on ? "line-through" : undefined}>{m.label}</span>
+                    </button>
+                  {/each}
+                </div>
+              </div>
             {/if}
 
-            <!-- Sort order chip: each tap steps to the next order -->
-            <button
-              type="button"
-              onclick={() => {
-                sortBy = nextSort.id;
-                connections = null;
-              }}
-              class={chip(sortBy !== "departure")}
-              title={`${sort.title}. Dotknij: ${nextSort.label.toLowerCase()}`}
-            >
-              <Icon icon={sort.icon} class="text-[14px]" weight={sortBy !== "departure" ? "fill" : "bold"} />
-              <span>{sort.label}</span>
-            </button>
-          </div>
-        </div>
+            {#if avoidLines.length > 0 || answerLines.length > 1}
+              <div class="flex items-start gap-1.5" role="group" aria-label="Pomiń linie">
+                <span class="w-[66px] shrink-0 text-[12px] leading-8 text-text-faint">Pomiń:</span>
+                <div class="flex min-w-0 flex-1 flex-wrap gap-1.5">
+                  {#each [...avoidLines, ...answerLines.filter((l) => !avoidLines.includes(l))].slice(0, AVOID_CHIPS) as line (line)}
+                    {@const on = avoidLines.includes(line)}
+                    <button
+                      type="button"
+                      onclick={() => {
+                        avoidLines = toggled(avoidLines, line);
+                        connections = null;
+                      }}
+                      class="{chip(on)} tabular-nums"
+                      aria-pressed={on}
+                      title={on ? `Wyszukaj też z linią ${line}` : `Wyszukaj bez linii ${line}`}
+                    >
+                      <span class={on ? "line-through" : undefined}>{line}</span>
+                    </button>
+                  {/each}
+                </div>
+              </div>
+            {/if}
 
-        {#if modes.length > 1}
-          <div class="flex items-start gap-1.5" role="group" aria-label="Pomiń środki transportu">
-            <span class="w-[52px] shrink-0 text-[12px] leading-8 text-text-faint">Bez:</span>
-            <div class="flex min-w-0 flex-1 flex-wrap gap-1.5">
-              {#each modes as m (m.type)}
-                {@const on = avoidTypes.includes(m.type)}
-                <button
-                  type="button"
-                  onclick={() => {
-                    avoidTypes = toggled(avoidTypes, m.type);
-                    connections = null;
-                  }}
-                  class={chip(on)}
-                  aria-pressed={on}
-                  title={on ? `Wyszukaj też z: ${m.label}` : `Wyszukaj bez: ${m.label}`}
-                >
-                  <span class="text-[14px]">
-                    <ModeIcon mode={m.mode} weight={on ? "fill" : "bold"} />
-                  </span>
-                  <span class={on ? "line-through" : undefined}>{m.label}</span>
-                </button>
-              {/each}
-            </div>
-          </div>
-        {/if}
-
-        {#if avoidLines.length > 0 || answerLines.length > 1}
-          <div class="flex items-start gap-1.5" role="group" aria-label="Pomiń linie">
-            <span class="w-[52px] shrink-0 text-[12px] leading-8 text-text-faint">Pomiń:</span>
-            <div class="flex min-w-0 flex-1 flex-wrap gap-1.5">
-              {#each [...avoidLines, ...answerLines.filter((l) => !avoidLines.includes(l))].slice(0, AVOID_CHIPS) as line (line)}
-                {@const on = avoidLines.includes(line)}
-                <button
-                  type="button"
-                  onclick={() => {
-                    avoidLines = toggled(avoidLines, line);
-                    connections = null;
-                  }}
-                  class="{chip(on)} tabular-nums"
-                  aria-pressed={on}
-                  title={on ? `Wyszukaj też z linią ${line}` : `Wyszukaj bez linii ${line}`}
-                >
-                  <span class={on ? "line-through" : undefined}>{line}</span>
-                </button>
-              {/each}
-            </div>
-          </div>
-        {/if}
-
-        {#if fromGeo || toGeo}
-          <div class="flex items-start gap-1.5" role="group" aria-label="Jak daleko do przystanku">
-            <span class="w-[52px] shrink-0 text-[12px] leading-8 text-text-faint">Dojście:</span>
-            <div class="flex min-w-0 flex-1 flex-wrap gap-1.5">
-              {#each WALK_OPTIONS as m (m)}
-                <button
-                  type="button"
-                  onclick={() => {
-                    walkM = m;
-                    connections = null;
-                    try {
-                      window.localStorage.setItem(WALK_KEY, String(m));
-                    } catch {
-                      /* private mode: the choice lasts for this modal only */
-                    }
-                  }}
-                  class={chip(walkM === m)}
-                  aria-pressed={walkM === m}
-                  title={`Przystanki do ${fmtWalk(m)} w linii prostej`}
-                >
-                  <Icon icon={PersonSimpleWalkIcon} class="text-[14px]" weight={walkM === m ? "fill" : "bold"} />
-                  <span>do {fmtWalk(m)}</span>
-                </button>
-              {/each}
-            </div>
+            {#if fromGeo || toGeo}
+              <div class="flex items-start gap-1.5" role="group" aria-label="Jak daleko do przystanku">
+                <span class="w-[66px] shrink-0 text-[12px] leading-8 text-text-faint">Dojście:</span>
+                <div class="flex min-w-0 flex-1 flex-wrap gap-1.5">
+                  {#each WALK_OPTIONS as m (m)}
+                    <button
+                      type="button"
+                      onclick={() => {
+                        walkM = m;
+                        connections = null;
+                        try {
+                          window.localStorage.setItem(WALK_KEY, String(m));
+                        } catch {
+                          /* private mode: the choice lasts for this modal only */
+                        }
+                      }}
+                      class={chip(walkM === m)}
+                      aria-pressed={walkM === m}
+                      title={`Przystanki do ${fmtWalk(m)} w linii prostej`}
+                    >
+                      <Icon icon={PersonSimpleWalkIcon} class="text-[14px]" weight={walkM === m ? "fill" : "bold"} />
+                      <span>do {fmtWalk(m)}</span>
+                    </button>
+                  {/each}
+                </div>
+              </div>
+            {/if}
+            {@render done()}
           </div>
         {/if}
       </div>
     </div>
+
+    {#snippet done()}
+      <div class="flex justify-end">
+        <button type="button" onclick={() => (panel = null)} class="{CTA} h-9 text-[13px]">Gotowe</button>
+      </div>
+    {/snippet}
 
     {#snippet routeList(title: string, list: typeof quickRoutes, icon: IconDef)}
       {#if list.length > 0}
@@ -1328,7 +1391,7 @@
                 <button
                   type="button"
                   onclick={() => {
-                    directOnly = false;
+                    maxTransfers = null;
                     connections = null;
                   }}
                   class="{CTA} h-9 text-[13px]"
@@ -1367,7 +1430,15 @@
                     <span>{saved ? "Zapisana trasa" : "Zapisz trasę"}</span>
                   </button>
                 {/if}
-                <span class="text-[12px] text-text-mute">{effectiveDayLabel}</span>
+                <button
+                  type="button"
+                  onclick={handleRefresh}
+                  aria-label="Odśwież połączenia"
+                  title="Odśwież"
+                  class="{CHIP} {CHIP_OFF} px-2.5"
+                >
+                  <Icon icon={ArrowsClockwiseIcon} class="text-[14px]" />
+                </button>
               </div>
             </div>
 
@@ -1379,187 +1450,46 @@
               </button>
             </div>
 
-            {#each connections as conn, idx (`${conn.departureTime}-${conn.arrivalTime}-${idx}`)}
-              {@const isExpanded = expandedIdx === idx}
-              {@const isDirect = conn.type === "direct"}
-              {@const dayBadge = conn.dayLabel || effectiveDayLabel}
-              {@const startPole = conn.legs[0]?.fromStopName ?? ""}
-              <!-- the exact pole when the search named a whole stop (GZM) or a location -->
-              {@const showPole =
-                !!fromGeo || (!!fromStop && normalizeText(startPole) !== normalizeText(stopLabel(fromStop.name)))}
-              <!-- the bus on the map, else the delay the search boarded it with -->
-              {@const delays = conn.legs.map((l) => legVehicle(l, conn.date, vix)?.delay ?? l.delaySec ?? null)}
-              <div class="rounded-xl bg-tint/4 p-3.5">
-                <!-- Summary row -->
-                <div class="flex items-start justify-between gap-3">
-                  <div class="min-w-0">
-                    <div class="flex items-baseline gap-1.5">
-                      <span class="text-[19px] font-semibold tracking-tight tabular-nums text-text">
-                        {conn.departureTime}
-                      </span>
-                      <Icon icon={ArrowRightIcon} class="self-center text-[13px] text-text-faint" />
-                      <span class="text-[19px] font-semibold tracking-tight tabular-nums text-text">
-                        {conn.arrivalTime}
-                      </span>
-                      {#if conn.arrivesNextDay}
-                        <span
-                          class="self-center rounded-full bg-late/15 px-1.5 py-0.5 text-[11px] font-medium text-late"
-                          title="Przyjazd następnego dnia"
-                        >
-                          +1 d.
-                        </span>
-                      {/if}
-                    </div>
-                    <p class="mt-0.5 text-[12px] text-text-mute">
-                      {dayBadge} · <span class="tabular-nums">{conn.totalDurationMins} min</span>
-                    </p>
-                  </div>
-                  <span class="shrink-0 rounded-full bg-tint/6 px-2.5 py-1 text-[12px] font-medium text-text-mute">
-                    {isDirect
-                      ? "Bezpośredni"
-                      : `${conn.transfersCount} ${conn.transfersCount === 1 ? "przesiadka" : "przesiadki"}`}
-                  </span>
-                </div>
-
-                <!-- Line badges summary -->
-                <div class="mt-3 flex flex-wrap items-center gap-x-1.5 gap-y-2">
-                  {#each conn.legs as leg, lIdx (lIdx)}
-                    {@const d = delays[lIdx]}
-                    <div class="flex min-w-0 items-center gap-1.5">
-                      {#if lIdx > 0}<Icon icon={CaretRightIcon} class="text-[12px] text-text-faint" />{/if}
-                      <LineBadge line={leg.line} operator={leg.operator} />
-                      <span class="max-w-[140px] truncate text-[13px] text-text-mute">
-                        {displayStopName(leg.headsign)}
-                      </span>
-                      {#if d != null}
-                        <span class="shrink-0 text-[12px] font-medium tabular-nums {delayClass(d)}">
-                          {delayTxt(d)}
-                        </span>
-                      {/if}
-                    </div>
-                  {/each}
-                </div>
-
-                {#if showPole}
-                  <p class="mt-2 flex items-center gap-1.5 text-[12px] text-text-faint">
-                    {#if conn.accessWalkMins}
-                      <Icon icon={PersonSimpleWalkIcon} class="shrink-0 text-[13px]" />
-                      <span>
-                        {conn.accessWalkMins} min pieszo do <span class="font-medium text-text-mute">{displayStopName(startPole)}</span>
-                      </span>
-                    {:else}
-                      <span>
-                        Odjazd z: <span class="font-medium text-text-mute">{displayStopName(startPole)}</span>
-                      </span>
-                    {/if}
-                  </p>
-                {/if}
-
-                {#if conn.egressWalkMins}
-                  <p class="mt-1 flex items-center gap-1.5 text-[12px] text-text-faint">
-                    <Icon icon={PersonSimpleWalkIcon} class="shrink-0 text-[13px]" />
-                    <span>
-                      Wysiadka: <span class="font-medium text-text-mute"
-                        >{displayStopName(conn.legs[conn.legs.length - 1]?.toStopName ?? "")}</span
-                      >, dalej {conn.egressWalkMins} min pieszo
+            <!-- one entrance per result list: every search, refresh and earlier / later page mounts a new list -->
+            <div class="stagger space-y-2.5">
+              {#each connections as conn, idx (`${conn.departureTime}-${conn.arrivalTime}-${idx}`)}
+                {@const startPole = conn.legs[0]?.fromStopName ?? ""}
+                <!-- the exact pole when the search named a whole stop (GZM) or a location -->
+                {@const showPole =
+                  !!fromGeo || (!!fromStop && normalizeText(startPole) !== normalizeText(stopLabel(fromStop.name)))}
+                <!-- the bus on the map, else the delay the search boarded it with -->
+                {@const delays = conn.legs.map((l) => legVehicle(l, conn.date, vix)?.delay ?? l.delaySec ?? null)}
+                <!-- the whole card opens the journey: its map, timeline and leg tabs are the details -->
+                <button
+                  type="button"
+                  onclick={() => {
+                    if (onSelectConnection) onSelectConnection(conn, null);
+                    else if (fromStop) onSelectStop(fromStop);
+                    onClose();
+                  }}
+                  onmouseenter={() => (hovered = conn)}
+                  onfocus={() => (hovered = conn)}
+                  class="block w-full rounded-xl bg-tint/4 p-3.5 text-left transition-[background-color,scale] duration-150 [transition-timing-function:var(--ease-spring)] hover:bg-tint/8 active:scale-[0.985] active:bg-tint/10
+                    {previewConn === conn ? 'ring-1 ring-primary/50' : ''}"
+                >
+                  <JourneySummary
+                    it={conn}
+                    {delays}
+                    now={clock.current}
+                    live={(conn.date ?? selectedDate) === todayStr}
+                    dayLabel={conn.dayLabel || effectiveDayLabel}
+                  />
+                  {#if showPole}
+                    <span class="mt-2 block truncate text-[12px] text-text-faint">
+                      Odjazd z: <span class="font-medium text-text-mute">{displayStopName(startPole)}</span>
                     </span>
-                  </p>
-                {/if}
-
-                <!-- Transfer info if applicable -->
-                {#if !isDirect && conn.transferStopName}
-                  <p class="mt-2 text-[12px] text-text-faint">
-                    Przesiadka: <span class="font-medium text-text-mute">{displayStopName(conn.transferStopName)}</span>
-                    (oczekiwanie: {conn.transferWaitMins ?? 0} min)
-                  </p>
-                {/if}
-                {#if transferAtRisk(conn.legs, delays)}
-                  <p class="mt-1 text-[12px] font-medium text-late">Opóźnienie: możesz nie zdążyć na przesiadkę</p>
-                {/if}
-
-                <!-- Collapsible leg details -->
-                <div class="mt-3 border-t border-hairline pt-1">
-                  <button
-                    type="button"
-                    onclick={() => (expandedIdx = isExpanded ? null : idx)}
-                    aria-expanded={isExpanded}
-                    class="flex h-9 w-full items-center justify-between text-[12px] font-medium text-text-mute transition-colors hover:text-text"
-                  >
-                    <span>{isExpanded ? "Ukryj szczegóły trasy" : "Pokaż szczegóły trasy"}</span>
-                    <Icon
-                      icon={CaretDownIcon}
-                      class={`text-[13px] text-text-faint transition-transform duration-200 ${isExpanded ? "rotate-180" : ""}`}
-                    />
-                  </button>
-
-                  {#if isExpanded}
-                    <div class="mt-1 space-y-2 animate-fade">
-                      {#each conn.legs as leg, lIdx (lIdx)}
-                        <div class="rounded-xl bg-tint/4 p-3">
-                          <div class="flex items-center justify-between gap-2">
-                            <div class="flex min-w-0 items-center gap-2">
-                              <LineBadge line={leg.line} operator={leg.operator} />
-                              <span class="truncate text-[13px] font-medium text-text">
-                                Kierunek: {displayStopName(leg.headsign)}
-                              </span>
-                            </div>
-                            <span class="shrink-0 text-[12px] tabular-nums text-text-faint">
-                              {leg.stopsCount}
-                              {przystanekPlural(leg.stopsCount)} · {leg.durationMins} min
-                            </span>
-                          </div>
-                          <div class="ml-1 mt-2.5 space-y-1 border-l-2 border-tint/12 pl-2.5 text-[12px] text-text-mute">
-                            <p>
-                              <span class="font-medium tabular-nums text-text">{leg.departureTime}</span>
-                              {displayStopName(leg.fromStopName)}
-                            </p>
-                            <p>
-                              <span class="font-medium tabular-nums text-text">{leg.arrivalTime}</span>
-                              {displayStopName(leg.toStopName)}
-                            </p>
-                          </div>
-                          <div class="mt-2 flex justify-end">
-                            <button
-                              type="button"
-                              onclick={(e) => {
-                                e.stopPropagation();
-                                if (onSelectConnection) onSelectConnection(conn, lIdx);
-                                onClose();
-                              }}
-                              class="{CHIP} -mr-1.5 px-3 text-text hover:bg-tint/8"
-                            >
-                              <span>Pokaż ten odcinek na mapie</span>
-                              <Icon icon={ArrowRightIcon} class="text-[13px]" />
-                            </button>
-                          </div>
-                        </div>
-                      {/each}
-                    </div>
                   {/if}
-                </div>
-
-                <!-- Action buttons -->
-                <div class="mt-1 flex items-center justify-between gap-3 border-t border-hairline pt-3">
-                  <span class="text-[12px] text-text-faint">
-                    {conn.legs.length > 1
-                      ? `${conn.legs.length} linie · ${conn.transfersCount} ${conn.transfersCount === 1 ? "przesiadka" : "przesiadki"}`
-                      : "Bez przesiadek"}
-                  </span>
-                  <button
-                    type="button"
-                    onclick={() => {
-                      if (onSelectConnection) onSelectConnection(conn, null);
-                      else if (fromStop) onSelectStop(fromStop);
-                      onClose();
-                    }}
-                    class="{CTA} h-9 shrink-0 text-[13px]"
-                  >
-                    <Icon icon={MapTrifoldIcon} class="text-[15px]" />
-                    <span>Pokaż całą trasę na mapie</span>
-                  </button>
-                </div>
-              </div>
-            {/each}
+                  {#if transferAtRisk(conn.legs, delays)}
+                    <span class="mt-1 block text-[12px] font-medium text-late">Opóźnienie: możesz nie zdążyć na przesiadkę</span>
+                  {/if}
+                </button>
+              {/each}
+            </div>
 
             <!-- Later connections button -->
             <div class="flex justify-center py-1">

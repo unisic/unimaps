@@ -45,6 +45,15 @@
     "defaultFeatures": { "electric": true, "lowFloor": true, "airCondition": true }
   },
   {
+    "model": "Solaris Urbino 12 IV",
+    "producer": "Solaris",
+    "year": "2026",
+    "lengthCategory": "MAXI",
+    "fuelType": "diesel",
+    "numbers": [[266, 270]],
+    "defaultFeatures": { "lowFloor": true, "airCondition": true }
+  },
+  {
     "model": "Isuzu Novociti Life",
     "producer": "Isuzu",
     "year": "2025",

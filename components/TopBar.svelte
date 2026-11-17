@@ -21,9 +21,7 @@
     onLocate: () => void;
     onPickStop: (s: Stop) => void;
     onPickVehicle: (v: Vehicle) => void;
-    lineFilter: ReadonlySet<string> | null;
     onOpenLine: (l: LineInfo) => void;
-    onClearLineFilter: () => void;
     onClearView: () => void;
     onOpenNearby: () => void;
     onOpenConnections?: () => void;
@@ -37,11 +35,14 @@
 </script>
 
 <script lang="ts">
+  import type { Snippet } from "svelte";
+
   import Icon from "@/components/Icon.svelte";
   import {
     ArrowRightIcon,
     BugIcon,
     CardsIcon,
+    CaretDownIcon,
     DownloadSimpleIcon,
     HeartIcon,
     MegaphoneSimpleIcon,
@@ -53,7 +54,6 @@
     type IconDef,
   } from "@/components/icon-paths";
   import CityCard from "@/components/city/CityCard.svelte";
-  import OpensMore from "@/components/city/OpensMore.svelte";
   import OthersCard from "@/components/city/OthersCard.svelte";
   import TopBarSearch from "@/components/TopBarSearch.svelte";
   import { BASE_LAYERS } from "@/components/topbar";
@@ -79,9 +79,7 @@
     onLocate,
     onPickStop,
     onPickVehicle,
-    lineFilter,
     onOpenLine,
-    onClearLineFilter,
     onClearView,
     onOpenNearby,
     onOpenConnections,
@@ -114,6 +112,7 @@
   const LAYER_OPTIONS = (Object.keys(BASE_LAYERS) as BaseLayerId[]).map((id) => ({ id, label: BASE_LAYERS[id].name }));
 
   let menu = $state(false);
+  let cityPick = $state(false);
   const openCity = () => {
     menu = false;
     onOpenCity();
@@ -155,6 +154,14 @@
   <p class="px-3 pb-1.5 pt-2 text-[12px] font-medium text-text-faint">{text}</p>
 {/snippet}
 
+<!-- one setting per row: its name, then the choice at a fixed width so the rows line up -->
+{#snippet setting(label: string, control: Snippet)}
+  <div class="flex items-center justify-between gap-3 px-3 py-1.5">
+    <span class="shrink-0 text-text">{label}</span>
+    <div class="min-w-0 max-w-[14rem] flex-1">{@render control()}</div>
+  </div>
+{/snippet}
+
 <div
   bind:this={root}
   class="absolute left-3 top-[calc(env(safe-area-inset-top,0px)+0.75rem)] z-[1002] w-[min(440px,calc(100vw-24px))] md:left-1/2 md:-translate-x-1/2"
@@ -167,9 +174,7 @@
       {onLocate}
       {onPickStop}
       {onPickVehicle}
-      {lineFilter}
       {onOpenLine}
-      {onClearLineFilter}
       {onToggleStops}
       {stopsVisible}
       {baseLayer}
@@ -238,6 +243,7 @@
       title="Ustawienia mapy"
       onclick={() => {
         menu = !menu;
+        cityPick = false;
         searchRef?.current?.blur();
       }}
       class="tap grid h-10 w-10 shrink-0 place-items-center rounded-full text-[19px] md:h-9 md:w-9 md:text-[18px] {menu
@@ -254,48 +260,44 @@
     <div
       class="surface kb-scroll mt-2 max-h-[calc(100dvh-env(safe-area-inset-top,0px)-5rem)] overflow-y-auto rounded-[20px] p-2 text-[13.5px] animate-drop"
     >
-      {@render menuLabel("Miasto")}
+      <!-- the page's city; the others unfold under it: a city is switched once, the settings below are the menu -->
       <div class="flex flex-col gap-1 px-1">
-        <CityCard id="bb" current={bb} onClick={() => switchCity("bb")} />
-        <CityCard id="gzm" current={city === "gzm"} onClick={() => switchCity("gzm")} />
-        <!-- every other city lives in the sheet; the current one is shown here in its place -->
-        {#if bb || city === "gzm"}
-          <OthersCard onClick={openCity} />
-        {:else}
-          <CityCard id={city} current onClick={openCity}>
-            {#snippet trailing()}
-              <OpensMore />
-            {/snippet}
-          </CityCard>
+        <CityCard id={city} expanded={cityPick} onClick={() => (cityPick = !cityPick)}>
+          {#snippet trailing()}
+            <span class="flex shrink-0 items-center gap-1 text-[12.5px] font-medium text-primary">
+              Zmień<Icon icon={CaretDownIcon} class="text-[12px] transition-transform duration-200 {cityPick ? 'rotate-180' : ''}" />
+            </span>
+          {/snippet}
+        </CityCard>
+        {#if cityPick}
+          <div class="flex flex-col gap-1 animate-fade">
+            {#if !bb}<CityCard id="bb" onClick={() => switchCity("bb")} />{/if}
+            {#if city !== "gzm"}<CityCard id="gzm" onClick={() => switchCity("gzm")} />{/if}
+            <OthersCard onClick={openCity} />
+          </div>
         {/if}
       </div>
 
-      {#if bb}
-        {@render menuLabel("Przewoźnik")}
-        <div class="px-1">
-          <Segmented
-            label="Wybór przewoźnika"
-            value={operatorFilter}
-            options={OPERATOR_OPTIONS}
-            onChange={onOperatorFilter}
-            lead={operatorLead}
-          />
-        </div>
-      {/if}
-
-      {@render menuLabel("Motyw")}
-      <div class="px-1">
-        <Segmented label="Motyw aplikacji" value={themePref.current} options={THEME_OPTIONS} onChange={setThemePref} />
-      </div>
-
-      {#if LAYER_OPTIONS.length > 1}
-        {@render menuLabel("Mapa")}
-        <div class="px-1">
-          <Segmented label="Styl mapy" value={baseLayer} options={LAYER_OPTIONS} onChange={onBaseLayer} lead={layerLead} />
-        </div>
-      {/if}
-
       <div class="mt-2 border-t border-hairline pt-1">
+        {@render menuLabel("Mapa")}
+        {#if LAYER_OPTIONS.length > 1}
+          {#snippet layerPick()}
+            <Segmented label="Styl mapy" value={baseLayer} options={LAYER_OPTIONS} onChange={onBaseLayer} lead={layerLead} />
+          {/snippet}
+          {@render setting("Styl", layerPick)}
+        {/if}
+        {#if bb}
+          {#snippet operatorPick()}
+            <Segmented
+              label="Wybór przewoźnika"
+              value={operatorFilter}
+              options={OPERATOR_OPTIONS}
+              onChange={onOperatorFilter}
+              lead={operatorLead}
+            />
+          {/snippet}
+          {@render setting("Przewoźnik", operatorPick)}
+        {/if}
         <SwitchRow checked={stopsVisible} onToggle={onToggleStops} label="Przystanki na mapie" />
         <SwitchRow
           checked={smoothMotion.current}
@@ -303,6 +305,14 @@
           label="Płynny ruch pojazdów"
           hint="Szacuje pozycję autobusu między aktualizacjami"
         />
+      </div>
+
+      <div class="mt-1 border-t border-hairline pt-1">
+        {@render menuLabel("Aplikacja")}
+        {#snippet themePick()}
+          <Segmented label="Motyw aplikacji" value={themePref.current} options={THEME_OPTIONS} onChange={setThemePref} />
+        {/snippet}
+        {@render setting("Motyw", themePick)}
       </div>
 
       <!-- the fleet tracker exists for BB (MZK) and GZM only: /brygady?city=<other> would show BB -->

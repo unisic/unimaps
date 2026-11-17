@@ -490,6 +490,7 @@ fn memo_key(q: &RouteQuery<'_>) -> String {
         q.arrive_by,
         q.limit,
         q.direct_only,
+        q.max_transfers,
         q.min_transfer_secs,
         q.max_transfer_secs,
         q.date,

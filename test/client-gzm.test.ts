@@ -3,11 +3,11 @@ import { afterEach, describe, it } from "node:test";
 
 import { tripAlertKey } from "../lib/client/alerts";
 import { getTrip, HttpError, isWarming, tripWarming } from "../lib/client/api";
-import { CITY, cityOfId, cityUrl, resolveCity, withCity } from "../lib/client/city";
+import { CITY, cityAt, cityOfId, cityToOffer, cityUrl, resolveCity, withCity } from "../lib/client/city";
 import { DENSE_FLEET, fleetMarkers, PILL_MIN_ZOOM } from "../lib/client/fleetMarkers";
 import { arrivedSecs, BRAND_GZM, BRAND_KB, BRAND_MZK, isMzk, operatorColor } from "../lib/client/format";
 import { loadDay } from "../lib/client/timetable";
-import { buildSearch, EMPTY_URL_STATE, parseUrlState, savedLinesKey } from "../lib/client/urlState";
+import { buildSearch, EMPTY_URL_STATE, parseUrlState } from "../lib/client/urlState";
 import { gzmRowKey } from "../lib/shared/departures";
 
 describe("GZM brand", () => {
@@ -81,6 +81,25 @@ describe("city resolution", () => {
   });
 });
 
+describe("city by location", () => {
+  it("finds the city a position lies in", () => {
+    assert.equal(cityAt(49.822, 19.046), "bb");
+    assert.equal(cityAt(50.2615, 19.0273), "gzm");
+    assert.equal(cityAt(50.2049, 19.2749), "gzm"); // Jaworzno: Oświęcim's centre is nearer than Katowice's
+    assert.equal(cityAt(50.2945, 18.6714), "gzm"); // Gliwice
+    assert.equal(cityAt(49.6853, 19.1924), "zywiec");
+    assert.equal(cityAt(52.2297, 21.0122), "warsaw");
+    assert.equal(cityAt(55.2, 17.0), null); // the Baltic
+  });
+
+  it("offers another city only outside the open one's reach", () => {
+    assert.equal(cityToOffer(50.0614, 19.9366, "bb"), "krakow");
+    assert.equal(cityToOffer(49.6853, 19.1924, "bb"), null); // Żywiec: KB runs there
+    assert.equal(cityToOffer(49.822, 19.046, "bb"), null);
+    assert.equal(cityToOffer(55.2, 17.0, "bb"), null);
+  });
+});
+
 describe("city URLs: BB stays byte-identical", () => {
   it("withCity leaves BB untouched and marks GZM once", () => {
     assert.equal(withCity("", "bb"), "");
@@ -100,12 +119,6 @@ describe("city URLs: BB stays byte-identical", () => {
     assert.equal(cityUrl("/api/vehicles", "bb"), "/api/vehicles");
     assert.equal(cityUrl("/api/vehicles", "gzm"), "/api/vehicles?city=gzm");
     assert.equal(cityUrl("/api/stops?x=1", "gzm"), "/api/stops?x=1&city=gzm");
-  });
-
-  it("keeps the BB line filter key and gives GZM its own", () => {
-    assert.equal(savedLinesKey(), "kb:lineFilter");
-    assert.equal(savedLinesKey("bb"), "kb:lineFilter");
-    assert.equal(savedLinesKey("gzm"), "kb:lineFilter:gzm");
   });
 
   it("polls GZM vehicles every 5 s and BB every 4 s", () => {

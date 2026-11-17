@@ -17,6 +17,7 @@ use crate::http::{Body, full, json};
 use crate::js;
 use crate::rate_limit::client_ip;
 
+pub mod announce;
 pub mod announcements;
 pub mod connections;
 pub mod fleet;
@@ -29,12 +30,14 @@ pub mod health;
 pub mod line;
 pub mod lines;
 pub mod push;
+pub mod push_fleet;
 pub mod push_news;
 pub mod shapes;
 pub mod status;
 pub mod stop_departures;
 pub mod stop_timetable;
 pub mod stops;
+pub mod traffic;
 pub mod trip;
 pub mod trip_execution;
 pub mod trips;
@@ -43,6 +46,7 @@ pub mod vehicles;
 /// The API routes, one per server/api module.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Route {
+    Announce,
     Announcements,
     Connections,
     Fleet,
@@ -56,6 +60,7 @@ pub enum Route {
     Lines,
     Push,
     PushNews,
+    PushFleet,
     Shapes,
     Status,
     StopDepartures,
@@ -63,6 +68,7 @@ pub enum Route {
     Stops,
     Trip,
     TripExecution,
+    Traffic,
     Trips,
     Vehicles,
 }
@@ -75,6 +81,7 @@ pub fn match_route(path: &str) -> Option<(Route, &str)> {
     // no route has more than 3 segments: a 4th only has to make the slice match nothing
     let segs: Vec<&str> = rest.split('/').take(4).collect();
     Some(match segs.as_slice() {
+        ["announce", name] if !name.is_empty() => (Announce, *name),
         ["announcements"] => (Announcements, ""),
         ["connections"] => (Connections, ""),
         ["fleet"] => (Fleet, ""),
@@ -88,6 +95,7 @@ pub fn match_route(path: &str) -> Option<(Route, &str)> {
         ["lines"] => (Lines, ""),
         ["push"] => (Push, ""),
         ["push", "news"] => (PushNews, ""),
+        ["push", "fleet"] => (PushFleet, ""),
         ["shapes"] => (Shapes, ""),
         ["status"] => (Status, ""),
         ["stop", id, "departures"] if !id.is_empty() => (StopDepartures, *id),
@@ -95,6 +103,7 @@ pub fn match_route(path: &str) -> Option<(Route, &str)> {
         ["stops"] => (Stops, ""),
         ["trip", id] if !id.is_empty() => (Trip, *id),
         ["trip_execution"] => (TripExecution, ""),
+        ["traffic"] => (Traffic, ""),
         ["trips"] => (Trips, ""),
         ["vehicles"] => (Vehicles, ""),
         _ => return None,
@@ -105,7 +114,7 @@ pub fn match_route(path: &str) -> Option<(Route, &str)> {
 pub fn methods(route: Route) -> &'static [&'static str] {
     match route {
         Route::Push => &["GET", "POST", "DELETE"],
-        Route::PushNews => &["POST", "DELETE"],
+        Route::PushNews | Route::PushFleet => &["POST", "DELETE"],
         _ => &["GET"],
     }
 }
@@ -114,7 +123,7 @@ pub fn methods(route: Route) -> &'static [&'static str] {
 pub fn allow(route: Route) -> &'static str {
     match route {
         Route::Push => "GET, POST, DELETE, HEAD, OPTIONS",
-        Route::PushNews => "POST, DELETE, HEAD, OPTIONS",
+        Route::PushNews | Route::PushFleet => "POST, DELETE, HEAD, OPTIONS",
         _ => "GET, HEAD, OPTIONS",
     }
 }
@@ -185,6 +194,7 @@ pub async fn dispatch_owned(route: Route, path: &str, req: ApiRequest) -> Respon
 async fn run_owned(route: Route, req: ApiRequest) -> Response<Body> {
     let bb = crate::poller_singleton::bb();
     match route {
+        Route::Announce => announce::get_owned(&req).await,
         Route::Announcements => match announcements::get(&req).await {
             Some(res) => res,
             None => announcements::get_bb(&req, bb).await,
@@ -222,6 +232,7 @@ async fn run_owned(route: Route, req: ApiRequest) -> Response<Body> {
         },
         Route::Push => push::handle(&req),
         Route::PushNews => push_news::handle(&req),
+        Route::PushFleet => push_fleet::handle(&req),
         Route::Shapes => shapes::get_owned(&req, bb).await,
         Route::Status => status::get(bb).await,
         Route::StopDepartures => match stop_departures::get(&req) {
@@ -244,6 +255,7 @@ async fn run_owned(route: Route, req: ApiRequest) -> Response<Body> {
             Some(res) => res,
             None => trip_execution::get_bb(&req, bb).await,
         },
+        Route::Traffic => traffic::get_owned(&req).await,
         Route::Trips => trips::get_owned(&req, bb).await,
         Route::Vehicles => match vehicles::get(&req) {
             Some(res) => res,
@@ -285,6 +297,7 @@ mod tests {
         use Route::*;
         let get_only = "GET, HEAD, OPTIONS";
         for (path, route, allow_text) in [
+            ("/api/announce/p-next", Announce, get_only),
             ("/api/announcements", Announcements, get_only),
             ("/api/connections", Connections, get_only),
             ("/api/fleet", Fleet, get_only),
@@ -298,6 +311,7 @@ mod tests {
             ("/api/lines", Lines, get_only),
             ("/api/push", Push, "GET, POST, DELETE, HEAD, OPTIONS"),
             ("/api/push/news", PushNews, "POST, DELETE, HEAD, OPTIONS"),
+            ("/api/push/fleet", PushFleet, "POST, DELETE, HEAD, OPTIONS"),
             ("/api/shapes", Shapes, get_only),
             ("/api/status", Status, get_only),
             ("/api/stop/1/departures", StopDepartures, get_only),
@@ -305,6 +319,7 @@ mod tests {
             ("/api/stops", Stops, get_only),
             ("/api/trip/1", Trip, get_only),
             ("/api/trip_execution", TripExecution, get_only),
+            ("/api/traffic", Traffic, get_only),
             ("/api/trips", Trips, get_only),
             ("/api/vehicles", Vehicles, get_only),
         ] {
@@ -324,6 +339,8 @@ mod tests {
             "/api/push/news/x",
             "/api/status/1",
             "/api/nope",
+            "/api/announce",
+            "/api/announce/a/b",
             "/api/stop//departures",
             "/api/fleet/1/history/x",
             "/api/trip/a/b",

@@ -49,7 +49,7 @@
 
   import BarList from "./BarList.svelte";
   import type { BarRow } from "./charts";
-  import { DELAY_FILL, FLEET_CITY, FUEL_LABEL_PLURAL, fmtDelayMin, fmtInt, fmtKm, LENGTH_LABEL_PLURAL, SERIES_FILL, TRACK_FILL } from "./common";
+  import { DELAY_FILL, FLEET_CITY, fleetCount, FUEL_LABEL_PLURAL, fmtDelayMin, fmtInt, fmtKm, LENGTH_LABEL_PLURAL, SERIES_FILL, TRACK_FILL } from "./common";
   import DelayLegend from "./DelayLegend.svelte";
   import PunctualityTimeline from "./PunctualityTimeline.svelte";
   import SectionCard from "./SectionCard.svelte";
@@ -309,7 +309,7 @@
     {/if}
   </SectionCard>
 
-  <SectionCard id="sec-fleet" title="Skład floty" subtitle="{fmtInt(data.stats.totalFleet)} pojazdów {brand.short}, ile z nich jest teraz w trasie">
+  <SectionCard id="sec-fleet" title="Skład floty" subtitle="{fleetCount(city, data.stats.totalFleet)}, ile z nich jest teraz w trasie">
     <div class="mb-3">
       <TwoPartLegend partLabel="W trasie" restLabel="Nie kursuje teraz" />
     </div>

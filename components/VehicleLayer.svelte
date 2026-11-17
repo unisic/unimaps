@@ -2,7 +2,7 @@
   import L from "leaflet";
 
   import { delayClass, delayTxt, displayStopName, vehColor } from "@/lib/client/format";
-  import type { Vehicle } from "@/lib/client/types";
+  import type { LineInfo, Vehicle } from "@/lib/client/types";
   import type { VehicleAnimator } from "@/lib/client/vehicleAnimator";
 
   interface MarkerView {
@@ -14,46 +14,53 @@
   /** a dense fleet zoomed in mounts pills only this far around the viewport (StopsLayer's margin) */
   const BOUNDS_PAD = 0.25;
 
-  /** Tooltip DOM (textContent only: upstream strings are never parsed as HTML), laid out like TripView's header. */
+  /** Tooltip DOM (textContent only: upstream strings are never parsed as HTML): the line and where it goes on top,
+   *  the state as one tinted chip, then which vehicle it is. */
   function buildVehicleTooltip(v: Vehicle | undefined): HTMLElement {
     const root = document.createElement("div");
-    root.className = "flex items-center gap-2.5";
+    root.className = "flex w-max max-w-[260px] flex-col gap-1.5";
     if (!v) return root;
-    const span = (className: string, text: string) => {
-      const el = document.createElement("span");
-      el.className = className;
-      el.textContent = text;
-      return el;
+    const el = (tag: "div" | "span", className: string, ...children: (HTMLElement | string)[]) => {
+      const e = document.createElement(tag);
+      e.className = className;
+      e.append(...children);
+      return e;
     };
-    const badge = span(
-      "flex h-7 min-w-9 shrink-0 items-center justify-center rounded-lg px-1.5 text-[12px] font-semibold tabular-nums tracking-tight text-white",
+    const badge = el(
+      "span",
+      "flex h-6 min-w-8 shrink-0 items-center justify-center rounded-md px-1.5 text-[12px] font-bold tabular-nums tracking-tight text-white",
       v.line || "?",
     );
     badge.style.background = vehColor(v);
-    const body = document.createElement("div");
-    body.className = "w-max min-w-0 max-w-[260px]";
-    body.append(
-      span(
-        "line-clamp-2 whitespace-normal text-[13px] font-semibold leading-tight tracking-tight text-text",
-        v.headsign ? displayStopName(v.headsign) : `Linia ${v.line || "?"}`,
+    root.append(
+      el(
+        "div",
+        "flex items-center gap-2",
+        badge,
+        el(
+          "span",
+          "line-clamp-2 whitespace-normal text-[13px] font-semibold leading-tight tracking-tight text-text",
+          v.headsign ? displayStopName(v.headsign) : `Linia ${v.line || "?"}`,
+        ),
       ),
     );
-    const meta: HTMLElement[] = [];
-    if (v.not_started) meta.push(span("shrink-0 font-medium text-late", "czeka na odjazd"));
-    else if (v.delay != null) meta.push(span(`shrink-0 font-semibold tabular-nums ${delayClass(v.delay)}`, delayTxt(v.delay)));
-    if (v.scheduled) meta.push(span("shrink-0", "pozycja z rozkładu"));
-    if (v.side_number) meta.push(span("shrink-0 tabular-nums", `#${v.side_number}`));
-    if (v.model) meta.push(span("truncate", v.model));
-    if (meta.length) {
-      const row = document.createElement("div");
-      row.className = "mt-1 flex items-center gap-1.5 text-[12px] leading-tight text-text-mute";
-      meta.forEach((el, i) => {
-        if (i) row.append(span("shrink-0 text-text-faint", "·"));
-        row.append(el);
-      });
-      body.append(row);
+    // the chip takes its tint from the state's own text colour
+    const chip = (tone: string, text: string) =>
+      el("span", `shrink-0 rounded-full bg-current/12 px-2 py-0.5 font-semibold tabular-nums ${tone}`, text);
+    const state = v.not_started
+      ? chip("text-late", "czeka na odjazd")
+      : v.scheduled
+        ? chip("text-text-mute", "z rozkładu")
+        : v.delay != null
+          ? chip(delayClass(v.delay), delayTxt(v.delay))
+          : null;
+    const who = [v.side_number && `#${v.side_number}`, v.model].filter(Boolean).join(" · ");
+    if (state || who) {
+      const row = el("div", "flex items-center gap-2 text-[11.5px] leading-tight text-text-mute");
+      if (state) row.append(state);
+      if (who) row.append(el("span", "min-w-0 truncate tabular-nums", who));
+      root.append(row);
     }
-    root.append(badge, body);
     return root;
   }
 </script>
@@ -63,6 +70,7 @@
   import { fleetMarkers } from "@/lib/client/fleetMarkers";
   import { transitMode } from "@/lib/client/format";
   import { makeVehicleIcon } from "@/lib/client/leafletIcons";
+  import { onLine } from "@/lib/client/lineRoute";
   import { acquireVehicleAnimator, releaseVehicleAnimator } from "@/lib/client/vehicleAnimator";
 
   /**
@@ -80,7 +88,7 @@
     vehicles,
     onVehicleClick,
     hidden = false,
-    lineFilter = null,
+    line = null,
     operatorFilter = "all",
   }: {
     map: L.Map;
@@ -89,8 +97,8 @@
     /** hide every live marker (e.g. while a trip route is drawn) so the selected
      *  vehicle isn't duplicated by TripLayer and the others don't obscure it */
     hidden?: boolean;
-    /** when set, only vehicles of these lines are drawn */
-    lineFilter?: ReadonlySet<string> | null;
+    /** the open line view's line: only its vehicles are drawn, whatever the operator filter */
+    line?: LineInfo | null;
     /** filter by operator */
     operatorFilter?: "all" | "kb" | "mzk";
   } = $props();
@@ -151,10 +159,10 @@
     group.addTo(map);
 
     let shown = vehicles;
-    if (operatorFilter === "kb") shown = shown.filter((v) => v.operator !== "MZK");
+    const only = line;
+    if (only) shown = shown.filter((v) => onLine(v, only));
+    else if (operatorFilter === "kb") shown = shown.filter((v) => v.operator !== "MZK");
     else if (operatorFilter === "mzk") shown = shown.filter((v) => v.operator === "MZK");
-    const lines = lineFilter;
-    if (lines) shown = shown.filter((v) => !v.agency && lines.has(v.line));
     const b = map.getBounds().pad(BOUNDS_PAD);
     const { dots, list } = fleetMarkers(shown, map.getZoom(), {
       s: b.getSouth(),

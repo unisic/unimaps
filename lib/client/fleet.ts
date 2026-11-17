@@ -19,6 +19,8 @@ export type FleetCity = "bb" | "gzm";
 export function readBrygadyCity(search: string): FleetCity {
   const params = new URLSearchParams(search);
   if (params.get("city") === "gzm") return "gzm";
+  // the header's city switch: an explicit BB wins over a stored GZM
+  if (params.get("city") === "bb") return "bb";
   // a shared vehicle link names its city through the side number (BB carries no city marker)
   const side = params.get("tabor");
   if (side) return cityOfSide(side);

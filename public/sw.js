@@ -77,7 +77,7 @@ self.addEventListener("notificationclick", (event) => {
   event.waitUntil(
     (async () => {
       const tabs = await self.clients.matchAll({ type: "window" });
-      const tab = tabs.find((c) => new URL(c.url).pathname === "/");
+      const tab = tabs.find((c) => new URL(c.url).pathname === url.pathname);
       if (!tab) return self.clients.openWindow(url.href);
       await tab.focus();
       return tab.navigate(url.href);

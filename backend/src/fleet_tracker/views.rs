@@ -7,9 +7,11 @@ use serde::Serialize;
 
 use super::{FleetTracker, FleetVehicleInfo, TrackerState, compare_gzm_sides};
 use crate::js::{self, JsNum};
+use crate::phototrans::pt_brief;
 use crate::shared::fleet::{
-    FleetHistoryDay, FleetLengthCategory, FleetOperator, FleetStats, FleetSummaryItem, FleetTimelinePoint,
-    FleetVehicleDetail, LastKnownLocation, VehicleStatus, compare_line_names, is_on_time, matches_fleet_query, median,
+    FleetCurrentCourse, FleetHistoryDay, FleetLengthCategory, FleetOperator, FleetStats, FleetSummaryItem,
+    FleetTimelinePoint, FleetVehicleDetail, LastKnownLocation, VehicleStatus, compare_line_names, is_on_time,
+    matches_fleet_query, median,
 };
 
 /// The optional filters of /api/fleet. An empty string filters nothing, like "all".
@@ -49,6 +51,18 @@ impl FleetTracker {
     /// One vehicle's full card; a leading "#" and surrounding whitespace are ignored.
     pub fn get_vehicle_detail(&self, side_number: &str) -> Option<FleetVehicleDetail> {
         self.lock().vehicles.get(clean_side(side_number)).cloned()
+    }
+
+    /// The label and the course of a vehicle running a begun course (not `not_started`), else None: the
+    /// "Powiadom, gdy wyjedzie" push asks this every tick, so it clones the course only, not the card.
+    pub fn begun_course(&self, side_number: &str) -> Option<(Option<String>, FleetCurrentCourse)> {
+        let s = self.lock();
+        let v = s.vehicles.get(clean_side(side_number))?;
+        if v.status != VehicleStatus::Active {
+            return None;
+        }
+        let c = v.current_course.as_ref().filter(|c| c.not_started != Some(true))?;
+        Some((v.label.clone(), c.clone()))
     }
 
     pub fn vehicle_history(&self, side_number: &str) -> FleetVehicleHistory {
@@ -263,6 +277,8 @@ impl TrackerState {
 
 fn summarize(v: &FleetVehicleDetail) -> FleetSummaryItem {
     let cur = v.current_course.as_ref();
+    let city = if v.operator == FleetOperator::Gzm { "gzm" } else { "bb" };
+    let (built, thumb) = pt_brief(city, &v.side_number).unwrap_or_default();
     FleetSummaryItem {
         side_number: v.side_number.clone(),
         label: v.label.clone(),
@@ -294,6 +310,8 @@ fn summarize(v: &FleetVehicleDetail) -> FleetSummaryItem {
         } else {
             v.today_courses.first().map(|c| c.line_name.clone())
         },
+        built,
+        thumb: thumb.map(str::to_owned),
     }
 }
 

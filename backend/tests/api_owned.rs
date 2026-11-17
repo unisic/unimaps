@@ -62,6 +62,7 @@ static OWNED: LazyLock<Owned> = LazyLock::new(|| {
             std::env::set_var(k, "off");
         }
         std::env::set_var("KB_GZM_SDIP", "0");
+        std::env::remove_var("KB_TOMTOM_KEY");
         std::env::set_var("KB_LOG_LEVEL", "error");
     }
     let front = Front::serve(Path::new(&std::env::var_os("KB_STATIC_DIR").unwrap()));
@@ -376,6 +377,12 @@ fn bb_routes_answer_with_upstreams_dead_no_file_outside_the_temp_dir() {
             r#"{"days":[],"complete":true}"#,
         ),
         ("/api/geocode?q=abc", 404, None, r#"{"error":"Not found"}"#),
+        (
+            "/api/traffic?lat=50.26&lon=19.02",
+            404,
+            None,
+            r#"{"error":"Not found"}"#,
+        ),
     ] {
         let r = get(path);
         assert_eq!((r.status, r.body.as_str()), (status, body), "{path}");
@@ -415,7 +422,7 @@ fn bb_routes_answer_with_upstreams_dead_no_file_outside_the_temp_dir() {
     let r = get("/api/fleet");
     assert_eq!((r.status, r.header("cache-control")), (200, no_store));
     let f = json_of(&r);
-    assert_eq!((&f["stats"]["totalFleet"], &f["count"]), (&json!(147), &json!(147)));
+    assert_eq!((&f["stats"]["totalFleet"], &f["count"]), (&json!(152), &json!(152)));
 
     let r = get("/api/fleet/230");
     assert_eq!((r.status, r.header("cache-control")), (200, Some("no-cache")));
