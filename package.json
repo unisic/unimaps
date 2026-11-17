@@ -36,7 +36,7 @@
     "@types/node": "^24",
     "eslint": "^9",
     "svelte": "^5.57.3",
-    "svelte-check": "^4.7.7",
+    "svelte-check": "^4.7.8",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.23.15",
     "typescript": "^5.9.3",
