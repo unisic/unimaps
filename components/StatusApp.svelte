@@ -84,7 +84,7 @@
     <a href="/" class="text-[13px] text-text-mute hover:text-text">Wróć do mapy</a>
     <h1 class="mt-4 text-[24px] font-semibold tracking-tight">Status danych na żywo</h1>
     <p class="mt-3 text-[14.5px] leading-relaxed text-text-mute">
-      Czy pozycje pojazdów docierają teraz od przewoźników i z zbiorkom. Brak pojazdów w nocy jest normalny.
+      Czy pozycje pojazdów docierają teraz od przewoźników. Brak pojazdów w nocy jest normalny.
     </p>
 
     {#if data}
@@ -103,8 +103,9 @@
               <span class="sr-only">: {LABEL[state]}</span>
               {#each c.sources as s (s.name)}
                 {@const d = detail(s)}
-                <p class="text-[13px] text-text-mute">
-                  {s.name}: <span class={s.state === "down" ? "text-danger" : ""}>{LABEL[s.state]}</span>{#if d}, {d}{/if}
+                <p class="text-[13px] text-text-mute first-letter:uppercase">
+                  <!-- the aggregator stays unnamed: a city's main source reads as the city's own data -->
+                  {#if s.name !== "zbiorkom"}{`${s.name}: `}{/if}<span class={s.state === "down" ? "text-danger" : ""}>{LABEL[s.state]}</span>{#if d}, {d}{/if}
                 </p>
               {/each}
             </div>
