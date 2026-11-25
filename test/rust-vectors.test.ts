@@ -1,7 +1,7 @@
 /**
- * The golden vectors backend/tests/*.rs check the Rust port against, read back through the TS: the browser keeps its
- * own copy of the shared departure, alert and detour logic, so a change to it fails here until backend/src/shared is
- * changed the same way and the vector files are updated by hand (their generator went with the Node backend).
+ * The server's golden vectors (a copy in test/fixtures/vectors/), read back through the TS: the browser keeps its own
+ * copy of the shared departure, alert and detour logic, so a change to it fails here until the server is changed the
+ * same way and both vector copies are updated by hand.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -22,7 +22,7 @@ import {
 import { injectDetourPoints } from "@/lib/shared/detours";
 import type { LatLng } from "@/lib/shared/polyline";
 
-const read = (name: string) => JSON.parse(fs.readFileSync(`backend/tests/vectors/${name}.json`, "utf8"));
+const read = (name: string) => JSON.parse(fs.readFileSync(`test/fixtures/vectors/${name}.json`, "utf8"));
 const json = (x: unknown) => JSON.stringify(x);
 
 test("departures vectors: preSortRows and hhmm", () => {

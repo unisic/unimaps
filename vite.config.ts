@@ -73,8 +73,14 @@ export default defineConfig(({ command }) => ({
     host: process.env.HOST || "0.0.0.0",
     port: Number(process.env.PORT) || 8080,
     strictPort: true,
-    // /api goes to the Rust server scripts/dev.mjs starts beside this one; xfwd hands it the client's address
-    proxy: { "^/api(?:[/?]|$)": { target: `http://127.0.0.1:${Number(process.env.KB_API_PORT) || 8081}`, xfwd: true } },
+    // /api goes to the server scripts/dev.mjs picked (KB_API_URL); xfwd hands it the client's address
+    proxy: {
+      "^/api(?:[/?]|$)": {
+        target: process.env.KB_API_URL || `http://127.0.0.1:${Number(process.env.KB_API_PORT) || 8081}`,
+        changeOrigin: true,
+        xfwd: true,
+      },
+    },
   },
   // the map chunk is import()ed after the city pick: found that late, these were optimized in two rounds and the
   // first round's leaflet chunk no longer matched (SyntaxError on load); maplibre-gl-leaflet patches that one L

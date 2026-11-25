@@ -12,8 +12,8 @@ Live public transport map for Bielsko-Biała, Metropolia GZM and 53 other Polish
 
 <img width="1600" height="1000" alt="Unimaps: live buses in Bielsko-Biała" src="docs/screenshot.png" />
 
-One Rust process (`backend/`, binary `unimaps`) serves the map (a static Svelte 5 build), the JSON API and a
-GTFS-Realtime feed, and runs the pollers. No database.
+One server (closed source) serves the map (this repo: a static Svelte 5 build), the JSON API and a GTFS-Realtime
+feed, and runs the pollers.
 
 ## What it does
 
@@ -32,25 +32,15 @@ GTFS-Realtime feed, and runs the pollers. No database.
 
 ## Run
 
-Needs Node.js 24+ (frontend build) and Rust 1.95+.
+Needs Node.js 24+.
 
 ```bash
 npm install
-npm run dev                      # map on :8080 (Vite), API on 127.0.0.1:8081
+npm run dev                      # map on :8080 (Vite), /api proxied to map.unisic.app (KB_API_URL)
+npm run build                    # static build in out/
 ```
 
-Production:
-
-```bash
-npm run build && npm start       # map + API on :8080
-docker compose up -d --build     # the same in a container: static binary + out/
-```
-
-Checks: `npm run typecheck && npm run lint && npm test`, and in `backend/`:
-`cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test`.
-
-Settings are optional `KB_*` environment variables, all listed in `.env.example`. Generated state (GTFS
-feeds, road shapes, fleet history) lives in `output/`.
+Checks: `npm run typecheck && npm run lint && npm test`.
 
 ## API
 
@@ -66,7 +56,7 @@ feeds, road shapes, fleet history) lives in `output/`.
 | `/api/health` | status and scan counters |
 
 List endpoints take `?city=<slug>` (`gzm`, `warsaw`, …, see `lib/shared/cities.json`); without it they answer
-for Bielsko-Biała. Every route is in `backend/src/api/mod.rs`.
+for Bielsko-Biała.
 
 ## Data
 

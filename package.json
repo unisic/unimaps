@@ -15,11 +15,9 @@
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "build": "vite build && node scripts/compress-static.mjs out",
-    "start": "cargo run --release --manifest-path backend/Cargo.toml",
     "lint": "eslint .",
     "typecheck": "svelte-check --tsconfig ./tsconfig.json",
     "test": "node --import tsx --test \"test/**/*.test.ts\"",
-    "build:gtfs": "cargo run --release --manifest-path backend/Cargo.toml -- build-gtfs",
     "build:phototrans": "tsx scripts/build-phototrans.ts",
     "benchmark:site": "tsx scripts/benchmark-site.ts"
   },
