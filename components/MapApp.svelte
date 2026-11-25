@@ -22,6 +22,8 @@
   import { prefetchFavoriteTimetables } from "@/lib/client/timetable";
   import { buildSearch, parseUrlState, type UrlState } from "@/lib/client/urlState";
   import { schedTripKey, vehicleTripKey } from "@/lib/shared/departures";
+  import type { StatusBody } from "@/lib/shared/status";
+  import { outageText } from "@/lib/client/outage";
   import type {
     ConnectionItinerary,
     JourneyLegResolved,
@@ -393,6 +395,25 @@
         );
       })
       .catch(() => {});
+  });
+
+  /* a carrier whose live data is down on its side (/api/status, swept at most every 2 min for everyone): shown
+     until closed for this page load, checked again every 5 min while the tab is visible */
+  let outage = $state<string | null>(null);
+  let outageClosed = false;
+  onMount(() => {
+    const check = () => {
+      if (outageClosed || document.hidden) return;
+      // a cold sweep takes up to ~45 s, longer than the live-fetch timeout
+      fetchJSON<StatusBody>("/api/status", { signal: AbortSignal.timeout(60_000) })
+        .then((b) => {
+          if (!outageClosed) outage = outageText(b, city, cityCfg.agency);
+        })
+        .catch(() => {});
+    };
+    check();
+    const t = setInterval(check, 300_000);
+    return () => clearInterval(t);
   });
 
   function closeTrip() {
@@ -1667,6 +1688,16 @@
       onClose={() => {
         declineOffer(city, offered);
         cityOffer = null;
+      }}
+    />
+  {:else if outage}
+    <Toast
+      text={outage}
+      actionLabel="Status"
+      onAction={() => location.assign("/status")}
+      onClose={() => {
+        outageClosed = true;
+        outage = null;
       }}
     />
   {/if}

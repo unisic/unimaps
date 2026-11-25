@@ -55,8 +55,19 @@
 
   const ago = (sec: number): string => (sec < 90 ? `${sec} s temu` : `${Math.round(sec / 60)} min temu`);
 
+  /* the server's reason codes a rider can read; others ("HTTP 503", "timeout") stay as they are */
+  const REASON: Record<string, string> = {
+    "upstream offline": "przewoźnik zgłasza awarię",
+    "no vehicles in service hours": "brak pojazdów w godzinach kursowania",
+    "poller stalled": "nasz serwer nie pobiera danych",
+  };
+  const BLAME = { upstream: "po stronie źródła danych", ours: "po naszej stronie" } as const;
+
   function detail(s: SourceStatus): string {
-    if (s.state === "down") return s.error ?? "";
+    if (s.state === "down") {
+      const why = s.error ? (REASON[s.error] ?? s.error) : "";
+      return s.blame ? `${why}, ${BLAME[s.blame]}` : why;
+    }
     const parts = s.state === "ok" ? [`${fmtInt(s.vehicles)} ${pluralPl(s.vehicles, "pojazd", "pojazdy", "pojazdów")}`] : [];
     if (s.age != null) parts.push(ago(s.age));
     return parts.join(", ");

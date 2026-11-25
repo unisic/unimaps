@@ -10,8 +10,11 @@ export interface SourceStatus {
   vehicles: number;
   /** seconds since the newest position (zbiorkom) or the last good poll (BB); null = not known */
   age: number | null;
-  /** why it is down: "HTTP <code>", "timeout", "network error" or "invalid response" */
+  /** why it is down: "HTTP <code>", "timeout", "network error", "invalid response", "upstream offline",
+   *  "poller stalled" or "no vehicles in service hours" (an empty answer between 8 and 20 counts as down) */
   error?: string;
+  /** whose fault a down source is: the operator's / data source's side, or ours */
+  blame?: "upstream" | "ours";
 }
 
 export interface CityStatus {
